@@ -33,6 +33,8 @@ func normalizeTerminalKey(msg tea.Msg) tea.Msg {
 				return menuShortcut(menuTracing)
 			case action == 'e':
 				return tea.KeyMsg{Type: tea.KeyCtrlE}
+			case action == 'n':
+				return tea.KeyMsg{Type: tea.KeyCtrlN}
 			case action == 'f':
 				return tea.KeyMsg{Type: tea.KeyCtrlF}
 			case action == 'q':
@@ -127,6 +129,8 @@ func clipboardSequence(sequence string) (action byte, super, release, ok bool) {
 			action = 't'
 		case "101", "69", "1091", "1059":
 			action = 'e'
+		case "110", "78", "1090", "1058":
+			action = 'n'
 		case "102", "70", "1072", "1040":
 			action = 'f'
 		case "113", "81", "1081", "1049":

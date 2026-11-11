@@ -1419,11 +1419,14 @@ func TestInputBlankLines(t *testing.T) {
 	}
 }
 
-func TestFilesAndQuitKittyShortcuts(t *testing.T) {
+func TestTerminalShortcutBytes(t *testing.T) {
 	for _, tc := range []struct {
 		sequence string
 		key      tea.KeyType
 	}{
+		{"\x0e", tea.KeyCtrlN}, {"\x1b[110;5u", tea.KeyCtrlN},
+		{"\x1b[1090;5u", tea.KeyCtrlN}, {"\x1b[1090::110;5u", tea.KeyCtrlN},
+		{"\x1b[78;5u", tea.KeyCtrlN}, {"\x1b[1058;5u", tea.KeyCtrlN},
 		{"\x1b[102;5u", tea.KeyCtrlF}, {"\x1b[1072;5u", tea.KeyCtrlF},
 		{"\x1b[113;5u", tea.KeyCtrlQ}, {"\x1b[1081;5u", tea.KeyCtrlQ},
 	} {
