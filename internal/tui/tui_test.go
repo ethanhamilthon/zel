@@ -866,11 +866,11 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 100, 50
 	m.openMenu()
-	want := (m.height - 3 - len(mainRows)) / 2
+	want := (m.height - 4 - maxListItems - 1) / 2
 	if m.menuTop() != want {
 		t.Fatalf("top %d, want %d", m.menuTop(), want)
 	}
-	for _, page := range []menuPage{menuModel, menuResume, menuTracing, menuInfo} {
+	for _, page := range []menuPage{menuModel, menuResume, menuTracing, menuInfo, menuFiles} {
 		next, _ := m.openMenuPage(page)
 		m = next.(model)
 		m.menu.query = "typed search"
@@ -1302,5 +1302,144 @@ func TestFilesEditorRestoresBrowserWithoutChangingDraft(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "edited" || result.menu == nil || result.menu.page != menuFiles || result.input.Value() != "draft" {
 		t.Fatal("file editing did not restore browser and preserve draft")
+	}
+}
+
+func TestStopAndQuitShortcuts(t *testing.T) {
+	for _, page := range []menuPage{-1, menuMain, menuFiles, menuForm} {
+		for _, k := range []tea.KeyType{tea.KeyCtrlC, tea.KeyCtrlD, tea.KeyCtrlQ} {
+			m := bareModel(t, t.TempDir())
+			if page == menuForm {
+				m.openMenu()
+				m.openProviderForm("", false)
+			} else if page >= 0 {
+				m.menu = &menuState{page: page}
+			}
+			_, cmd := m.Update(tea.KeyMsg{Type: k})
+			if k == tea.KeyCtrlQ {
+				if cmd == nil {
+					t.Fatal("Ctrl+Q did not quit")
+				}
+				if _, ok := cmd().(tea.QuitMsg); !ok {
+					t.Fatal("Ctrl+Q did not return QuitMsg")
+				}
+			} else if cmd != nil {
+				if _, ok := cmd().(tea.QuitMsg); ok {
+					t.Fatalf("%v unexpectedly quit", k)
+				}
+			}
+		}
+	}
+	m, _ := busyModel(t)
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = awaitIdle(t, m)
+	if m.ctl.Status().Busy {
+		t.Fatal("Ctrl+C did not stop the turn")
+	}
+}
+
+func TestFilesSearchInputAndCacheRefresh(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"target", "other"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := bareModel(t, dir)
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlF})
+	if m.menu == nil || m.menu.page != menuFiles || !m.menu.direct {
+		t.Fatal("Ctrl+F did not open Files")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("TARGET")})
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "target" {
+		t.Fatalf("typed search: %v", rows)
+	}
+	cache := m.menu.listCache
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.menu.listCache != cache {
+		t.Fatal("cursor movement rebuilt the file list")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.directory != filepath.Join(dir, "target") || m.menu.query != "" {
+		t.Fatal("filtered action opened wrong directory")
+	}
+	if rows := m.menuRows(); len(rows) != 2 || rows[0].label != "." {
+		t.Fatalf("stale directory cache: %v", rows)
+	}
+}
+
+func TestListLimitHintAndTraceCache(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 100, 50
+	m.menu = &menuState{page: menuTracing}
+	for i := 0; i < 25; i++ {
+		m.menu.trace = append(m.menu.trace, agent.TraceEntry{Kind: "user", Text: fmt.Sprintf("entry %d", i)})
+	}
+	lines := m.pageLines("", 56)
+	if len(lines) != 11 || !strings.Contains(lines[10], "15 more items") {
+		t.Fatalf("list not capped: %v", lines)
+	}
+	cache := m.menu.listCache
+	rows := m.menuRows()
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.menu.listCache != cache || &m.menuRows()[0] != &rows[0] {
+		t.Fatal("cursor movement rebuilt trace rows")
+	}
+	m.menu.query = ":user entry 24"
+	if got := m.menuRows(); len(got) != 1 || !strings.Contains(got[0].detail, "24") {
+		t.Fatalf("stale query cache: %v", got)
+	}
+	m.menu.query = ""
+	m.menu.selected = 24
+	first, visible := m.listWindow(25)
+	if visible != 10 || first != 15 {
+		t.Fatalf("last page: %d %d", first, visible)
+	}
+	if got := m.pageLines("", 56); len(got) != 10 {
+		t.Fatalf("unexpected last-page hint: %v", got)
+	}
+	m.height = 9
+	if got := m.pageLines("", 56); len(got) > m.menuBodyRoom() {
+		t.Fatal("list overflows small terminal")
+	}
+}
+
+func TestInputBlankLines(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.input.SetValue("draft")
+	rows := m.timelineRows(0)
+	if m.inputTop < 1 || strings.TrimSpace(ansi.Strip(rows[m.inputTop-1])) != "" || strings.TrimSpace(ansi.Strip(rows[m.inputTop+m.input.Height()])) != "" {
+		t.Fatalf("composer needs blank lines: %q", rows)
+	}
+	m.openMenu()
+	view := strings.Split(ansi.Strip(m.menuView()), "\n")
+	input := m.menuBodyStart() - 2
+	if strings.TrimSpace(view[input-1]) != "" || strings.TrimSpace(view[input+1]) != "" {
+		t.Fatal("search needs blank lines")
+	}
+}
+
+func TestFilesAndQuitKittyShortcuts(t *testing.T) {
+	for _, tc := range []struct {
+		sequence string
+		key      tea.KeyType
+	}{
+		{"\x1b[102;5u", tea.KeyCtrlF}, {"\x1b[1072;5u", tea.KeyCtrlF},
+		{"\x1b[113;5u", tea.KeyCtrlQ}, {"\x1b[1081;5u", tea.KeyCtrlQ},
+	} {
+		seen := false
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		program := tea.NewProgram(bareModel(t, t.TempDir()), tea.WithContext(ctx), tea.WithInput(strings.NewReader(tc.sequence)), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if key, ok := normalizeTerminalKey(msg).(tea.KeyMsg); ok && key.Type == tc.key {
+				seen = true
+				return tea.QuitMsg{}
+			}
+			return msg
+		}))
+		_, err := program.Run()
+		cancel()
+		if err != nil || !seen {
+			t.Fatalf("%q: seen=%v err=%v", tc.sequence, seen, err)
+		}
 	}
 }

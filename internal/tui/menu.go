@@ -19,6 +19,7 @@ import (
 // with the page path on the left and its keyboard shortcut on the right.
 
 const menuWidth = 56
+const maxListItems = 10
 
 // Version is supplied by the CLI at startup.
 var Version = "dev"
@@ -62,7 +63,17 @@ var mainRows = []menuRow{
 	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse and edit"},
 }
 
+type menuListCache struct {
+	page     menuPage
+	count    int
+	rows     []menuRow
+	query    string
+	indices  []int
+	filtered []menuRow
+}
+
 type menuState struct {
+	listCache       *menuListCache
 	form            *formState
 	directory       string
 	files           []fileItem
@@ -85,7 +96,25 @@ type menuState struct {
 	trace           []agent.TraceEntry
 }
 
+// File and trace sources change only when refreshed, not on cursor movement.
 func (m model) rawMenuRows() []menuRow {
+	mu := m.menu
+	if mu.page != menuFiles && mu.page != menuTracing {
+		return m.buildMenuRows()
+	}
+	count := len(mu.files)
+	if mu.page == menuTracing {
+		count = len(mu.trace)
+	}
+	if c := mu.listCache; c != nil && c.page == mu.page && c.count == count {
+		return c.rows
+	}
+	rows := m.buildMenuRows()
+	mu.listCache = &menuListCache{page: mu.page, count: count, rows: rows}
+	return rows
+}
+
+func (m model) buildMenuRows() []menuRow {
 	mu := m.menu
 	var rows []menuRow
 	switch mu.page {
@@ -195,6 +224,14 @@ func searchMatches(text, query string) bool {
 
 // menuIndices preserves action identities when the visible rows are filtered.
 func (m model) menuIndices(rows []menuRow) []int {
+	c := m.menu.listCache
+	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query {
+		return c.indices
+	}
+	return m.buildMenuIndices(rows)
+}
+
+func (m model) buildMenuIndices(rows []menuRow) []int {
 	var indices []int
 	query := m.menu.query
 	kind := ""
@@ -225,12 +262,20 @@ func (m model) menuIndices(rows []menuRow) []int {
 
 func (m model) menuRows() []menuRow {
 	rows := m.rawMenuRows()
+	c := m.menu.listCache
+	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query {
+		return c.filtered
+	}
+	indices := m.menuIndices(rows)
 	var found []menuRow
-	for _, i := range m.menuIndices(rows) {
+	for _, i := range indices {
 		found = append(found, rows[i])
 	}
 	if len(found) == 0 {
-		return []menuRow{{"No matches", ""}}
+		found = []menuRow{{"No matches", ""}}
+	}
+	if c != nil && c.page == m.menu.page {
+		c.query, c.indices, c.filtered = m.menu.query, indices, found
 	}
 	return found
 }
@@ -324,7 +369,7 @@ func (m model) menuView() string {
 		lipgloss.NewStyle().Foreground(muted).Render(shortcut), "")
 	if searchableMenu(m.menu.page) {
 		// The search input sits one blank line below the header.
-		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false))
+		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
 	for len(lines) < m.height {
@@ -345,7 +390,7 @@ func (m model) menuView() string {
 func (m model) menuBodyStart() int {
 	start := m.menuTop() + 2 // the header and the blank line below it
 	if searchableMenu(m.menu.page) {
-		start++ // the search input
+		start += 2 // the search input and the blank line below it
 	}
 	return start
 }
@@ -359,9 +404,15 @@ func (m model) menuLeft() int { return max(0, (m.width-m.menuWidth())/2) }
 func (m model) menuTop() int {
 	header := 2
 	if searchableMenu(m.menu.page) {
-		header++
+		header += 2
 	}
 	body := len(m.menuRows())
+	if body > maxListItems {
+		body = maxListItems + 1
+	}
+	if m.menu.page == menuRename {
+		body++
+	}
 	if m.menu.page == menuText || m.menu.page == menuInfo {
 		body = len(m.wrapText(m.menuText(), m.menuWidth()))
 	}
@@ -373,7 +424,7 @@ func (m model) menuWidth() int { return max(10, min(menuWidth, m.width-4)) }
 // menuHead is the header of the current page: its path on the left, the shortcut
 // that opens it on the right.
 func (m model) menuHead() (title, shortcut string) {
-	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T"}[m.menu.page]
+	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T", menuFiles: "Ctrl+F"}[m.menu.page]
 	if m.menu.page == menuMain {
 		name := m.ctl.Settings().Name
 		if name == "" {
@@ -429,12 +480,22 @@ func (m model) pageLines(pad string, w int) []string {
 		}
 		lines = append(lines, pad+prefix+fg.Render(label)+accent.Render(marker)+gap+dim.Render(detail))
 	}
+	if m.menu.page == menuRename {
+		lines = append(lines, "")
+	}
+	if remaining := len(rows) - first - visible; remaining > 0 {
+		lines = append(lines, pad+dim.Render(fmt.Sprintf("  %d more items", remaining)))
+	}
 	return lines
 }
 
 // listWindow is the range of rows a list page shows with the selected row in view.
 func (m model) listWindow(rows int) (first, visible int) {
-	visible = max(1, min(rows, m.menuBodyRoom()))
+	room := m.menuBodyRoom()
+	if rows > min(maxListItems, room) {
+		room--
+	} // reserve the remaining-items hint
+	visible = max(1, min(rows, maxListItems, room))
 	first = min(max(0, m.menu.selected-visible+1), max(0, rows-visible))
 	return first, visible
 }
@@ -553,9 +614,11 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch mu.page {
 		case menuRename:
 			editText(&mu.name, v)
-		case menuMain, menuResume, menuModel, menuEffort, menuTracing:
-			cmd := m.updateMenuSearch(v)
-			return m, cmd
+		default:
+			if searchableMenu(mu.page) {
+				cmd := m.updateMenuSearch(v)
+				return m, cmd
+			}
 		}
 	}
 	return m, nil
@@ -633,6 +696,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			open(menuTasks)
 		case 4:
 			mu.trace = m.sessionTrace()
+			mu.listCache = nil
 			mu.parent = menuMain
 			open(menuTracing)
 		case 5:
@@ -779,7 +843,7 @@ func (m model) openMenuPage(page menuPage) (tea.Model, tea.Cmd) {
 	if m.menu != nil && m.menu.page == page {
 		return m.closeMenu(), nil
 	}
-	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6}[page]}
+	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6, menuFiles: 13}[page]}
 	m.sel, m.inputDrag = nil, false
 	next, cmd := m.menuActivate()
 	result := next.(model)

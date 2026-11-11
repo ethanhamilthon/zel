@@ -150,6 +150,9 @@ The editor shares the terminal and returns to Files when it closes.
 - Ctrl+R: Resume
 - Ctrl+I: Info
 - Ctrl+T: Tracing
+- Ctrl+F: Files
+- Ctrl+Q: Save and quit
+- Ctrl+C: Stop the active turn (does not exit)
 - Ctrl+E: edit the draft externally; saving restores it without sending
 - Esc: back; shortcut-opened pages return directly to chat
 

@@ -233,19 +233,19 @@ func (m model) formView() string {
 			view = strings.Repeat("•", len([]rune(f.input.Value())))
 		}
 	}
-	lines := make([]string, max(0, (m.height-8)/2))
+	lines := make([]string, max(0, (m.height-9)/2))
 	center := func(text string) string {
 		text = ansi.Truncate(text, w, "…")
 		return pad + strings.Repeat(" ", max(0, (w-ansi.StringWidth(text))/2)) + text
 	}
-	lines = append(lines, center(lipgloss.NewStyle().Foreground(inputBlue).Render(title)), center(subtitle), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), pad+renderRail(view, w, false), "")
+	lines = append(lines, center(lipgloss.NewStyle().Foreground(inputBlue).Render(title)), center(subtitle), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), "", pad+renderRail(view, w, false), "")
 	if f.err != "" {
 		lines = append(lines, pad+lipgloss.NewStyle().Foreground(errorColor).Render(ansi.Truncate(f.err, w, "…")))
 	}
 	for len(lines) < m.height-2 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, center("Tab / Shift+Tab: step · Enter: next"), center("← / →: cursor · Ctrl+C: quit"))
+	lines = append(lines, center("Tab / Shift+Tab: step · Enter: next"), center("← / →: cursor · Ctrl+Q: quit"))
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}

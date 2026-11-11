@@ -183,8 +183,12 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		}
 	}
 	screen.add(m.workingBlock())
+	if len(screen) < 2 {
+		screen.add("\n")
+	}
 	m.inputTop = len(screen) - 1
 	screen.add(m.inputBlock())
+	screen.add("\n\n")
 	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
 	if count := len(m.fileCompletions); m.hasFileCompletions() {
 		start = max(0, m.fileSelected%count-rows+1)
@@ -194,7 +198,10 @@ func (m *model) timelineRows(budget time.Duration) []string {
 			if i == m.fileSelected%count {
 				bg, fg = selectBackground, foreground
 			}
-			screen.add("\n" + paint(ansi.Truncate("  "+sanitizeLabel(m.fileCompletions[i]), m.width, "…"), m.width, bg, fg))
+			screen.add(paint(ansi.Truncate("  "+sanitizeLabel(m.fileCompletions[i]), m.width, "…"), m.width, bg, fg) + "\n")
+		}
+		if remaining := count - min(count, start+rows); remaining > 0 {
+			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  %d more items", remaining)) + "\n")
 		}
 	}
 	return screen

@@ -333,7 +333,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openMenuPage(menuPage(v))
 	case tea.KeyMsg:
-		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" {
+		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+q" {
 			return m.formKey(v)
 		}
 		// Terminals paste only text: an image-only clipboard arrives as an
@@ -346,6 +346,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.String() == "ctrl+e" {
 			return m.editInput()
+		}
+		if v.String() == "ctrl+f" {
+			return m.openMenuPage(menuFiles)
 		}
 		if v.String() == "ctrl+t" {
 			return m.openMenuPage(menuTracing)
@@ -360,7 +363,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.openMenu()
 			return m, cmd
 		}
-		if m.menu != nil && v.String() != "ctrl+c" {
+		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+q" {
 			return m.menuKey(v)
 		}
 		switch v.String() {
@@ -371,11 +374,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.requestCancel()
 				return m, nil
 			}
+			return m, nil
+		case "ctrl+q":
 			return m.quit()
-		case "ctrl+d":
-			if !m.ctl.Status().Busy && m.input.Value() == "" {
-				return m.quit()
-			}
 		case "esc":
 			if m.fileLoading || m.hasFileCompletions() {
 				m.dismissFileCompletion()

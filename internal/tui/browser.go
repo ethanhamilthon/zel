@@ -46,6 +46,7 @@ func (m *model) readDirectory(path string) {
 		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
 	})
 	m.menu.files = append(items, files...)
+	m.menu.listCache = nil
 	m.menu.directory, m.menu.selected, m.menu.query, m.menu.search, m.menu.status = filepath.Clean(path), 0, "", nil, ""
 }
 func (m model) editFile(path string) (tea.Model, tea.Cmd) {

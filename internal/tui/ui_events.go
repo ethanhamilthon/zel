@@ -231,6 +231,7 @@ func (m *model) refreshMenu() {
 		}
 	case menuTracing:
 		mu.trace = m.sessionTrace()
+		mu.listCache = nil
 		if mu.page == menuText && mu.traceIndex < len(mu.trace) {
 			e := mu.trace[mu.traceIndex]
 			mu.text = traceTitle(e) + "\n\n" + traceText(e)
