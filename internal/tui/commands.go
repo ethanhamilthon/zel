@@ -18,11 +18,11 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, re
 	"Clipboard: Ctrl+V (Cmd+V when forwarded)\n" +
 	"Edit a queued message to withdraw it; Enter queues the edited draft again\n" +
 	"Up on empty input: recall a message the model has not read yet\n" +
-	"Click a link or a path in backticks to open it\n" +
-	"PgUp/PgDn or mouse wheel: scroll timeline\n" +
+	"Select and copy with terminal shortcuts; use its gesture to open links\n" +
+	"PgUp/PgDn: scroll timeline\n" +
 	"The chat shows only user messages and answers; the Tracing menu has the rest\n" +
 	"Tracing entry: Left/Right switch entries · Up/Down scroll · Esc returns to the list\n" +
-	"Esc: dismiss UI · Ctrl+C: cancel current turn · Ctrl+Q: save and quit"
+	"Esc: dismiss UI · Ctrl+D: cancel current turn · Ctrl+Q: save and quit"
 
 func help() string {
 	return keyboardHelp + "\n\nHost access: the bash tool runs commands with your permissions; not an OS security sandbox."

@@ -24,7 +24,8 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	defer m.events.Close()
 	termOut = os.Stdout
 	output := &cursorOutput{ReadWriteCloser: os.Stdout}
-	program := tea.NewProgram(m, tea.WithOutput(output), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(keyboard.filter))
+	// Leave mouse reporting disabled so the terminal owns selection and copying.
+	program := tea.NewProgram(m, tea.WithOutput(output), tea.WithAltScreen(), tea.WithFilter(keyboard.filter))
 	running, stop := context.WithCancel(ctx)
 	defer stop()
 	go forwardControl(running, m.events, program)

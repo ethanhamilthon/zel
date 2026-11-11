@@ -52,8 +52,6 @@ type model struct {
 	cache                     []renderedEntry
 	inputValue                string
 	inputWidth, inputHeight   int
-	sel                       *selection
-	inputDrag                 bool
 	inputTop                  int
 	directoryGen              uint64
 	layoutValue               string
@@ -316,21 +314,12 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonWheelUp {
 			return m, m.scrollUp(3)
 		}
-		if cmd, handled := m.mouseSelection(v); handled {
-			m.refresh(false)
-			return m, cmd
-		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	case linkOpened:
 		if v.err != nil {
 			return m.stop("error", "Could not open "+v.target+": "+v.err.Error())
-		}
-		return m, nil
-	case clipboardCopied:
-		if v.err != nil {
-			return m.stop("error", "Copy failed: "+v.err.Error())
 		}
 		return m, nil
 	case core.Event:
@@ -341,7 +330,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openMenuPage(menuPage(v))
 	case tea.KeyMsg:
-		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+q" {
+		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
 			return m.formKey(v)
 		}
 		// Terminals paste only text: an image-only clipboard arrives as an
@@ -374,13 +363,16 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.openMenu()
 			return m, cmd
 		}
-		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+q" {
+		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
 			return m.menuKey(v)
 		}
 		switch v.String() {
 		case "ctrl+v":
 			return m.pasteClipboard()
 		case "ctrl+c":
+			// Copying belongs to the terminal, not the application.
+			return m, nil
+		case "ctrl+d":
 			if m.ctl.Status().Busy {
 				m.requestCancel()
 				return m, nil
@@ -518,10 +510,6 @@ func (m model) View() string {
 			row, column = i+1, lipgloss.Width(line[:at])+1
 		}
 		lines[i] = strings.ReplaceAll(line, composerCursorMarker, "")
-	}
-	if m.sel != nil {
-		lines = m.sel.highlight(lines, m.viewport.Width)
-		row, column = 0, 0
 	}
 	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
 }

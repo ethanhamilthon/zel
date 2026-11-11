@@ -14,7 +14,6 @@ import (
 
 func (m *model) openMenu() tea.Cmd {
 	m.menu = &menuState{}
-	m.sel, m.inputDrag = nil, false
 	return m.fetchModels()
 }
 
@@ -356,7 +355,6 @@ func (m model) openMenuPage(page menuPage) (tea.Model, tea.Cmd) {
 		return m.closeMenu(), nil
 	}
 	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6, menuFiles: 13}[page]}
-	m.sel, m.inputDrag = nil, false
 	next, cmd := m.menuActivate()
 	result := next.(model)
 	if result.menu != nil {

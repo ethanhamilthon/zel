@@ -21,6 +21,8 @@ func normalizeTerminalKey(msg tea.Msg) tea.Msg {
 				return tea.KeyMsg{Type: tea.KeyCtrlV}
 			case super:
 				return nil
+			case action == 'd':
+				return tea.KeyMsg{Type: tea.KeyCtrlD}
 			case action == 'x':
 				return tea.KeyMsg{Type: tea.KeyCtrlX}
 			case action == 'm':
@@ -115,6 +117,8 @@ func clipboardSequence(sequence string) (action byte, super, release, ok bool) {
 		switch code {
 		case "118", "86", "1084", "1052":
 			action = 'v'
+		case "100", "68", "1074", "1042":
+			action = 'd'
 		case "99", "67", "1089", "1057":
 			action = 'c'
 		case "120", "88", "1095", "1063":

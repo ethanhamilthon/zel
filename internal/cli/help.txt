@@ -69,7 +69,7 @@ ENVIRONMENT
 
 INTERFACE
   Ctrl+K Menu, Ctrl+M Models, Ctrl+R Resume, Ctrl+I Info, Ctrl+T Tracing,
-  Ctrl+F Files, Ctrl+Q Quit, Ctrl+E external draft editor. Esc dismisses UI; Ctrl+C stops the active turn. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
+  Ctrl+F Files, Ctrl+Q Quit, Ctrl+E external draft editor. Esc dismisses UI; Ctrl+D stops the active turn. Selection and copying use terminal shortcuts (Cmd+C / Ctrl+C); mouse reporting is disabled. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
   Onboarding: Tab / Shift+Tab switch steps, Left / Right move the cursor,
   Enter advances. Navigation hints appear at the bottom of the screen.
   Files includes hidden files, . and ..; Enter opens directories or edits files.

@@ -142,45 +142,6 @@ func TestStreamingMarkdownReusesCompletedBlocks(t *testing.T) {
 	}
 }
 
-func TestSelectionWideCharacters(t *testing.T) {
-	for _, c := range []struct {
-		line     string
-		from, to int
-		want     string
-	}{
-		{"界ab", 2, 3, "ab"},
-		{"界ab", 1, 2, "界a"},
-		{"e\u0301xy", 1, 2, "xy"},
-		{"e\u0301xy", 0, 1, "e\u0301x"},
-		{"👍🏽 ok", 1, 2, "👍🏽"},
-		{"ab  ", 0, 3, "ab"},
-	} {
-		s := selection{start: point{c.from, 0}, end: point{c.to, 0}}
-		if got := s.text([]string{c.line}, 20); got != c.want {
-			t.Errorf("%q [%d,%d]: %q, want %q", c.line, c.from, c.to, got, c.want)
-		}
-	}
-}
-
-func TestSelectionSpanAcrossRows(t *testing.T) {
-	sel := selection{start: point{2, 1}, end: point{4, 3}}
-	if _, _, ok := sel.span(0, 10); ok {
-		t.Fatal("row before the selection must be untouched")
-	}
-	if from, to, ok := sel.span(1, 10); !ok || from != 2 || to != 10 {
-		t.Fatalf("first row span = %d..%d %v", from, to, ok)
-	}
-	if from, to, ok := sel.span(2, 10); !ok || from != 0 || to != 10 {
-		t.Fatalf("middle row span = %d..%d %v", from, to, ok)
-	}
-	if from, to, ok := sel.span(3, 10); !ok || from != 0 || to != 5 {
-		t.Fatalf("last row span = %d..%d %v", from, to, ok)
-	}
-	if _, _, ok := sel.span(4, 10); ok {
-		t.Fatal("row after the selection must be untouched")
-	}
-}
-
 func TestComposerLayoutMatchesTextareaProbe(t *testing.T) {
 	r := rand.New(rand.NewSource(1))
 	pieces := []string{"a", "word", "longerword", " ", "  ", "界", "é", "-", "\n", "supercalifragilistic"}
@@ -1336,11 +1297,27 @@ func TestStopAndQuitShortcuts(t *testing.T) {
 			}
 		}
 	}
-	m, _ := busyModel(t)
-	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlC})
-	m = awaitIdle(t, m)
-	if m.ctl.Status().Busy {
-		t.Fatal("Ctrl+C did not stop the turn")
+	for _, page := range []menuPage{-1, menuMain, menuFiles, menuForm} {
+		m, _ := busyModel(t)
+		if page == menuForm {
+			m.openMenu()
+			m.openProviderForm("", false)
+		} else if page >= 0 {
+			m.menu = &menuState{page: page}
+		}
+		m.input.SetValue("draft")
+		m = key(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+		if !m.ctl.Status().Busy {
+			t.Fatal("Ctrl+C stopped the turn instead of leaving copying to the terminal")
+		}
+		m = key(m, tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = awaitIdle(t, m)
+		if m.ctl.Status().Busy {
+			t.Fatal("Ctrl+D did not stop the turn")
+		}
+		if m.input.Value() != "draft" {
+			t.Fatal("copy/stop shortcuts changed the draft")
+		}
 	}
 }
 
@@ -1432,6 +1409,10 @@ func TestTerminalShortcutBytes(t *testing.T) {
 		sequence string
 		key      tea.KeyType
 	}{
+		{"\x04", tea.KeyCtrlD}, {"\x1b[100;5u", tea.KeyCtrlD},
+		{"\x1b[68;5u", tea.KeyCtrlD}, {"\x1b[1074;5u", tea.KeyCtrlD},
+		{"\x1b[1042;5u", tea.KeyCtrlD}, {"\x1b[1074::100;5u", tea.KeyCtrlD},
+		{"\x03", tea.KeyCtrlC}, {"\x1b[99;5u", tea.KeyCtrlC},
 		{"\x0e", tea.KeyCtrlN}, {"\x1b[110;5u", tea.KeyCtrlN},
 		{"\x1b[1090;5u", tea.KeyCtrlN}, {"\x1b[1090::110;5u", tea.KeyCtrlN},
 		{"\x1b[78;5u", tea.KeyCtrlN}, {"\x1b[1058;5u", tea.KeyCtrlN},
@@ -1692,7 +1673,7 @@ func TestEscapeNeverCancelsActiveWork(t *testing.T) {
 			t.Fatal("Esc did not dismiss completions")
 		}
 	}
-	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyCtrlD})
 	f.m = awaitIdle(t, f.m)
 	close(gate)
 }

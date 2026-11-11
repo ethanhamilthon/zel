@@ -151,9 +151,13 @@ The editor shares the terminal and returns to Files when it closes.
 ### Shortcuts
 
 Up moves through the input's visual rows (including wrapped lines), then scrolls
-chat once the cursor reaches the top row. Scrolling upward with the mouse follows
-the same order and preserves your draft. Completion lists and queued-input recall
-retain their existing keyboard priority.
+chat once the cursor reaches the top row. PgUp/PgDn scroll the timeline.
+Completion lists and queued-input recall retain their existing keyboard priority.
+
+Mouse selection and copying are handled by your terminal, with no automatic
+copy on release. Use Cmd+C or Ctrl+C if configured as your terminal's copy shortcut.
+Mouse reporting is disabled: use the keyboard for timeline scrolling and menus,
+and your terminal's link-opening gesture for links.
 
 - Ctrl+K: Menu
 - Ctrl+M: Models
@@ -163,7 +167,8 @@ retain their existing keyboard priority.
 - Ctrl+T: Tracing
 - Ctrl+F: Files
 - Ctrl+Q: Save and quit
-- Ctrl+C: Stop the active turn (does not exit)
+- Ctrl+D: Stop the active turn (does not exit)
+- Ctrl+C: reserved for terminal copying; never stops the active turn
 - Ctrl+E: edit the draft externally; saving restores it without sending
 - Esc: back; shortcut-opened pages return directly to chat
 - Tracing merges history, tasks and notices/errors chronologically (tasks use their
