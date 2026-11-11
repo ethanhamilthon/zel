@@ -227,24 +227,3 @@ func Send(endpoint string, message Message) (string, error) {
 	}
 	return answer.Text, err
 }
-
-func CleanAttachments(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
-		}
-	}
-	return nil
-}

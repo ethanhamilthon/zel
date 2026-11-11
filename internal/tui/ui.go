@@ -48,6 +48,7 @@ type model struct {
 	width, height             int
 	cwd                       string
 	menu                      *menuState
+	failure                   error
 	hideCompletion            bool
 	cache                     []renderedEntry
 	inputValue                string
@@ -55,6 +56,7 @@ type model struct {
 	sel                       *selection
 	inputDrag                 bool
 	inputTop                  int
+	directoryGen              uint64
 	layoutValue               string
 	layoutWidth               int
 	layout                    []composerRow
@@ -260,13 +262,16 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.refresh(true)
 		return m, nil
+	case directoryResult:
+		m.applyDirectory(v)
+		return m, nil
 	case fileEditorFinished:
 		m.editorActive = false
 		if v.err != nil {
 			return m.reject(v.err)
 		}
 		if m.menu != nil && m.menu.page == menuFiles {
-			m.readDirectory(m.menu.directory)
+			return m, m.readDirectory(m.menu.directory)
 		}
 		m.refresh(true)
 		return m, nil
@@ -354,9 +359,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openMenuPage(menuTracing)
 		}
 		if v.String() == "ctrl+n" {
-			m = m.closeMenu()
-			m.resetCompletions()
-			return m.submit(m.ctl.NewSession())
+			return m.switchSession("")
 		}
 		if v.String() == "ctrl+r" {
 			return m.openMenuPage(menuResume)
@@ -387,9 +390,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dismissFileCompletion()
 				m.refresh(true)
 				return m, nil
-			}
-			if m.ctl.Status().Busy {
-				m.requestCancel()
 			}
 			m.hideCompletion = true
 			m.refresh(true)

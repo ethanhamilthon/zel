@@ -183,8 +183,14 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		}
 	}
 	screen.add(m.workingBlock())
-	if len(screen) < 2 {
-		screen.add("\n")
+	// Composer spacing is independent of timeline and working-indicator rows.
+	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
+		screen = screen[:len(screen)-1]
+	}
+	if len(screen) == 0 {
+		screen = screenRows{"", ""}
+	} else {
+		screen = append(screen, "", "")
 	}
 	m.inputTop = len(screen) - 1
 	screen.add(m.inputBlock())

@@ -70,7 +70,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "tasks", "view", "events":
+	case "version", "help", "--help", "-h", "tasks", "view", "events", "session":
 		return true
 	}
 	return false
@@ -83,6 +83,9 @@ type failedWriter struct {
 
 func (f *failedWriter) Write(p []byte) (int, error) {
 	n, err := f.w.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
 	if err != nil && f.err == nil {
 		f.err = err
 	}
@@ -119,10 +122,10 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			return viewCommand(args[1:])
 		case "events":
 			return eventsCommand(args[1:], out)
+		case "session":
+			return readSessionCommand(args[1:], out)
 		case "models":
 			return modelsCommand(ctx, args[1:], out, diagnostics)
-		case "json":
-			return jsonCommand(ctx, args[1:], in, out, diagnostics)
 		}
 	}
 	return sessionCommand(ctx, args, in, out)
@@ -231,25 +234,64 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 }
 
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
-	fs := flagSet("zel", func(*flag.FlagSet) {})
+	var prompt, provider, model, effort string
+	fs := flagSet("zel", func(fs *flag.FlagSet) {
+		fs.StringVar(&prompt, "p", "", "run a prompt without the TUI")
+		fs.StringVar(&provider, "provider", "", "provider for this run")
+		fs.StringVar(&model, "model", "", "model for this run")
+		fs.StringVar(&effort, "effort", "", "reasoning effort for this run")
+	})
 	if err := parseWithConfig(fs, args); err != nil {
 		return fmt.Errorf("%w (see zel --help)", err)
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if !isTerminal(in) || !isTerminal(out) {
+	headless := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "p" {
+			headless = true
+		}
+	})
+	if headless && strings.TrimSpace(prompt) == "" {
+		return errors.New("-p requires a nonempty prompt")
+	}
+	if !headless && (provider != "" || model != "" || effort != "") {
+		return errors.New("--provider, --model and --effort require -p")
+	}
+	if !headless && (!isTerminal(in) || !isTerminal(out)) {
 		return errors.New("the interactive TUI needs a terminal")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	a, err := agent.New(cwd, agent.Options{Mode: "tui"})
+	opts := agent.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort}
+	if headless {
+		opts.Mode = "headless"
+		opts.SessionReady = func(a *agent.Agent) error {
+			if hint := a.Settings().SetupHint(); hint != "" {
+				return errors.New(hint)
+			}
+			if err := a.Save(); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintln(out, a.SessionID())
+			return err
+		}
+	}
+	a, err := agent.New(cwd, opts)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	if headless {
+		if err := a.Run(ctx, prompt, func(agent.Event) {}); err != nil {
+			return cancelledOr(ctx, err)
+		}
+		_, err := fmt.Fprintln(out, a.FinalText())
+		return cancelledOr(ctx, err)
+	}
 	running, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	tui.Version = Version
@@ -265,4 +307,38 @@ func cancelledOr(ctx context.Context, err error) error {
 		return cancelled
 	}
 	return err
+}
+
+// modelList is the JSON shape used by the models helper.
+func modelList(choices []agent.ModelChoice) []map[string]string {
+	list := make([]map[string]string, 0, len(choices))
+	for _, c := range choices {
+		list = append(list, map[string]string{"provider": c.Provider, "model": c.Model})
+	}
+	return list
+}
+
+func readSessionCommand(args []string, out io.Writer) error {
+	var id string
+	fs := flagSet("session", func(fs *flag.FlagSet) { fs.StringVar(&id, "s", "", "session ID") })
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if id == "" || fs.NArg() != 0 {
+		return errors.New("usage: zel session -s SESSION_ID")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	records, err := agent.ReadSession(cwd, id)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if _, err := fmt.Fprintf(out, "[%s]\n%s\n\n", record.Kind, record.Text); err != nil {
+			return err
+		}
+	}
+	return nil
 }

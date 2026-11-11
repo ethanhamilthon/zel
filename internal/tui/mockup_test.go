@@ -469,8 +469,12 @@ func settle(m model) model {
 }
 
 func key(m model, k tea.KeyMsg) model {
-	next, _ := m.Update(k)
-	return settle(next.(model))
+	next, cmd := m.Update(k)
+	result := next.(model)
+	if cmd != nil && result.menu != nil && result.menu.page == menuFiles && result.menu.status == "Loading…" {
+		result.applyDirectory(cmd().(directoryResult))
+	}
+	return settle(result)
 }
 
 func agentEvent(e agent.Event) control.Event { return control.Event{Kind: "agent", Agent: &e} }

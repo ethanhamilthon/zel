@@ -141,7 +141,6 @@ var AccentColors = map[string]string{
 
 var envReference = regexp.MustCompile(`\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 
-func Expand(s string) string { return expand(s) }
 func expand(s string) string {
 	return envReference.ReplaceAllStringFunc(s, func(m string) string { return os.Getenv(m[3 : len(m)-2]) })
 }

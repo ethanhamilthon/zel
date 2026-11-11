@@ -1173,6 +1173,11 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	m.menu = &menuState{page: menuProvider, provider: "p", selected: 1}
 	next, _ := m.menuActivate()
 	m = next.(model)
+	if m.menu.page != menuConfirm || len(m.ctl.Settings().Providers) != 1 {
+		t.Fatal("provider deleted before confirmation")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(m.ctl.Settings().Providers) != 0 || m.ctl.Settings().Provider != "" {
 		t.Fatal("selected provider not deleted safely")
 	}
@@ -1217,7 +1222,7 @@ func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
 	}
 	m := bareModel(t, dir)
 	m.menu = &menuState{page: menuFiles}
-	m.readDirectory(dir)
+	m.applyDirectory(m.readDirectory(dir)().(directoryResult))
 	var names []string
 	for _, f := range m.menu.files {
 		names = append(names, f.name)
@@ -1226,14 +1231,16 @@ func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
 		t.Fatalf("files: %v", names)
 	}
 	m.menu.query = "folder"
-	next, _ := m.menuActivate()
+	next, cmd := m.menuActivate()
 	m = next.(model)
+	m.applyDirectory(cmd().(directoryResult))
 	if m.menu.directory != filepath.Join(dir, "folder") || m.menu.query != "" {
 		t.Fatal("filtered directory navigation failed")
 	}
 	m.menu.selected = 1
-	next, _ = m.menuActivate()
+	next, cmd = m.menuActivate()
 	m = next.(model)
+	m.applyDirectory(cmd().(directoryResult))
 	if m.menu.directory != dir {
 		t.Fatal("parent navigation failed")
 	}
@@ -1277,7 +1284,7 @@ func TestFilesEditorRestoresBrowserWithoutChangingDraft(t *testing.T) {
 	m := bareModel(t, dir)
 	m.setComposer("draft")
 	m.menu = &menuState{page: menuFiles}
-	m.readDirectory(dir)
+	m.applyDirectory(m.readDirectory(dir)().(directoryResult))
 	for i, f := range m.menu.files {
 		if f.name == "file.txt" {
 			m.menu.selected = i
@@ -1653,5 +1660,166 @@ func TestTracingEntryNumber(t *testing.T) {
 	_, shortcut := m.menuHead()
 	if shortcut != "Ctrl+T" {
 		t.Fatalf("list header changed: %q", shortcut)
+	}
+}
+
+func TestEscapeNeverCancelsActiveWork(t *testing.T) {
+	f := newFixture(t, true)
+	gate := make(chan struct{})
+	f.hold.Store(&gate)
+	f.m.width, f.m.height = 100, 34
+	f.m.refresh(true)
+	f.m.input.SetValue("work")
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyEnter})
+	awaitRequest(t, f.m)
+	for _, overlay := range []string{"none", "menu", "completion"} {
+		switch overlay {
+		case "menu":
+			f.m.menu = &menuState{page: menuMain}
+		case "completion":
+			f.m.fileCompletions = []string{"file.txt"}
+			f.m.fileLoading = true
+		}
+		f.m = key(f.m, tea.KeyMsg{Type: tea.KeyEsc})
+		if status := f.m.ctl.Status(); !status.Busy || status.Cancelling {
+			t.Fatalf("Esc cancelled work with %s: %+v", overlay, status)
+		}
+		if overlay == "menu" && f.m.menu != nil {
+			t.Fatal("Esc did not dismiss menu")
+		}
+		if overlay == "completion" && (f.m.fileLoading || f.m.hasFileCompletions()) {
+			t.Fatal("Esc did not dismiss completions")
+		}
+	}
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	f.m = awaitIdle(t, f.m)
+	close(gate)
+}
+
+func TestComposerAlwaysHasBlankRowAboveIt(t *testing.T) {
+	f := newFixture(t, true)
+	gate := make(chan struct{})
+	f.hold.Store(&gate)
+	f.m.width, f.m.height = 100, 34
+	f.m.refresh(true)
+	check := func(state string) {
+		t.Helper()
+		rows := f.m.timelineRows(0)
+		if f.m.inputTop < 1 || strings.TrimSpace(ansi.Strip(rows[f.m.inputTop-1])) != "" {
+			t.Fatalf("%s: composer lost blank row: top=%d rows=%q", state, f.m.inputTop, rows)
+		}
+	}
+	check("empty")
+	f.m.input.SetValue("hello")
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyEnter})
+	awaitRequest(t, f.m)
+	check("busy")
+	close(gate)
+	f.settle(t)
+	check("completed")
+}
+
+func TestDirectoryResultsIgnoreStaleResponses(t *testing.T) {
+	dir := t.TempDir()
+	m := bareModel(t, dir)
+	m.menu = &menuState{page: menuFiles}
+	old := m.readDirectory(dir)
+	current := m.readDirectory(dir)
+	m.applyDirectory(old().(directoryResult))
+	if m.menu.status != "Loading…" || len(m.menu.files) != 0 {
+		t.Fatal("stale response applied")
+	}
+	m.applyDirectory(current().(directoryResult))
+	if m.menu.status != "" || len(m.menu.files) < 2 {
+		t.Fatal("current response ignored")
+	}
+	old = m.readDirectory(dir)
+	m = m.closeMenu()
+	m.menu = &menuState{page: menuFiles}
+	m.applyDirectory(old().(directoryResult))
+	if len(m.menu.files) != 0 {
+		t.Fatal("closed browser response applied to new menu")
+	}
+}
+
+func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
+	q := newEventQueue()
+	defer q.Close()
+	for i := 0; i < 2000; i++ {
+		q.Push(control.Event{Kind: "done", Text: fmt.Sprint(i)})
+	}
+	if len(q.items) > 256 || q.spill == nil {
+		t.Fatalf("queue not bounded: %d", len(q.items))
+	}
+	for i := 0; i < 2000; i++ {
+		e, ok := q.TryPop()
+		if !ok || e.Text != fmt.Sprint(i) {
+			t.Fatalf("event %d: %+v %v", i, e, ok)
+		}
+	}
+	if _, ok := q.TryPop(); ok || q.spill != nil {
+		t.Fatal("queue/spool not drained")
+	}
+	q.Push(agentEvent(agent.Event{Kind: "delta", ID: "x", Text: "a"}))
+	q.Push(agentEvent(agent.Event{Kind: "delta", ID: "x", Text: "b"}))
+	q.Push(agentEvent(agent.Event{Kind: "assistant", ID: "x", Text: "ab", Final: true}))
+	e, _ := q.TryPop()
+	final, _ := q.TryPop()
+	if e.Agent.Text != "ab" || !final.Agent.Final {
+		t.Fatalf("coalescing lost final: %+v %+v", e, final)
+	}
+}
+
+func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	id := m.ctl.Status().Session
+	if _, err := agent.RunTask(m.cwd, id, "sleep 30"); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := m.switchSession("")
+	m = next.(model)
+	if m.menu == nil || m.menu.page != menuConfirm || m.menu.selected != 0 {
+		t.Fatal("missing safe confirmation")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.ctl.Status().Session != id || m.ctl.Status().Tasks != 1 {
+		t.Fatal("abort stopped task or switched session")
+	}
+	next, _ = m.switchSession("")
+	m = next.(model)
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.ctl.Status().Session == id || m.ctl.Status().Tasks != 0 {
+		t.Fatal("confirmation did not switch and stop tasks")
+	}
+}
+
+func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
+	q := newEventQueue()
+	defer q.Close()
+	for i := 0; i < 257; i++ {
+		q.Push(control.Event{Kind: "done"})
+	}
+	if err := q.spill.Close(); err != nil {
+		t.Fatal(err)
+	}
+	q.Push(control.Event{Kind: "done"})
+	var failure control.Event
+	for {
+		e, ok := q.TryPop()
+		if !ok {
+			break
+		}
+		if e.Kind == "fatal" {
+			failure = e
+		}
+	}
+	if !strings.Contains(failure.Text, "UI event spool") {
+		t.Fatalf("spool failure hidden: %+v", failure)
+	}
+	m := bareModel(t, t.TempDir())
+	next, cmd := m.Update(failure)
+	if next.(model).failure == nil || cmd == nil {
+		t.Fatal("fatal queue failure did not terminate the UI explicitly")
 	}
 }

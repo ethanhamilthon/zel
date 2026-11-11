@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -618,5 +620,109 @@ func TestWithdrawIdentifiedSteering(t *testing.T) {
 	}
 	if q.Withdraw(2) {
 		t.Fatal("accepted input must not be withdrawable")
+	}
+}
+
+func TestChatStreamCountsNonzeroUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: "+`{"choices":[{"delta":{"content":"hello"}}]}`+"\n\ndata: "+`{"choices":[],"usage":{"prompt_tokens":123,"completion_tokens":45,"prompt_tokens_details":{"cached_tokens":67}}}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	client := newClient(Provider{BaseURL: server.URL, API: APIChat})
+	var input, output, cached int64
+	err := client.streamChat(context.Background(), map[string]any{"model": "m"}, func(e streamEvent) error {
+		if e.Response.Usage != nil {
+			input, output = e.Response.Usage.InputTokens, e.Response.Usage.OutputTokens
+			cached = *e.Response.Usage.InputTokensDetails.CachedTokens
+		}
+		return nil
+	})
+	if err != nil || input != 123 || output != 45 || cached != 67 {
+		t.Fatalf("usage=%d/%d/%d err=%v", input, output, cached, err)
+	}
+}
+
+func TestTaskLogIsBoundedAndDrained(t *testing.T) {
+	var data bytes.Buffer
+	w := &taskLog{file: &data}
+	chunk := bytes.Repeat([]byte("x"), 65536)
+	for i := 0; i < 256; i++ {
+		if n, err := w.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("write=%d err=%v", n, err)
+		}
+	}
+	if data.Len() != taskLogLimit+len(taskLogTruncated) || !strings.HasSuffix(data.String(), taskLogTruncated) {
+		t.Fatalf("log size=%d", data.Len())
+	}
+}
+
+func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	for i := 0; i < maxQueued; i++ {
+		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
+	}
+	if _, err := a.tasks.run("echo should-not-run"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
+		t.Fatalf("admission: %v", err)
+	}
+	for i := 0; i < maxQueued; i++ {
+		if !a.Queue().Push(Input{Text: "composer"}) {
+			t.Fatalf("composer slot %d rejected", i)
+		}
+	}
+	if a.Queue().Push(Input{Text: "overflow"}) {
+		t.Fatal("composer limit not enforced")
+	}
+}
+
+func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	if _, err := a.db.Exec(`CREATE TRIGGER fail_task_finish BEFORE UPDATE ON tasks BEGIN SELECT RAISE(FAIL, 'completion blocked'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.tasks.run("echo finished"); err != nil {
+		t.Fatal(err)
+	}
+	a.tasks.wg.Wait()
+	inputs := a.Queue().Take()
+	if len(inputs) != 1 || !strings.Contains(inputs[0].Text, "could not be persisted") || !strings.Contains(inputs[0].Text, "completion blocked") {
+		t.Fatalf("completion: %+v", inputs)
+	}
+}
+
+func TestSavedImageOriginalsRetainedAndMissingReported(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	path := filepath.Join(a.home, "attachments", "original.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	a.commitInput(Input{Text: "image", Images: []shell.Image{{Path: path, URL: "data:image/png;base64,aQ=="}}})
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(a.Shell.Dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("saved source removed: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	records, err := ReadSession(a.Shell.Dir, a.SessionID())
+	if err != nil || !slices.ContainsFunc(records, func(r Record) bool { return strings.Contains(r.Text, "Original image unavailable") }) {
+		t.Fatalf("missing-source notice: %v err=%v", records, err)
 	}
 }

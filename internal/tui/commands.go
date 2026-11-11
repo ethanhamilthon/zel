@@ -22,7 +22,7 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, re
 	"PgUp/PgDn or mouse wheel: scroll timeline\n" +
 	"The chat shows only user messages and answers; the Tracing menu has the rest\n" +
 	"Tracing entry: Left/Right switch entries · Up/Down scroll · Esc returns to the list\n" +
-	"Esc / Ctrl+C: cancel current turn · Ctrl+Q: save and quit"
+	"Esc: dismiss UI · Ctrl+C: cancel current turn · Ctrl+Q: save and quit"
 
 func help() string {
 	return keyboardHelp + "\n\nHost access: the bash tool runs commands with your permissions; not an OS security sandbox."

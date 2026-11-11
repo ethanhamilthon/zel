@@ -119,8 +119,9 @@ type chatChunk struct {
 		}
 	}
 	Usage *struct {
-		PromptTokens, CompletionTokens int64
-		PromptTokensDetails            *struct {
+		PromptTokens        int64 `json:"prompt_tokens"`
+		CompletionTokens    int64 `json:"completion_tokens"`
+		PromptTokensDetails *struct {
 			CachedTokens *int64 `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
 	}

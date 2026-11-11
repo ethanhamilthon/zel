@@ -165,8 +165,8 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	if !h.ctl.Status().Busy {
 		t.Fatal("reload interrupted the running turn")
 	}
-	if got := h.ctl.Settings().ShellTimeout; got != 42 {
-		t.Fatalf("config change did not apply mid-turn: got %d, want 42", got)
+	if got := h.ctl.Settings().ShellTimeout; got == 42 {
+		t.Fatalf("config change applied mid-turn: got %d", got)
 	}
 	info, err := h.ctl.Info()
 	if err != nil {
@@ -380,5 +380,41 @@ func (h *harness) inFlight(n int) {
 			h.t.Fatalf("request %d never arrived", n)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestModelChangeRejectedDuringTurn(t *testing.T) {
+	gate := make(chan struct{})
+	h := newHarness(t, &fakeModel{gate: gate})
+	h.send("work")
+	h.inFlight(1)
+	before := h.ctl.Settings()
+	if err := h.ctl.SelectModel(before.Provider, "different", "high"); err == nil {
+		t.Fatal("model changed during turn")
+	}
+	if got := h.ctl.Settings(); got.Model != before.Model || got.Effort != before.Effort {
+		t.Fatal("rejected change mutated settings")
+	}
+	close(gate)
+	h.settle()
+}
+
+func TestImageOnlyInputNormalizedByController(t *testing.T) {
+	h := newHarness(t, &fakeModel{})
+	if err := h.ctl.Input(agent.Input{Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	if requests := h.model.requests(); len(requests) != 1 || !strings.Contains(requests[0], "Describe this image.") || !strings.Contains(requests[0], "input_image") {
+		t.Fatalf("image-only request: %v", requests)
+	}
+}
+
+func TestResumeMissingSessionKeepsCurrentSession(t *testing.T) {
+	h := newHarness(t, &fakeModel{})
+	id := h.ctl.Status().Session
+	err := h.ctl.Resume("missing")
+	if err == nil || !strings.Contains(err.Error(), "session not found in this project") || h.ctl.Status().Session != id {
+		t.Fatalf("resume result: %v session=%s", err, h.ctl.Status().Session)
 	}
 }

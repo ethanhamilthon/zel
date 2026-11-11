@@ -45,6 +45,7 @@ const (
 	menuForm
 	menuSettings
 	menuFiles
+	menuConfirm
 )
 
 var menuTitles = map[menuPage]string{
@@ -90,6 +91,8 @@ type menuState struct {
 	query           string   // the search text of the current page
 	search          *textarea.Model
 	status          string
+	confirm         string
+	target          string
 	sessions        []agent.SessionSummary
 	info            []menuRow
 	tasks           []agent.Task
@@ -128,6 +131,8 @@ func (m model) buildMenuRows() []menuRow {
 		for _, name := range mu.providerNames {
 			rows = append(rows, menuRow{name, m.ctl.Settings().Providers[name].BaseURL})
 		}
+	case menuConfirm:
+		rows = []menuRow{{"Cancel", "Keep everything as it is"}, {"Confirm", mu.confirm}}
 	case menuProvider:
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
@@ -540,6 +545,7 @@ func (m *model) openMenu() tea.Cmd {
 }
 
 func (m model) closeMenu() model {
+	m.directoryGen++
 	m.menu = nil
 	m.refresh(false)
 	return m
@@ -549,6 +555,10 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 	mu := m.menu
 	if mu.page == menuText && mu.parent == menuTracing {
 		mu.page, mu.offset, mu.title, mu.text = menuTracing, 0, "", ""
+		return m, nil
+	}
+	if mu.page == menuConfirm {
+		mu.page, mu.selected = mu.parent, 0
 		return m, nil
 	}
 	if mu.direct {
@@ -603,6 +613,9 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch v.String() {
 	case "esc":
+		if mu.page == menuConfirm {
+			return m.menuBack()
+		}
 		if mu.direct {
 			return m.closeMenu(), nil
 		}
@@ -698,9 +711,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			mu.sessions, _ = m.ctl.Sessions()
 			open(menuResume)
 		case 1:
-			m = m.closeMenu()
-			m.resetCompletions()
-			return m.submit(m.ctl.NewSession())
+			return m.switchSession("")
 		case 2:
 			mu.query = ""
 			open(menuModel)
@@ -740,7 +751,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			open(menuSettings)
 		case 13:
 			open(menuFiles)
-			m.readDirectory(m.cwd)
+			return m, m.readDirectory(m.cwd)
 		case 9:
 			m = m.closeMenu()
 			return m.quit()
@@ -756,6 +767,15 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 		if index == 0 {
 			m.openProviderForm(mu.provider, false)
 		} else {
+			mu.parent, mu.page, mu.selected = menuProvider, menuConfirm, 0
+			mu.confirm, mu.target = "Delete provider and saved API key: "+mu.provider, "delete-provider"
+			mu.query, mu.search = "", nil
+		}
+	case menuConfirm:
+		if index == 0 {
+			return m.menuBack()
+		}
+		if mu.target == "delete-provider" {
 			settings := m.ctl.Settings()
 			delete(settings.Providers, mu.provider)
 			if settings.Provider == mu.provider {
@@ -767,6 +787,8 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			m.models = nil
 			m.modelsAt = time.Time{}
 			m.openProviders()
+		} else {
+			return m.performSwitch(mu.target)
 		}
 	case menuSettings:
 		if index == 3 {
@@ -783,16 +805,14 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			f := mu.files[index]
 			path := filepath.Join(mu.directory, f.name)
 			if f.dir {
-				m.readDirectory(path)
+				return m, m.readDirectory(path)
 			} else {
 				return m.editFile(path)
 			}
 		}
 	case menuResume:
 		if index < len(mu.sessions) {
-			m = m.closeMenu()
-			m.resetCompletions()
-			return m.submit(m.ctl.Resume(mu.sessions[index].ID))
+			return m.switchSession(mu.sessions[index].ID)
 		}
 	case menuModel:
 		found := m.filteredModels()
@@ -869,4 +889,27 @@ func (m model) openMenuPage(page menuPage) (tea.Model, tea.Cmd) {
 		result.menu.direct = true
 	}
 	return result, cmd
+}
+
+// Session switches stop background tasks; confirmation defaults to Cancel.
+func (m model) switchSession(id string) (tea.Model, tea.Cmd) {
+	if m.ctl.Status().Tasks > 0 {
+		if m.menu == nil {
+			m.menu = &menuState{page: menuMain}
+		}
+		m.menu.parent, m.menu.page, m.menu.selected = m.menu.page, menuConfirm, 0
+		m.menu.confirm, m.menu.target = "Stop running background tasks and switch session", id
+		m.menu.query, m.menu.search = "", nil
+		return m, nil
+	}
+	return m.performSwitch(id)
+}
+
+func (m model) performSwitch(id string) (tea.Model, tea.Cmd) {
+	m = m.closeMenu()
+	m.resetCompletions()
+	if id == "" {
+		return m.submit(m.ctl.NewSession())
+	}
+	return m.submit(m.ctl.Resume(id))
 }

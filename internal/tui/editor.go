@@ -36,12 +36,7 @@ func (m model) editInput() (tea.Model, tea.Cmd) {
 		os.Remove(path)
 		return m.reject(err)
 	}
-	editor := cmp.Or(m.ctl.Settings().UI.Editor, os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim")
-	command := exec.Command("sh", "-c", "exec "+editor+" \"$1\"", "zel-editor", path)
-	command.Dir = m.cwd
-	// Bypass cursorOutput: its Zel caret overlay would hide Neovim's cursor
-	// and modify the editor's own alternate-screen and cursor sequences.
-	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	command := m.editorCommand(path)
 	m.editorActive = true
 	return m, tea.ExecProcess(command, func(err error) tea.Msg {
 		result := editorFinished{original: text, path: path}
@@ -53,4 +48,13 @@ func (m model) editInput() (tea.Model, tea.Cmd) {
 		}
 		return result
 	})
+}
+
+// The editor owns the terminal directly, without the TUI cursor overlay.
+func (m model) editorCommand(path string) *exec.Cmd {
+	editor := cmp.Or(m.ctl.Settings().UI.Editor, os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim")
+	command := exec.Command("sh", "-c", "exec "+editor+" \"$1\"", "zel-editor", path)
+	command.Dir = m.cwd
+	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	return command
 }

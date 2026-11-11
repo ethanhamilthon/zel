@@ -167,9 +167,43 @@ withdraws it, and Enter queues it again.
 
 ## Automation and security
 
-`zel json` exposes the controller over newline-delimited JSON; see
-[docs/JSON.md](docs/JSON.md). `zel tasks` manages background commands, `zel view`
-queues images, and `zel models` checks providers. Run `zel --help` for details.
+Run one task without the TUI:
+
+```sh
+zel -p "Review this project" --provider NAME --model MODEL --effort high --config ./ZEL.md
+zel session -s SESSION_ID
+```
+
+The first stdout line is the persisted session ID, written before any model
+request. The final answer follows when the task finishes, then the process exits.
+Progress and tool traffic do not go to stdout; errors go to stderr. Success exits
+0, errors exit nonzero, and cancellation exits 130. Read a persisted snapshot with
+`zel session -s ID` while it runs or after it exits; completed sessions can also be
+resumed from the TUI. A snapshot includes committed items, not live stream deltas.
+
+`--provider`, `--model` and `--effort` override saved defaults for this headless
+session only; they never change defaults for later sessions. `--config` keeps its
+usual highest-priority instruction layer. Headless mode reuses the normal agent,
+tools, hooks and session store; it is not an interactive request protocol.
+
+`zel tasks` manages background commands, `zel view` queues images, and `zel models`
+checks providers (including `--json` output). Run `zel --help` for details.
+
+Task logs retain the first 8 MiB plus an explicit truncation marker; further
+output is drained without increasing disk usage. Task admission limits running
+tasks plus pending completion notices to 64, so final task results are not dropped.
+Composer input is separately limited to 64 items. Slow UI consumers use a bounded
+256-event memory queue with adjacent streaming deltas coalesced and ordered overflow
+spooled to a private temporary file. The file is unlinked immediately and reclaimed when closed or on exit. A spool
+I/O failure cancels work and exits with an explicit error; saved history remains
+available through the session reader.
+
+Captured image originals are retained indefinitely in `~/.zel/attachments` so
+saved-session paths remain usable for crops. Delete originals manually only when
+they are no longer needed; the embedded image preview stays in the saved history.
+Settings and model changes are rejected during an active turn. Reload is deferred
+until the turn ends. New/resume asks before stopping running background tasks;
+provider deletion asks before deleting the provider and its saved API key.
 
 Zel executes commands with your user permissions and network access, not inside
 a sandbox. Review project hooks before trusting an unfamiliar `ZEL.md`.

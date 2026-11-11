@@ -49,20 +49,28 @@ func AllModels(ctx context.Context, providers map[string]Provider) (choices []Mo
 	return choices, errs
 }
 
-func ProviderModels(ctx context.Context, p Provider) ([]string, error) {
-	models, err := newClient(p).models(ctx)
-	if err != nil && p.key() != "" {
-		err = errors.New(strings.ReplaceAll(err.Error(), p.key(), "[redacted]"))
-	}
-	sort.Strings(models)
-	return models, err
-}
-
 // SelectSession changes the model of this session and makes it the default for new
 // sessions by persisting the selection in SQLite (see SaveDefault).
 // Saved sessions keep their own model. Call between turns. Failed validation or
 // persistence of the session restores the old selection.
 func (a *Agent) SelectSession(ctx context.Context, provider, model, effort string) error {
+	if err := a.ConfigureSession(ctx, provider, model, effort); err != nil {
+		return err
+	}
+	c := a.cfg
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := SaveDefault(a.home, c.base, c.sel); err != nil {
+		return fmt.Errorf("model selected for this session, but the default was not saved: %w", err)
+	}
+	if base, err := LoadConfig(a.home, a.Shell.Dir); err == nil {
+		_ = a.applyLocked(base)
+	}
+	return nil
+}
+
+// ConfigureSession overrides this session without changing saved defaults. Call while idle.
+func (a *Agent) ConfigureSession(ctx context.Context, provider, model, effort string) error {
 	if effort == "" {
 		effort = "medium"
 	}
@@ -83,12 +91,7 @@ func (a *Agent) SelectSession(ctx context.Context, provider, model, effort strin
 		_ = a.applyLocked(c.base)
 		return err
 	}
-	if err := SaveDefault(a.home, c.base, c.sel); err != nil {
-		return fmt.Errorf("model selected for this session, but the default was not saved: %w", err)
-	}
-	if base, err := LoadConfig(a.home, a.Shell.Dir); err == nil {
-		_ = a.applyLocked(base)
-	}
+
 	return nil
 }
 

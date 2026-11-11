@@ -1,10 +1,8 @@
 package tui
 
 import (
-	"cmp"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,14 +16,30 @@ type fileItem struct {
 }
 type fileEditorFinished struct{ err error }
 
-func (m *model) readDirectory(path string) {
+type directoryResult struct {
+	generation uint64
+	path       string
+	files      []fileItem
+	err        error
+}
+
+func (m *model) readDirectory(path string) tea.Cmd {
+	m.directoryGen++
+	generation := m.directoryGen
+	m.menu.directory, m.menu.status = filepath.Clean(path), "Loading…"
+	m.menu.files, m.menu.listCache = nil, nil
+	m.menu.selected, m.menu.query, m.menu.search = 0, "", nil
+	return func() tea.Msg {
+		files, err := directoryFiles(path)
+		return directoryResult{generation, path, files, err}
+	}
+}
+
+func directoryFiles(path string) ([]fileItem, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		m.menu.status = err.Error()
-		m.ctl.LogEvent("error", err.Error())
-		return
+		return nil, err
 	}
-	items := []fileItem{{".", true}, {"..", true}}
 	var files []fileItem
 	for _, e := range entries {
 		dir := e.IsDir()
@@ -45,10 +59,22 @@ func (m *model) readDirectory(path string) {
 		}
 		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
 	})
-	m.menu.files = append(items, files...)
-	m.menu.listCache = nil
-	m.menu.directory, m.menu.selected, m.menu.query, m.menu.search, m.menu.status = filepath.Clean(path), 0, "", nil, ""
+	return append([]fileItem{{".", true}, {"..", true}}, files...), nil
 }
+
+func (m *model) applyDirectory(v directoryResult) {
+	if v.generation != m.directoryGen || m.menu == nil || m.menu.page != menuFiles {
+		return
+	}
+	if v.err != nil {
+		m.menu.status = v.err.Error()
+		m.ctl.LogEvent("error", v.err.Error())
+		return
+	}
+	m.menu.files, m.menu.listCache = v.files, nil
+	m.menu.directory, m.menu.status = filepath.Clean(v.path), ""
+}
+
 func (m model) editFile(path string) (tea.Model, tea.Cmd) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -57,10 +83,7 @@ func (m model) editFile(path string) (tea.Model, tea.Cmd) {
 	if !info.Mode().IsRegular() {
 		return m.reject(fmt.Errorf("Not a regular file: %s", path))
 	}
-	editor := cmp.Or(m.ctl.Settings().UI.Editor, os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim")
-	command := exec.Command("sh", "-c", "exec "+editor+" \"$1\"", "zel-editor", path)
-	command.Dir = m.cwd
-	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	command := m.editorCommand(path)
 	m.editorActive = true
 	return m, tea.ExecProcess(command, func(err error) tea.Msg { return fileEditorFinished{err} })
 }

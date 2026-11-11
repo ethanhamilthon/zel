@@ -10,7 +10,7 @@ import (
 	"zel/internal/agent"
 )
 
-// Controller is the single entry point for the TUI and JSON mode. One turn is
+// Controller is the single entry point for the TUI. One turn is
 // active at a time; inputs arriving meanwhile become steering. It keeps no copy of
 // session state: clients follow events and read snapshots from the agent while idle.
 // Events are emitted under the controller lock, so emit must not block and must
@@ -19,14 +19,14 @@ type Controller struct {
 	a    *agent.Agent
 	emit func(Event)
 
-	mu       sync.Mutex
-	active   *operation
-	idle     chan struct{}
-	deferred *deferredAction
-	reload   bool
-	closing  bool
-	shut     bool
-	closed   chan struct{}
+	mu          sync.Mutex
+	active      *operation
+	idle        chan struct{}
+	quitPending bool
+	reload      bool
+	closing     bool
+	shut        bool
+	closed      chan struct{}
 }
 
 type operation struct {
@@ -34,11 +34,6 @@ type operation struct {
 	cancel    context.CancelFunc
 	started   time.Time
 	cancelled bool
-}
-
-type deferredAction struct {
-	kind    string
-	session string
 }
 
 // New returns a controller for a. The agent must outlive the controller.
@@ -184,7 +179,7 @@ func (c *Controller) finishTurn(op *operation, err error) {
 			c.emit(Event{Kind: "notice", Text: "Turn cancelled."})
 		}
 		var unsent []agent.Input
-		if status != "ok" || c.deferred != nil || c.closing {
+		if status != "ok" || c.quitPending || c.closing {
 			unsent = c.a.Queue().RemoveComposer()
 		}
 		c.endLocked(op)
@@ -202,20 +197,12 @@ func (c *Controller) settleLocked() {
 		c.reload = false
 		c.reloadLocked()
 	}
-	d := c.deferred
-	if d == nil || c.closing {
-		c.deliverLocked()
-		return
-	}
-	c.deferred = nil
-	if d.kind == "quit" {
+	if c.quitPending && !c.closing {
+		c.quitPending = false
 		if err := c.closeLocked(); err != nil {
 			c.emit(Event{Kind: "error", Text: err.Error()})
 		}
 		return
-	}
-	if err := c.switchLocked(d.kind, d.session); err != nil {
-		c.emit(Event{Kind: "error", Text: err.Error()})
 	}
 	c.deliverLocked()
 }

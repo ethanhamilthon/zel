@@ -2,13 +2,15 @@ package control
 
 import (
 	"context"
-	"slices"
 	"strings"
 
 	"zel/internal/agent"
 )
 
 func (c *Controller) Input(input agent.Input) error {
+	if strings.TrimSpace(input.Text) == "" && len(input.Images) > 0 {
+		input.Text = "Describe this image."
+	}
 	var err error
 	c.view(func() {
 		switch {
@@ -30,7 +32,7 @@ func (c *Controller) Input(input agent.Input) error {
 }
 
 func (c *Controller) queueLocked(input agent.Input) error {
-	if c.closing || c.deferred != nil {
+	if c.closing || c.quitPending {
 		return fail(CodeBusy, "Session is changing; wait for the change to complete.")
 	}
 	if !c.a.Queue().Push(input) {
@@ -66,7 +68,7 @@ func (c *Controller) Stop() {
 func (c *Controller) Quit() (closed bool, err error) {
 	c.view(func() {
 		if c.active != nil {
-			c.deferred = &deferredAction{kind: "quit"}
+			c.quitPending = true
 			c.active.cancelled = true
 			c.active.cancel()
 			return
@@ -87,17 +89,6 @@ func (c *Controller) switchRequest(kind, id string) error {
 		if err = c.requireIdle("Wait for the active turn before starting or resuming a session."); err != nil {
 			return
 		}
-		if kind == "resume" {
-			var sessions []agent.SessionSummary
-			if sessions, err = c.a.Sessions(); err != nil {
-				err = fail(CodeFailed, "%s", err)
-				return
-			}
-			if !slices.ContainsFunc(sessions, func(s agent.SessionSummary) bool { return s.ID == id }) {
-				err = fail(CodeInvalid, "session not found in this project: %s", id)
-				return
-			}
-		}
 		if err = c.switchLocked(kind, id); err != nil {
 			err = fail(CodeFailed, "%s", err)
 		}
@@ -108,10 +99,6 @@ func (c *Controller) switchRequest(kind, id string) error {
 func (c *Controller) Reload() {
 	c.view(func() {
 		if c.active != nil {
-			if err := c.a.ReloadConfig(); err != nil {
-				c.emit(Event{Kind: "error", Text: err.Error()})
-				return
-			}
 			c.reload = true
 			c.emit(Event{Kind: "notice", Text: "Instructions will reload after the current turn."})
 			return
@@ -172,6 +159,9 @@ func (c *Controller) Models(ctx context.Context) (models []agent.ModelChoice, fa
 func (c *Controller) SelectModel(provider, model, effort string) error {
 	var err error
 	c.view(func() {
+		if err = c.requireIdle("Wait for the active turn before changing models."); err != nil {
+			return
+		}
 		if provider == "" || model == "" {
 			err = fail(CodeInvalid, "a model and its provider are required")
 			return

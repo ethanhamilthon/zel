@@ -116,6 +116,8 @@ const maxQueued = 64
 
 func (a *Agent) Queue() *Steering { return a.queue }
 
+// PushNotice is reserved for completions of admitted tasks; admission bounds
+// pending notices plus running tasks, so final results never need to be dropped.
 func (s *Steering) PushNotice(input Input) {
 	input.sentAt = time.Now()
 	s.mu.Lock()
@@ -130,7 +132,7 @@ func (s *Steering) PushNotice(input Input) {
 func (s *Steering) Push(input Input) bool {
 	input.sentAt = time.Now()
 	s.mu.Lock()
-	if len(s.pending) >= maxQueued {
+	if len(s.pending) >= 2*maxQueued || (!input.Notice && len(s.pending)-s.noticeCountLocked() >= maxQueued) {
 		s.mu.Unlock()
 		return false
 	}
@@ -210,4 +212,20 @@ func (s *Steering) Withdraw(id uint64) bool {
 		}
 	}
 	return false
+}
+
+func (s *Steering) noticeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.noticeCountLocked()
+}
+
+func (s *Steering) noticeCountLocked() int {
+	n := 0
+	for _, input := range s.pending {
+		if input.Notice {
+			n++
+		}
+	}
+	return n
 }

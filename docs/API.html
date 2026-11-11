@@ -5,10 +5,11 @@
 :root{color-scheme:dark;--accent:#d97757}body{max-width:900px;margin:48px auto;padding:0 24px;background:#181818;color:#d6d6d6;font:16px/1.7 system-ui}h1,h2,a{color:var(--accent)}code,pre{background:#242424;font-family:monospace}pre{padding:20px;overflow:auto}td,th{padding:8px 16px;text-align:left;border-bottom:1px solid #333}nav{display:flex;gap:20px;flex-wrap:wrap}
 </style></head><body>
 <h1>Zel reference</h1>
-<nav><a href="#cli">CLI</a><a href="#instructions">Instructions</a><a href="#hooks">Hooks</a><a href="#ui">Interface</a><a href="JSON.md">JSON protocol</a></nav>
+<nav><a href="#cli">CLI</a><a href="#instructions">Instructions</a><a href="#hooks">Hooks</a><a href="#ui">Interface</a></nav>
 <h2 id="cli">CLI and data</h2>
 <pre>zel [--config FILE]
-zel json [--config FILE]
+zel -p PROMPT [--model MODEL] [--provider NAME] [--effort LEVEL] [--config FILE]
+zel session -s ID
 zel models [--json]
 zel tasks run [-s ID] COMMAND...
 zel tasks list|status|stop [-s ID] [TASK]
@@ -18,6 +19,7 @@ zel version
 zel --help</pre>
 <p>Run <code>make install</code> to install <code>~/.local/bin/zel</code>. First launch opens onboarding inside the application: provider name, base URL, API key, API type (<code>responses</code> or <code>chat</code>), then model and effort. Tab / Shift+Tab switch steps; Left / Right edit text; Enter advances. There is no setup subcommand.</p>
 <p>Providers, keys, preferences, defaults, sessions, and tasks live in <code>~/.zel/zel.db</code>. Keys are stored locally, not encrypted. Override the state directory with <code>ZEL_HOME</code>. Zel does not load or migrate old Dashy data. Manage preferences in Settings and providers in Providers. Model-list failures can be retried or bypassed through manual entry.</p>
+<p>Headless mode prints the persisted session ID first, then the final answer and exits. Diagnostics use stderr. Model, provider and effort flags override defaults for this session only. Read committed history with <code>zel session -s ID</code> while running or after exit.</p>
 <h2 id="instructions">ZEL.md</h2>
 <pre>---
 name: My project

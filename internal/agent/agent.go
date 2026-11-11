@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -50,32 +49,35 @@ func partialCode(arguments string) string {
 }
 
 type Options struct {
-	Mode string // tui or json, exported as ZEL_MODE
+	Mode                    string             // tui or headless, exported as ZEL_MODE
+	Provider, Model, Effort string             // Optional initial-session overrides; defaults are not changed.
+	SessionReady            func(*Agent) error // Called before startup hooks; may persist and announce the session.
 }
 
 type Agent struct {
-	opts         Options
-	home         string
-	cfg          *settingsState
-	histMu       *sync.RWMutex
-	Shell        *shell.Runner
-	History      []json.RawMessage
-	itemMeta     map[int]*Metadata
-	db           *sql.DB
-	project      string
-	id           string
-	saved        int
-	stored       bool
-	owner        *os.File
-	prompt       string
-	promptFrozen bool
-	title        string
-	lastRequest  Metadata
-	sock         *sessionSocket
-	queue        *Steering
-	slots        *imageSlots
-	tasks        *tasks
-	hooks        *hookRunner
+	opts          Options
+	home          string
+	cfg           *settingsState
+	histMu        *sync.RWMutex
+	Shell         *shell.Runner
+	History       []json.RawMessage
+	itemMeta      map[int]*Metadata
+	db            *sql.DB
+	project       string
+	id            string
+	saved         int
+	stored        bool
+	owner         *os.File
+	prompt        string
+	promptFrozen  bool
+	title         string
+	lastRequest   Metadata
+	imageWarnings []Record
+	sock          *sessionSocket
+	queue         *Steering
+	slots         *imageSlots
+	tasks         *tasks
+	hooks         *hookRunner
 }
 
 func New(dir string, opts Options) (*Agent, error) {
@@ -94,10 +96,24 @@ func New(dir string, opts Options) (*Agent, error) {
 	if a.db, err = openDB(a.Settings().DBPath); err != nil {
 		return nil, err
 	}
-	_ = CleanAttachments(filepath.Join(home, "attachments"))
 	if err := a.openProject(dir); err != nil {
 		a.Close()
 		return nil, err
+	}
+	if opts.Provider != "" || opts.Model != "" || opts.Effort != "" {
+		s := a.Settings()
+		if err := a.ConfigureSession(context.Background(), cmp.Or(opts.Provider, s.Provider), cmp.Or(opts.Model, s.Model), cmp.Or(opts.Effort, s.Effort)); err != nil {
+			a.release()
+			a.db.Close()
+			return nil, err
+		}
+	}
+	if opts.SessionReady != nil {
+		if err := opts.SessionReady(a); err != nil {
+			a.release()
+			a.db.Close()
+			return nil, err
+		}
 	}
 	a.fire("app_start", nil)
 	a.fire("session_start", nil)
@@ -147,7 +163,7 @@ func (a *Agent) Run(ctx context.Context, text string, emit func(Event)) error {
 }
 
 func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (err error) {
-	started, untitled := time.Now(), a.title == "" && a.DefaultTitle() == ""
+	started := time.Now()
 	if !input.Notice {
 		if a.UserMessages() == 0 {
 			a.fire("first_message", map[string]string{"ZEL_MESSAGE": input.Text})
@@ -213,9 +229,6 @@ func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (er
 	a.commitInput(input)
 	shown.Meta = a.itemMeta[len(a.History)-1]
 	emit(shown)
-	if untitled && a.DefaultTitle() != "" {
-		// Session title is derived from the first message.
-	}
 
 	turnSeq := len(a.History) - 1
 	for {

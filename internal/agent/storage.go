@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"zel/internal/shell"
 )
@@ -69,7 +72,7 @@ func (a *Agent) readSession() error {
 		return err
 	}
 	defer rows.Close()
-	a.History, a.itemMeta = nil, nil
+	a.History, a.itemMeta, a.imageWarnings = nil, nil, nil
 	for rows.Next() {
 		var item []byte
 		var meta string
@@ -77,6 +80,7 @@ func (a *Agent) readSession() error {
 			return err
 		}
 		a.History = append(a.History, json.RawMessage(item))
+		a.imageWarnings = append(a.imageWarnings, missingOriginalImages(item)...)
 		if prompt, ok := instructionSnapshot(item); ok {
 			a.prompt, a.promptFrozen = prompt, true
 		}
@@ -218,4 +222,54 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 		result = append(result, callOutput(id, shell.Result{Output: "Tool execution was interrupted; its effects and result are unknown. It was not rerun.", Error: true}))
 	}
 	return result
+}
+
+// ReadSession reads a persisted snapshot without acquiring session ownership or
+// running hooks. It works while another process is running the session.
+func ReadSession(cwd, id string) ([]Record, error) {
+	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+		return nil, fmt.Errorf("invalid session ID: %s", id)
+	}
+	home, err := ZelHome(cwd)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openDB(filepath.Join(home, "zel.db"))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var project string
+	if err := db.QueryRow(`SELECT project FROM sessions WHERE id = ?`, id).Scan(&project); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("session not found: %s", id)
+		}
+		return nil, err
+	}
+	a := &Agent{db: db, id: id, histMu: &sync.RWMutex{}}
+	if err := a.readSession(); err != nil {
+		return nil, err
+	}
+	return a.Records(), nil
+}
+
+func missingOriginalImages(item json.RawMessage) []Record {
+	var v struct{ Content []struct{ Text string } }
+	if json.Unmarshal(item, &v) != nil {
+		return nil
+	}
+	var warnings []Record
+	for _, part := range v.Content {
+		for _, source := range strings.Split(part.Text, originalImage)[1:] {
+			quoted, _, _ := strings.Cut(source, "\n")
+			path, err := strconv.Unquote(quoted)
+			if err != nil {
+				continue
+			}
+			if _, err := os.Stat(path); err != nil {
+				warnings = append(warnings, Record{Kind: "notice", Text: "Original image unavailable for crops: " + path + " (" + err.Error() + "). The saved preview is still available."})
+			}
+		}
+	}
+	return warnings
 }

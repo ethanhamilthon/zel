@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -38,20 +38,21 @@ type tasks struct {
 	stopped           map[string]bool
 	closed            bool
 	wg                sync.WaitGroup
+	report            func(string)
 }
 
 func (a *Agent) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_, _ = a.db.Exec(`UPDATE tasks SET status = 'lost', ended = ? WHERE session = ? AND status = 'running'`, time.Now().UnixNano(), a.id)
 	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}}
+		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}}
 }
 
 func (t *tasks) run(command string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", errors.New("tasks run requires a command")
 	}
-	return t.start(command, func(file *os.File) (*exec.Cmd, func() error, error) {
+	return t.start(command, func(file io.Writer) (*exec.Cmd, func() error, error) {
 		cmd := shell.Command(context.Background(), t.dir, t.env, command)
 		cmd.Stdout, cmd.Stderr = file, file
 		if err := cmd.Start(); err != nil {
@@ -62,17 +63,20 @@ func (t *tasks) run(command string) (string, error) {
 }
 
 func (t *tasks) adopt(command string, bg *shell.Background) (string, error) {
-	return t.start(command, func(file *os.File) (*exec.Cmd, func() error, error) {
+	return t.start(command, func(file io.Writer) (*exec.Cmd, func() error, error) {
 		bg.Redirect(file)
 		return bg.Cmd, bg.Wait, nil
 	})
 }
 
-func (t *tasks) start(command string, launch func(*os.File) (*exec.Cmd, func() error, error)) (string, error) {
+func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() error, error)) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return "", errors.New("session has ended")
+	}
+	if len(t.running)+t.queue.noticeCount() >= maxQueued {
+		return "", errors.New("too many unresolved task results; wait for the model to read them")
 	}
 	if err := os.MkdirAll(t.log, 0700); err != nil {
 		return "", err
@@ -93,11 +97,10 @@ func (t *tasks) start(command string, launch func(*os.File) (*exec.Cmd, func() e
 		file.Close()
 		return "", err
 	}
-	cmd, wait, err := launch(file)
+	cmd, wait, err := launch(&taskLog{file: file})
 	if err != nil {
 		file.Close()
-		t.finish(id, "failed", nil)
-		return "", err
+		return "", errors.Join(err, t.finish(id, "failed", nil))
 	}
 	t.running[id] = cmd
 	t.wg.Add(1)
@@ -119,8 +122,15 @@ func (t *tasks) start(command string, launch func(*os.File) (*exec.Cmd, func() e
 		if code < 0 {
 			exit = nil
 		}
-		t.finish(id, status, exit)
+		persistErr := t.finish(id, status, exit)
 		result := Input{Text: taskResult(id, command, status, exit, time.Since(started), logPath), Notice: true}
+		if persistErr != nil {
+			warning := "Task " + id + " completion could not be persisted; saved status may be stale: " + persistErr.Error()
+			result.Text += "\n" + warning
+			if t.report != nil {
+				t.report(warning)
+			}
+		}
 		// The result is queued before the task stops counting as running, so a waiting
 		// consumer cannot observe neither a task nor its result.
 		t.mu.Lock()
@@ -133,9 +143,10 @@ func (t *tasks) start(command string, launch func(*os.File) (*exec.Cmd, func() e
 	return id, nil
 }
 
-func (t *tasks) finish(id, status string, exit *int) {
-	_, _ = t.db.Exec(`UPDATE tasks SET status = ?, exit_code = ?, ended = ? WHERE session = ? AND id = ?`,
+func (t *tasks) finish(id, status string, exit *int) error {
+	_, err := t.db.Exec(`UPDATE tasks SET status = ?, exit_code = ?, ended = ? WHERE session = ? AND id = ?`,
 		status, exit, time.Now().UnixNano(), t.session, id)
+	return err
 }
 
 func (t *tasks) stop(id string) error {
@@ -218,23 +229,6 @@ func IsNotice(text string) bool {
 	return strings.HasPrefix(text, "<task-result ") || strings.HasPrefix(text, "<view>") || strings.HasPrefix(text, "<hook-output")
 }
 
-var taskHeader = regexp.MustCompile(`^<task-result id="([^"]*)" status="([^"]*)"(?: exit_code="([^"]*)")? duration="([^"]*)">\n\$ ([^\n]*)`)
-
-var noticeTag = regexp.MustCompile(`</?(view|hook-output)[^>]*>`)
-
-func NoticeSummary(text string) string {
-	m := taskHeader.FindStringSubmatch(text)
-	if m == nil {
-		return strings.Join(strings.Fields(noticeTag.ReplaceAllString(text, "")), " ")
-	}
-	parts := []string{"task " + m[1] + " " + m[2]}
-	if m[3] != "" {
-		parts = append(parts, "exit "+m[3])
-	}
-	command := strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(m[5])
-	return strings.Join(append(parts, m[4], "$ "+command), " · ")
-}
-
 func (a *Agent) RunningTasks() int {
 	if a.tasks == nil {
 		return 0
@@ -311,3 +305,39 @@ func sessionTasks(db *sql.DB, session string) ([]Task, error) {
 }
 
 func TaskOutput(task Task) string { return tail(task.Log) }
+
+// Task logs retain their first 8 MiB plus a marker; further output is drained
+// without growing the file or blocking the child on an unread pipe.
+const taskLogLimit = 8 << 20
+const taskLogTruncated = "\n[task log truncated at 8 MiB; further output discarded]\n"
+
+type taskLog struct {
+	mu        sync.Mutex
+	file      io.Writer
+	written   int
+	truncated bool
+}
+
+func (w *taskLog) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	size := len(p)
+	keep := min(size, taskLogLimit-w.written)
+	if keep > 0 {
+		n, err := w.file.Write(p[:keep])
+		w.written += n
+		if err != nil {
+			return n, err
+		}
+		if n != keep {
+			return n, io.ErrShortWrite
+		}
+	}
+	if keep < size && !w.truncated {
+		if _, err := io.WriteString(w.file, taskLogTruncated); err != nil {
+			return keep, err
+		}
+		w.truncated = true
+	}
+	return size, nil
+}

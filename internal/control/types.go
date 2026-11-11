@@ -50,7 +50,7 @@ func fail(code, format string, args ...any) error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// Info describes the current session for /info and the JSON info request.
+// Info describes the current session for the TUI information page.
 type Info struct {
 	Session, Title, Project, DB string
 	Name, Description, Color    string

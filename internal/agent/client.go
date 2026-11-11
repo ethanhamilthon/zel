@@ -75,17 +75,6 @@ func (c *client) send(ctx context.Context, method, path string, body any) (*http
 	return resp, nil
 }
 
-// models lists the model IDs of the provider, following pagination. A page that
-// brings no new model ends the listing, so a looping provider cannot hang it.
-func (c *client) models(ctx context.Context) ([]string, error) {
-	models, err := c.modelCatalog(ctx)
-	var ids []string
-	for _, m := range models {
-		ids = append(ids, m.ID)
-	}
-	return ids, err
-}
-
 type modelInfo struct {
 	ID            string
 	ContextLength int64 `json:"context_length"`

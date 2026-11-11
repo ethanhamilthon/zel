@@ -185,7 +185,7 @@ func (a *Agent) Records() []Record {
 			records = append(records, r)
 		}
 	}
-	return records
+	return append(records, a.imageWarnings...)
 }
 
 // answerMetadata derives turn totals without counting a request once per item.

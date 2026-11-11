@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"zel/internal/agent"
 	"zel/internal/control"
 )
 
@@ -27,30 +26,6 @@ func formatSteps(n int) string {
 	}
 	return fmt.Sprintf("%d steps", n)
 }
-func formatMetadata(meta *agent.Metadata, kind string) string {
-	if kind != "assistant" && kind != "code" && kind != "output" && kind != "error" {
-		return ""
-	}
-	duration := "?"
-	if meta != nil {
-		duration = formatDuration(meta.Duration)
-	}
-	if kind == "output" || kind == "error" {
-		if meta == nil {
-			return ""
-		}
-		return " · " + duration
-	}
-	input, output := "?", "?"
-	if meta != nil && meta.Usage != nil {
-		input, output = formatTokens(meta.Usage.Input), formatTokens(meta.Usage.Output)
-	}
-	if kind == "assistant" {
-		return fmt.Sprintf("  ↑%s ↓%s", input, output)
-	}
-	return fmt.Sprintf("  ↑%s ↓%s · %s", input, output, duration)
-}
-
 func formatContext(n int64) string {
 	return fmt.Sprintf("%dK", (n+500)/1000)
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -21,6 +22,7 @@ func Run(ctx context.Context, a *agent.Agent, cwd string) error {
 	keyboard := keyboardProtocol{}
 	defer keyboard.close()
 	m := newModel(a, cwd)
+	defer m.events.Close()
 	termOut = os.Stdout
 	output := &cursorOutput{ReadWriteCloser: os.Stdout}
 	program := tea.NewProgram(m, tea.WithOutput(output), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(keyboard.filter))
@@ -36,6 +38,7 @@ func Run(ctx context.Context, a *agent.Agent, cwd string) error {
 	stop()
 	if m, ok := final.(model); ok {
 		m.term.reset()
+		err = errors.Join(err, m.failure)
 		m.ctl.Close()
 		if m.fileScanCancel != nil {
 			m.fileScanCancel()
@@ -142,6 +145,11 @@ func (m model) handleControl(e control.Event) (tea.Model, tea.Cmd) {
 		} else {
 			m.dirty = true
 		}
+	case "fatal":
+		m.failure = errors.New(e.Text)
+		m.ctl.LogEvent("error", e.Text)
+		m.ctl.Stop()
+		return m, tea.Quit
 	case "notice", "error":
 		m.ctl.LogEvent(e.Kind, e.Text)
 	case "session":
@@ -154,9 +162,6 @@ func (m model) handleControl(e control.Event) (tea.Model, tea.Cmd) {
 		m.fileIndexCache = nil
 		m.refresh(true)
 	case "done":
-		if e.Status == "cancelled" {
-		} else if e.Status == "error" {
-		}
 		m.contextTokens = e.Context
 		if len(e.Unsent) > 0 {
 			m.restoreUnsent(e.Unsent)
