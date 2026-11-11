@@ -1617,3 +1617,38 @@ func TestTracingNavigationAcrossRefresh(t *testing.T) {
 		t.Fatal("refresh lost the tracing list state")
 	}
 }
+
+func TestTracingEntryNumber(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 90, 24
+	m.entries = []entry{
+		{Kind: "output", Text: "match first", Preview: true},
+		{Kind: "output", Text: "excluded", Preview: true},
+		{Kind: "output", Text: "match last", Preview: true},
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	m.menu.query, m.menu.selected = "match", 1
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	check := func() {
+		t.Helper()
+		_, counter := m.menuHead()
+		want := fmt.Sprintf("%d/%d", m.menu.traceIndex+1, len(m.menu.trace))
+		if counter != want || !strings.Contains(ansi.Strip(m.menuView()), want) {
+			t.Fatalf("entry number: got %q, want %q", counter, want)
+		}
+	}
+	check()
+	m = key(m, tea.KeyMsg{Type: tea.KeyLeft})
+	check()
+	m = key(m, tea.KeyMsg{Type: tea.KeyRight})
+	check()
+	m.entries = append(m.entries, entry{Kind: "output", Text: "new entry", Preview: true})
+	next, _ := m.Update(menuTick{})
+	m = next.(model)
+	check()
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	_, shortcut := m.menuHead()
+	if shortcut != "Ctrl+T" {
+		t.Fatalf("list header changed: %q", shortcut)
+	}
+}

@@ -437,6 +437,9 @@ func (m model) menuHead() (title, shortcut string) {
 	}
 	if m.menu.page == menuText {
 		title = m.menu.title
+		if m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace) {
+			shortcut = fmt.Sprintf("%d/%d", m.menu.traceIndex+1, len(m.menu.trace))
+		}
 	}
 	return ansi.Truncate(title, max(1, m.menuWidth()-ansi.StringWidth(shortcut)-1), "…"), shortcut
 }
