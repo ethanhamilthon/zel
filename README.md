@@ -28,7 +28,9 @@ An empty API key is allowed for local servers. After saving, choose a model and
 reasoning effort. Model listing failures offer retry and manual model entry.
 Effort defaults to `medium`.
 
-Ctrl+K opens the main menu. Providers lets you add, edit, or delete providers;
+Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
+without inserting the slash; disable this in Settings → Slash opens menu.
+Providers lets you add, edit, or delete providers;
 Settings controls the external editor, Bash/hook output budget, Bash timeout,
 and reasoning summaries. Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored

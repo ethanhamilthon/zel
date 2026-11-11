@@ -45,7 +45,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Editor", s.UI.Editor}, {"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}}
+		rows = []menuRow{{"Editor", s.UI.Editor}, {"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}}
 	case menuFiles:
 		for _, f := range mu.files {
 			detail := "file"

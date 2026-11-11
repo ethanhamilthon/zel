@@ -88,24 +88,12 @@ func (m model) workingBlock() string {
 	return "  " + lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
 }
 
-// turnStart is the index of the first entry of the running turn.
-func (m model) turnStart() int {
-	if m.turnIndex > 0 {
-		return m.turnIndex
-	}
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		if m.entries[i].Kind == "assistant" {
-			return i + 1
-		}
-	}
-	return 0
-}
-
 // turnSteps counts the tool calls and thinking blocks of the running turn. The
 // chat hides those entries, but they still arrive and keep the count live.
+// A turn may start at index zero and include intermediate assistant answers.
 func (m model) turnSteps() int {
 	steps := 0
-	for i := len(m.entries) - 1; i >= m.turnStart() && i >= 0; i-- {
+	for i := len(m.entries) - 1; i >= m.turnIndex && i >= 0; i-- {
 		switch m.entries[i].Kind {
 		case "code", "reasoning":
 			steps++

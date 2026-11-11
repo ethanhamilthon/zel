@@ -527,10 +527,18 @@ func TestSteeringPreservesStepCount(t *testing.T) {
 	if got := m.turnSteps(); got != 3 {
 		t.Fatalf("turnSteps after second code: got %d, want 3", got)
 	}
+	m.applyAgent(core.TurnEvent{Kind: "assistant", Text: "Still working"})
+	if got := m.turnSteps(); got != 3 {
+		t.Fatalf("steps reset after intermediate answer: %d", got)
+	}
+	m.applyAgent(core.TurnEvent{Kind: "reasoning", Text: "continue"})
+	if got := m.turnSteps(); got != 4 {
+		t.Fatalf("steps after intermediate answer: %d", got)
+	}
 	// Turn 1 completes
-	meta := &core.Metadata{At: time.Now(), Duration: 2 * time.Second, Steps: 3}
+	meta := &core.Metadata{At: time.Now(), Duration: 2 * time.Second, Steps: 4}
 	e := entry{Kind: "assistant", Text: "done", Meta: meta}
-	if summary := answerMetadata(e); !strings.Contains(summary, "3 steps") {
+	if summary := answerMetadata(e); !strings.Contains(summary, "4 steps") {
 		t.Fatalf("answerMetadata missing steps: %q", summary)
 	}
 	m.applyAgent(core.TurnEvent{Kind: "assistant", Text: "done", Meta: meta})
@@ -2009,5 +2017,52 @@ func TestDownScrollsBackToComposer(t *testing.T) {
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	if m.composerCursorOffset() <= cursor {
 		t.Fatal("Down must move the cursor once the composer is visible")
+	}
+}
+
+func TestSlashMenu(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, text        string
+		enabled, paste, wantMenu bool
+	}{
+		{"empty composer", "", "/", true, false, true},
+		{"disabled", "", "/", false, false, false},
+		{"existing text", "hello", "/", true, false, false},
+		{"pasted slash", "", "/", true, true, false},
+		{"pasted path", "", "/tmp", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := bareModel(t, "/project")
+			setConfig(t, m.ctl, func(s *core.Settings) { s.UI.SlashMenu = tc.enabled })
+			m.input.SetValue(tc.input)
+			m.input.CursorEnd()
+			m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.text), Paste: tc.paste})
+			if (m.menu != nil) != tc.wantMenu {
+				t.Fatalf("menu = %v", m.menu)
+			}
+			want := tc.input + tc.text
+			if tc.wantMenu {
+				want = tc.input
+			}
+			if m.input.Value() != want {
+				t.Fatalf("input = %q, want %q", m.input.Value(), want)
+			}
+			if tc.wantMenu {
+				m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+				if m.input.Value() != "" {
+					t.Fatal("slash remained after closing menu")
+				}
+			}
+		})
+	}
+	m := bareModel(t, "/project")
+	m.menu = &menuState{page: menuSettings, selected: 4}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.ctl.Settings().UI.SlashMenu {
+		t.Fatal("setting not disabled")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.ctl.Settings().UI.SlashMenu {
+		t.Fatal("setting not enabled")
 	}
 }

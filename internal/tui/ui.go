@@ -361,6 +361,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.String() == "ctrl+r" {
 			return m.openMenuPage(menuResume)
 		}
+		if m.menu == nil && !v.Paste && v.Type == tea.KeyRunes && string(v.Runes) == "/" && m.input.Value() == "" && m.ctl.Settings().UI.SlashMenu {
+			cmd := m.openMenu()
+			return m, cmd
+		}
 		if v.String() == "ctrl+k" {
 			if m.menu != nil {
 				return m.closeMenu(), nil
