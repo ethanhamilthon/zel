@@ -2092,3 +2092,27 @@ func TestWorkingIndicatorDuringResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnStepsReconcilesAnswerTotals(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.entries = []entry{
+		{Kind: "assistant", Meta: &core.Metadata{Steps: 20}},
+		{Kind: "user", Text: "new turn"},
+		{Kind: "code", Text: "first tool"},
+		{Kind: "reasoning", Text: "thinking"},
+		{Kind: "assistant", Text: "Working", Meta: &core.Metadata{Steps: 4}},
+		{Kind: "code", Text: "next tool"},
+	}
+	m.turnIndex = 1
+	if got := m.turnSteps(); got != 5 {
+		t.Fatalf("steps after answer: got %d, want 5", got)
+	}
+	m.entries = append(m.entries, entry{Kind: "assistant", Preview: true, Meta: &core.Metadata{Steps: 99}})
+	if got := m.turnSteps(); got != 5 {
+		t.Fatalf("preview changed steps: %d", got)
+	}
+	m.entries = append(m.entries, entry{Kind: "assistant", Meta: &core.Metadata{Steps: 3}})
+	if got := m.turnSteps(); got != 5 {
+		t.Fatalf("older total reduced steps: %d", got)
+	}
+}

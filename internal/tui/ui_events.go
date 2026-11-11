@@ -97,13 +97,19 @@ func (m model) workingBlock() string {
 
 // turnSteps counts the tool calls and thinking blocks of the running turn. The
 // chat hides those entries, but they still arrive and keep the count live.
-// A turn may start at index zero and include intermediate assistant answers.
+// Completed answers carry authoritative totals, including steps missing from live
+// events. Continue counting subsequent work from that total without resetting it.
 func (m model) turnSteps() int {
 	steps := 0
-	for i := len(m.entries) - 1; i >= m.turnIndex && i >= 0; i-- {
-		switch m.entries[i].Kind {
+	for i := max(0, m.turnIndex); i < len(m.entries); i++ {
+		record := m.entries[i]
+		switch record.Kind {
 		case "code", "reasoning":
 			steps++
+		case "assistant":
+			if !record.Preview && record.Meta != nil {
+				steps = max(steps, record.Meta.Steps)
+			}
 		}
 	}
 	return steps
