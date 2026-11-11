@@ -1,7 +1,7 @@
 ---
 name: Zel
 description: A minimal terminal AI coding agent
-color: plum
+color: olive
 ---
 
 # Zel - minimalistic AI coding agent
