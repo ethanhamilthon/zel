@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"zel/internal/agent"
+	"zel/internal/core"
 )
 
 const tasksUsage = "usage: zel tasks run [-s ID] COMMAND... | list [-s ID] | status [-s ID] TASK | stop [-s ID] TASK"
@@ -51,17 +51,17 @@ func tasksCommand(args []string, out io.Writer) error {
 	}
 	switch {
 	case args[0] == "run" && len(rest) > 0:
-		id, err := agent.RunTask(cwd, session, strings.Join(rest, " "))
+		id, err := core.RunTask(cwd, session, strings.Join(rest, " "))
 		if err == nil {
 			fmt.Fprintf(out, "%s started; its result arrives as <task-result id=%q> when it ends\n", id, id)
 		}
 		return err
 	case args[0] == "stop" && len(rest) == 1:
-		endpoint, err := agent.Endpoint(cwd, session)
+		endpoint, err := core.Endpoint(cwd, session)
 		if err != nil {
 			return err
 		}
-		_, err = agent.Send(endpoint, agent.Message{Task: &agent.TaskRequest{Op: "stop", ID: rest[0]}})
+		_, err = core.Send(endpoint, core.Message{Task: &core.TaskRequest{Op: "stop", ID: rest[0]}})
 		if err == nil {
 			fmt.Fprintf(out, "%s stopped\n", rest[0])
 		}
@@ -73,11 +73,11 @@ func tasksCommand(args []string, out io.Writer) error {
 		if session == "" {
 			return errors.New("outside a zel shell, pass -s SESSION_ID")
 		}
-		home, err := agent.ZelHome(cwd)
+		home, err := core.ZelHome(cwd)
 		if err != nil {
 			return err
 		}
-		list, err := agent.SessionTasks(home, session)
+		list, err := core.SessionTasks(home, session)
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func tasksCommand(args []string, out io.Writer) error {
 		}
 		for _, task := range list {
 			if task.ID == rest[0] {
-				fmt.Fprintf(out, "%s %s · %s\n$ %s\n%s\n[full output: %s]\n", task.ID, taskState(task), taskTime(task), task.Command, agent.TaskOutput(task), task.Log)
+				fmt.Fprintf(out, "%s %s · %s\n$ %s\n%s\n[full output: %s]\n", task.ID, taskState(task), taskTime(task), task.Command, core.TaskOutput(task), task.Log)
 				return nil
 			}
 		}
@@ -101,14 +101,14 @@ func tasksCommand(args []string, out io.Writer) error {
 	return errors.New(tasksUsage)
 }
 
-func taskState(task agent.Task) string {
+func taskState(task core.Task) string {
 	if task.ExitCode != nil {
 		return fmt.Sprintf("%s (exit %d)", task.Status, *task.ExitCode)
 	}
 	return task.Status
 }
 
-func taskTime(task agent.Task) string {
+func taskTime(task core.Task) string {
 	end := task.Ended
 	if end.IsZero() {
 		end = time.Now()
@@ -131,11 +131,11 @@ func eventsCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	home, err := agent.ZelHome(cwd)
+	home, err := core.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(agent.EventsLog(home, session))
+	data, err := os.ReadFile(core.EventsLog(home, session))
 	if errors.Is(err, os.ErrNotExist) {
 		_, err = fmt.Fprintln(out, "no events")
 		return err

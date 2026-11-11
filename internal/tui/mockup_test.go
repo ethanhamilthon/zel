@@ -21,8 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"zel/internal/agent"
-	"zel/internal/control"
+	"zel/internal/core"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -88,21 +87,21 @@ func TestMockupFrames(t *testing.T) {
 		}
 		return resolve(m, pending...)
 	}
-	ms := func(d time.Duration, steps ...int) *agent.Metadata {
+	ms := func(d time.Duration, steps ...int) *core.Metadata {
 		ctx := int64(18_400)
 		s := 0
 		if len(steps) > 0 {
 			s = steps[0]
 		}
-		return &agent.Metadata{Duration: d, Steps: s, Usage: &agent.Usage{Input: 18_400, Output: 912, Cached: 12_288}, ContextInput: &ctx, At: time.Date(2026, 11, 7, 18, 38, 0, 0, time.Local)}
+		return &core.Metadata{Duration: d, Steps: s, Usage: &core.Usage{Input: 18_400, Output: 912, Cached: 12_288}, ContextInput: &ctx, At: time.Date(2026, 11, 7, 18, 38, 0, 0, time.Local)}
 	}
 	conversation := func(m *model) {
 		n := m.applyAgent
-		n(agent.Event{Kind: "user", ID: "u1", Text: "What does internal/control do? Keep it short."})
-		n(agent.Event{Kind: "reasoning", ID: "r1", Text: "The user asks about the control package. I should read controller.go and ops.go\nbefore answering, then summarise the turn lifecycle."})
-		n(agent.Event{Kind: "code", ID: "c1", Meta: ms(2100 * time.Millisecond), Text: "rg '^func' internal/control/controller.go | head -20"})
-		n(agent.Event{Kind: "output", ID: "o1", Text: "internal/control/controller.go:49:func New(a *agent.Agent, emit func(Event)) *Controller {\ninternal/control/controller.go:98:func (c *Controller) Note(e agent.Event) {\ninternal/control/controller.go:113:func (c *Controller) History() (records []agent.Record) {\ninternal/control/controller.go:134:func (c *Controller) Close() {\ninternal/control/controller.go:172:func (c *Controller) beginLocked() *operation {\ninternal/control/controller.go:201:func (c *Controller) finishTurn(op *operation, err error) {\ninternal/control/controller.go:268:func (c *Controller) deliverLocked() {"})
-		n(agent.Event{Kind: "assistant", ID: "a1", Meta: ms(14200*time.Millisecond, 2), Text: "## internal/control\n\n`Controller` sits between the **TUI** and the agent:\n\n- runs **one turn at a time**; input that arrives meanwhile becomes *steering*\n- keeps the display journal and session title\n- turns agent errors into `control.Error` with a code\n\n```go\nc := control.New(a, emit)\nc.Input(agent.Input{Text: \"hi\"})\n```\n\n| method | purpose |\n|---|---|\n| `Input` | start or steer a turn |\n| `Stop` | cancel the active turn |\n\nSee [controller.go](internal/control/controller.go)."})
+		n(core.TurnEvent{Kind: "user", ID: "u1", Text: "What does internal/core do? Keep it short."})
+		n(core.TurnEvent{Kind: "reasoning", ID: "r1", Text: "The user asks about the control package. I should read controller.go and ops.go\nbefore answering, then summarise the turn lifecycle."})
+		n(core.TurnEvent{Kind: "code", ID: "c1", Meta: ms(2100 * time.Millisecond), Text: "rg '^func' internal/core/control_controller.go | head -20"})
+		n(core.TurnEvent{Kind: "output", ID: "o1", Text: "internal/core/control_controller.go:49:func New(a *core.Runtime, emit func(Event)) *Controller {\ninternal/core/control_controller.go:98:func (c *Controller) Note(e core.TurnEvent) {\ninternal/core/control_controller.go:113:func (c *Controller) History() (records []core.Record) {\ninternal/core/control_controller.go:134:func (c *Controller) Close() {\ninternal/core/control_controller.go:172:func (c *Controller) beginLocked() *operation {\ninternal/core/control_controller.go:201:func (c *Controller) finishTurn(op *operation, err error) {\ninternal/core/control_controller.go:268:func (c *Controller) deliverLocked() {"})
+		n(core.TurnEvent{Kind: "assistant", ID: "a1", Meta: ms(14200*time.Millisecond, 2), Text: "## internal/core\n\n`Controller` sits between the **TUI** and the agent:\n\n- runs **one turn at a time**; input that arrives meanwhile becomes *steering*\n- keeps the display journal and session title\n- turns agent errors into `core.Error` with a code\n\n```go\nc := core.NewController(a, emit)\nc.Input(core.Input{Text: \"hi\"})\n```\n\n| method | purpose |\n|---|---|\n| `Input` | start or steer a turn |\n| `Stop` | cancel the active turn |\n\nSee [controller.go](internal/core/control_controller.go)."})
 	}
 
 	onboarding, _ := freshModel(t)
@@ -125,8 +124,8 @@ func TestMockupFrames(t *testing.T) {
 			fmt.Fprint(w, `{"data":[{"id":"qwen3-coder:30b"},{"id":"llama3.3:70b"}]}`)
 		}))
 		t.Cleanup(local.Close)
-		setConfig(t, f.m.ctl, func(s *agent.Settings) {
-			s.Providers = map[string]agent.Provider{"openai": {BaseURL: server.URL + "/v1"}, "ollama": {BaseURL: local.URL + "/v1"}}
+		setConfig(t, f.m.ctl, func(s *core.Settings) {
+			s.Providers = map[string]core.Provider{"openai": {BaseURL: server.URL + "/v1"}, "ollama": {BaseURL: local.URL + "/v1"}}
 			s.Provider, s.Model, s.Effort = "openai", "gpt-5.1", "medium"
 		})
 		if err := f.a.SelectSession(context.Background(), "openai", "gpt-5.1", "medium"); err != nil {
@@ -173,7 +172,7 @@ func TestMockupFrames(t *testing.T) {
 	save("10-settings", menu(chat().m, append(down(12), tea.KeyEnter)...))
 	save("10-files", menu(chat().m, append(down(13), tea.KeyEnter)...))
 	f = chat()
-	for _, p := range []string{"README.md", "go.mod", "main.go", "Makefile", "docs/PLAN.md", "internal/control/controller.go", "internal/tui/ui.go", "internal/agent/agent.go"} {
+	for _, p := range []string{"README.md", "go.mod", "main.go", "Makefile", "docs/PLAN.md", "internal/core/control_controller.go", "internal/tui/ui.go", "internal/agent/agent.go"} {
 		path := filepath.Join(f.project, p)
 		_ = os.MkdirAll(filepath.Dir(path), 0755)
 		_ = os.WriteFile(path, nil, 0644)
@@ -195,11 +194,11 @@ func TestMockupFrames(t *testing.T) {
 
 	f = chat()
 	for _, title := range []string{"Picker refactor", "Fix flicker in file completion", ""} {
-		other, err := agent.New(f.project, agent.Options{})
+		other, err := core.New(f.project, core.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := other.Run(context.Background(), "Make the model picker remember the last effort", func(agent.Event) {}); err != nil {
+		if err := other.Run(context.Background(), "Make the model picker remember the last effort", func(core.TurnEvent) {}); err != nil {
 			t.Fatal(err)
 		}
 		if title != "" {
@@ -208,7 +207,7 @@ func TestMockupFrames(t *testing.T) {
 		other.Close()
 	}
 	for _, command := range []string{"sleep 600", "make test"} {
-		if _, err := agent.RunTask(f.project, f.a.SessionID(), command); err != nil {
+		if _, err := core.RunTask(f.project, f.a.SessionID(), command); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -227,12 +226,12 @@ func TestMockupFrames(t *testing.T) {
 	h.m = sized(h.m)
 	h.m.cwd = cwd
 	conversation(&h.m)
-	next, _ := h.m.sendInput(agent.Input{Text: "Now remove the cached fields from Controller"})
+	next, _ := h.m.sendInput(core.Input{Text: "Now remove the cached fields from Controller"})
 	h.m = next.(model)
 	<-h.reached
 	h.m = settle(h.m)
-	h.m.applyAgent(agent.Event{Kind: "reasoning", ID: "r2", Text: "I'll start by finding every read of c.journal, c.custom and c.first."})
-	h.m.applyAgent(agent.Event{Kind: "code", ID: "c2", Text: "rg 'c\\.journal|c\\.custom|c\\.first' internal/control"})
+	h.m.applyAgent(core.TurnEvent{Kind: "reasoning", ID: "r2", Text: "I'll start by finding every read of c.journal, c.custom and c.first."})
+	h.m.applyAgent(core.TurnEvent{Kind: "code", ID: "c2", Text: "rg 'c\\.journal|c\\.custom|c\\.first' internal/core"})
 	save("13-working", h.m)
 	save("14-working-steering", typeText(h.m, "also keep the tests green"))
 	release()
@@ -284,7 +283,7 @@ func (*cursorBuffer) Close() error { return nil }
 
 type fixture struct {
 	m       model
-	a       *agent.Agent
+	a       *core.Runtime
 	fail    atomic.Bool
 	hold    atomic.Pointer[chan struct{}]
 	reached chan struct{}
@@ -330,15 +329,15 @@ func newFixture(t *testing.T, providers bool) *fixture {
 		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n")
 	}))
 	t.Cleanup(server.Close)
-	s := agent.DefaultSettings()
+	s := core.DefaultSettings()
 	if providers {
 		s.Provider, s.Model = "p", "m"
-		s.Providers["p"] = agent.Provider{BaseURL: server.URL}
+		s.Providers["p"] = core.Provider{BaseURL: server.URL}
 	}
-	if err := agent.WriteConfig(home, s); err != nil {
+	if err := core.WriteConfig(home, s); err != nil {
 		t.Fatal(err)
 	}
-	a, err := agent.New(f.project, agent.Options{})
+	a, err := core.New(f.project, core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +380,7 @@ func (f *fixture) settle(t *testing.T) {
 
 func (f *fixture) run(t *testing.T, text string) {
 	t.Helper()
-	next, _ := f.m.sendInput(agent.Input{Text: text})
+	next, _ := f.m.sendInput(core.Input{Text: text})
 	f.m = next.(model)
 	f.settle(t)
 }
@@ -407,7 +406,7 @@ func heldFixture(t *testing.T) (*fixture, func()) {
 	return f, release
 }
 
-func heldModel(t *testing.T) (model, *agent.Agent, func()) {
+func heldModel(t *testing.T) (model, *core.Runtime, func()) {
 	t.Helper()
 	f, release := heldFixture(t)
 	return f.m, f.a, release
@@ -435,7 +434,7 @@ func busyModel(t *testing.T) (model, func()) {
 
 func startBusy(t *testing.T, m model) model {
 	t.Helper()
-	if err := m.ctl.Input(agent.Input{Text: "busy"}); err != nil {
+	if err := m.ctl.Input(core.Input{Text: "busy"}); err != nil {
 		t.Fatal(err)
 	}
 	awaitRequest(t, m)
@@ -477,12 +476,12 @@ func key(m model, k tea.KeyMsg) model {
 	return settle(result)
 }
 
-func agentEvent(e agent.Event) control.Event { return control.Event{Kind: "agent", Agent: &e} }
+func agentEvent(e core.TurnEvent) core.Event { return core.Event{Kind: "agent", Agent: &e} }
 
-func freshAgent(t *testing.T) *agent.Agent {
+func freshAgent(t *testing.T) *core.Runtime {
 	t.Helper()
 	t.Setenv("ZEL_HOME", t.TempDir())
-	a, err := agent.New(t.TempDir(), agent.Options{})
+	a, err := core.New(t.TempDir(), core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +489,7 @@ func freshAgent(t *testing.T) *agent.Agent {
 	return a
 }
 
-func freshModel(t *testing.T) (model, *agent.Agent) {
+func freshModel(t *testing.T) (model, *core.Runtime) {
 	t.Helper()
 	a := freshAgent(t)
 	m := newModel(a, a.Shell.Dir)
@@ -511,18 +510,18 @@ func renderEntry(e entry, width, limit int) string { return renderEntryMode(e, w
 func (m *model) timeline() string { return strings.Join(m.timelineRows(0), "\n") }
 
 // setConfig updates database preferences and reloads it.
-func setConfig(t *testing.T, ctl *control.Controller, change func(*agent.Settings)) {
+func setConfig(t *testing.T, ctl *core.Controller, change func(*core.Settings)) {
 	t.Helper()
-	home, err := agent.ZelHome("")
+	home, err := core.ZelHome("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := agent.LoadConfig(home, t.TempDir())
+	s, err := core.LoadConfig(home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	change(&s)
-	if err := agent.WriteConfig(home, s); err != nil {
+	if err := core.WriteConfig(home, s); err != nil {
 		t.Fatal(err)
 	}
 	ctl.Reload()
@@ -875,8 +874,8 @@ addEventListener("load", fit);
 </html>
 `
 
-func (m *model) applyAgent(e agent.Event) {
-	m.entries = agent.ApplyEvent(m.entries, e)
+func (m *model) applyAgent(e core.TurnEvent) {
+	m.entries = core.ApplyEvent(m.entries, e)
 	if e.Meta != nil && e.Meta.ContextInput != nil {
 		m.contextTokens = *e.Meta.ContextInput
 	}

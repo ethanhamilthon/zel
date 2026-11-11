@@ -1,0 +1,63 @@
+package core
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+	"zel/internal/entities"
+)
+
+type turnHost struct {
+	a       *Runtime
+	emit    func(TurnEvent)
+	accept  func() bool
+	turnSeq int
+}
+
+func (h *turnHost) AcceptSteering() bool { return h.accept() }
+func (h *turnHost) Save() error          { return h.a.saveHistory() }
+func (h *turnHost) Request(ctx context.Context) ([]json.RawMessage, error) {
+	return h.a.request(ctx, h.emit)
+}
+func (h *turnHost) CommitResponse(items []json.RawMessage) error {
+	a, emit := h.a, h.emit
+	meta := a.lastRequest
+	meta.RequestSeq = len(a.History) + 1
+	meta.TurnSeq = h.turnSeq
+	meta.At = time.Now()
+	for i, item := range items {
+		a.histMu.Lock()
+		a.History = append(a.History, item)
+		a.histMu.Unlock()
+		a.setItemMeta(len(a.History)-1, meta)
+		for _, r := range RecordsForItem(item) {
+			m := meta
+			if r.Kind == "assistant" {
+				m = a.answerMetadata(len(a.History) - 1)
+			}
+			emit(TurnEvent{Kind: r.Kind, Text: r.Text, ID: a.itemID(int64(i)), Meta: &m, Final: true})
+		}
+	}
+	if e := a.saveHistory(); e != nil {
+		return e
+	}
+	return nil
+}
+func (h *turnHost) Execute(ctx context.Context, call entities.ToolCall) error {
+	a, emit := h.a, h.emit
+	started := time.Now()
+	result := a.runTool(ctx, call.CallID, call.Name, call.Arguments, emit)
+	output := callOutput(call.CallID, result)
+	a.histMu.Lock()
+	a.History = append(a.History, output)
+	a.histMu.Unlock()
+	m := Metadata{Duration: time.Since(started), At: time.Now()}
+	a.setItemMeta(len(a.History)-1, m)
+	for _, r := range RecordsForItem(output) {
+		emit(TurnEvent{Kind: r.Kind, Text: r.Text, Meta: &m, Final: true})
+	}
+	if e := a.saveHistory(); e != nil {
+		return e
+	}
+	return nil
+}

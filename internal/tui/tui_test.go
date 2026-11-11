@@ -13,8 +13,7 @@ import (
 	"testing"
 	"time"
 	"unsafe"
-	"zel/internal/agent"
-	"zel/internal/control"
+	"zel/internal/core"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -389,7 +388,7 @@ func TestMenuShortcutDecodesFromTerminalBytes(t *testing.T) {
 
 func TestMenuModelSearch(t *testing.T) {
 	m := bareModel(t, "/project")
-	m.models = []agent.ModelChoice{{Provider: "clip", Model: "claude-opus-5"}, {Provider: "clip", Model: "gpt-6-sol"}, {Provider: "other", Model: "claude-sonnet-5"}}
+	m.models = []core.ModelChoice{{Provider: "clip", Model: "claude-opus-5"}, {Provider: "clip", Model: "gpt-6-sol"}, {Provider: "other", Model: "claude-sonnet-5"}}
 	m.menu = &menuState{page: menuModel, query: "CLAUDE 5"}
 	if got := m.filteredModels(); len(got) != 2 || got[1].Model != "claude-sonnet-5" {
 		t.Fatalf("filtered = %v", got)
@@ -403,7 +402,7 @@ func TestMenuModelSearch(t *testing.T) {
 func TestChatShowsOnlyMessages(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width = 80
-	m.entries = []agent.Record{
+	m.entries = []core.Record{
 		{Kind: "user", Text: "go"},
 		{Kind: "reasoning", Text: "thinking about it"},
 		{Kind: "code", Text: "ls -la"},
@@ -445,7 +444,7 @@ func TestTimelineHidesTraceEntries(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width = 80
 	for _, kind := range []string{"code", "output", "reasoning", "notice", "event", "user", "assistant"} {
-		m.entries = append(m.entries, entry{Kind: kind, Text: kind + " text", Meta: &agent.Metadata{}})
+		m.entries = append(m.entries, entry{Kind: kind, Text: kind + " text", Meta: &core.Metadata{}})
 	}
 	m.timeline()
 	for i, cached := range m.cache {
@@ -473,13 +472,13 @@ func TestTimelineCacheAndResize(t *testing.T) {
 		m.refresh(true)
 	}
 	cached := m.cache[0].Text
-	m.applyAgent(agent.Event{Kind: "delta", ID: "stream", Text: "First"})
+	m.applyAgent(core.TurnEvent{Kind: "delta", ID: "stream", Text: "First"})
 	m.refresh(true)
 	if unsafe.StringData(cached) != unsafe.StringData(m.cache[0].Text) {
 		t.Fatal("completed entry was reformatted")
 	}
 	inputWidth, inputHeight := m.inputWidth, m.inputHeight
-	second := agent.Event{Kind: "delta", ID: "stream", Text: " second"}
+	second := core.TurnEvent{Kind: "delta", ID: "stream", Text: " second"}
 	m.applyAgent(second)
 	next, _ := m.Update(agentEvent(second))
 	m = flushFrame(next.(model))
@@ -550,38 +549,38 @@ func TestCancelledTurnRestoresUnsentSteeringIntoComposer(t *testing.T) {
 func TestSteeringPreservesStepCount(t *testing.T) {
 	m := bareModel(t, "/project")
 	// Turn 1 starts
-	next, _ := m.Update(control.Event{Kind: "started"})
+	next, _ := m.Update(core.Event{Kind: "started"})
 	m = next.(model)
-	m.applyAgent(agent.Event{Kind: "user", Text: "do task"})
-	m.applyAgent(agent.Event{Kind: "reasoning", Text: "thinking"})
-	m.applyAgent(agent.Event{Kind: "code", Text: "echo 1"})
+	m.applyAgent(core.TurnEvent{Kind: "user", Text: "do task"})
+	m.applyAgent(core.TurnEvent{Kind: "reasoning", Text: "thinking"})
+	m.applyAgent(core.TurnEvent{Kind: "code", Text: "echo 1"})
 	if got := m.turnSteps(); got != 2 {
 		t.Fatalf("turnSteps before steer: got %d, want 2", got)
 	}
 	// Steering arrives during turn 1
-	m.applyAgent(agent.Event{Kind: "user", Text: "steer: also do that"})
+	m.applyAgent(core.TurnEvent{Kind: "user", Text: "steer: also do that"})
 	if got := m.turnSteps(); got != 2 {
 		t.Fatalf("turnSteps after steer: got %d, want 2 (must not restart)", got)
 	}
-	m.applyAgent(agent.Event{Kind: "code", Text: "echo 2"})
+	m.applyAgent(core.TurnEvent{Kind: "code", Text: "echo 2"})
 	if got := m.turnSteps(); got != 3 {
 		t.Fatalf("turnSteps after second code: got %d, want 3", got)
 	}
 	// Turn 1 completes
-	meta := &agent.Metadata{At: time.Now(), Duration: 2 * time.Second, Steps: 3}
+	meta := &core.Metadata{At: time.Now(), Duration: 2 * time.Second, Steps: 3}
 	e := entry{Kind: "assistant", Text: "done", Meta: meta}
 	if summary := answerMetadata(e); !strings.Contains(summary, "3 steps") {
 		t.Fatalf("answerMetadata missing steps: %q", summary)
 	}
-	m.applyAgent(agent.Event{Kind: "assistant", Text: "done", Meta: meta})
-	next, _ = m.Update(control.Event{Kind: "done"})
+	m.applyAgent(core.TurnEvent{Kind: "assistant", Text: "done", Meta: meta})
+	next, _ = m.Update(core.Event{Kind: "done"})
 	m = next.(model)
 
 	// Turn 2 starts
-	next, _ = m.Update(control.Event{Kind: "started"})
+	next, _ = m.Update(core.Event{Kind: "started"})
 	m = next.(model)
-	m.applyAgent(agent.Event{Kind: "user", Text: "turn 2"})
-	m.applyAgent(agent.Event{Kind: "code", Text: "echo 3"})
+	m.applyAgent(core.TurnEvent{Kind: "user", Text: "turn 2"})
+	m.applyAgent(core.TurnEvent{Kind: "code", Text: "echo 3"})
 	if got := m.turnSteps(); got != 1 {
 		t.Fatalf("turnSteps on turn 2: got %d, want 1", got)
 	}
@@ -687,16 +686,16 @@ func TestMenuSearchPreservesActionsAndComposer(t *testing.T) {
 	if m.menu.page != menuModel || m.menu.query != "" || m.input.Value() != "keep this draft" {
 		t.Fatal("filtered main action opened the wrong page or overwrote the draft")
 	}
-	m.models = []agent.ModelChoice{{Provider: "p", Model: "m"}}
+	m.models = []core.ModelChoice{{Provider: "p", Model: "m"}}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.menu.page != menuEffort || agent.Efforts[m.menu.selected] != "medium" {
+	if m.menu.page != menuEffort || core.Efforts[m.menu.selected] != "medium" {
 		t.Fatal("effort selection must start at medium")
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("xhigh")})
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "xhigh" {
 		t.Fatalf("effort search: %v", rows)
 	}
-	if indices := m.menuIndices(m.rawMenuRows()); len(indices) != 1 || agent.Efforts[indices[0]] != "xhigh" {
+	if indices := m.menuIndices(m.rawMenuRows()); len(indices) != 1 || core.Efforts[indices[0]] != "xhigh" {
 		t.Fatal("filtered effort lost its identity")
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("missing")})
@@ -712,7 +711,7 @@ func TestMenuSearchPreservesActionsAndComposer(t *testing.T) {
 	if m.menu.page != menuModel {
 		t.Fatal("Esc did not return to Models")
 	}
-	m.menu = &menuState{page: menuResume, query: "second", sessions: []agent.SessionSummary{{ID: "a", Title: "first"}, {ID: "b", Title: "second"}}}
+	m.menu = &menuState{page: menuResume, query: "second", sessions: []core.SessionSummary{{ID: "a", Title: "first"}, {ID: "b", Title: "second"}}}
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "second" {
 		t.Fatalf("resume search: %v", rows)
 	}
@@ -780,7 +779,7 @@ func TestMenuHeadersSearchCaretAndShortcutBytes(t *testing.T) {
 }
 
 func TestAnswerHeaderOnlyDurationAndSteps(t *testing.T) {
-	e := entry{Kind: "assistant", Text: "done", Meta: &agent.Metadata{At: time.Date(2026, 1, 1, 3, 16, 0, 0, time.UTC), Duration: 35500 * time.Millisecond, Steps: 3, Usage: &agent.Usage{Input: 91500, Output: 320}}}
+	e := entry{Kind: "assistant", Text: "done", Meta: &core.Metadata{At: time.Date(2026, 1, 1, 3, 16, 0, 0, time.UTC), Duration: 35500 * time.Millisecond, Steps: 3, Usage: &core.Usage{Input: 91500, Output: 320}}}
 	if got := answerMetadata(e); got != "36s · 3 steps" {
 		t.Fatalf("metadata = %q", got)
 	}
@@ -816,7 +815,7 @@ func TestTracingPageListsSessionTrace(t *testing.T) {
 	if m.menu.page != menuTracing {
 		t.Fatalf("Tracing row opened %v", m.menu.page)
 	}
-	m.menu.trace = []agent.TraceEntry{
+	m.menu.trace = []core.TraceEntry{
 		{Kind: "system", Text: "You are Zel"},
 		{Kind: "user", Text: "fix it"},
 		{Kind: "bash", Text: "rg bug"},
@@ -890,7 +889,7 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 
 func TestTracingNumbersBoundariesAndLiveText(t *testing.T) {
 	m := bareModel(t, "/project")
-	m.menu = &menuState{page: menuTracing, trace: []agent.TraceEntry{{Kind: "user", Text: "hi"}, {Kind: "assistant", Text: "hello"}}}
+	m.menu = &menuState{page: menuTracing, trace: []core.TraceEntry{{Kind: "user", Text: "hi"}, {Kind: "assistant", Text: "hello"}}}
 	for _, text := range []string{"1 user", "2 assistant"} {
 		if !strings.Contains(ansi.Strip(m.menuView()), text) {
 			t.Fatalf("missing %q", text)
@@ -934,14 +933,14 @@ func TestInfoRefreshAndCurrentModelFirst(t *testing.T) {
 	if !strings.Contains(m.menuText(), "updated title") {
 		t.Fatal("Info did not refresh")
 	}
-	setConfig(t, m.ctl, func(s *agent.Settings) {
+	setConfig(t, m.ctl, func(s *core.Settings) {
 		s.Provider = "clip"
 		s.Model = "current"
-		s.Providers["clip"] = agent.Provider{BaseURL: "http://127.0.0.1:1/v1"}
+		s.Providers["clip"] = core.Provider{BaseURL: "http://127.0.0.1:1/v1"}
 	})
 	m.menu = &menuState{page: menuModel}
 	current := m.ctl.Settings()
-	m.models = []agent.ModelChoice{{Provider: "other", Model: "other"}, {Provider: current.Provider, Model: current.Model}}
+	m.models = []core.ModelChoice{{Provider: "other", Model: "other"}, {Provider: current.Provider, Model: current.Model}}
 	choices := m.filteredModels()
 	if len(choices) != 2 || choices[0].Provider != current.Provider || choices[0].Model != current.Model {
 		t.Fatalf("choices: %+v", choices)
@@ -995,7 +994,7 @@ func TestExternalEditorReturnsSavedDraft(t *testing.T) {
 func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 	m, _ := freshModel(t)
 	t.Cleanup(m.ctl.Close)
-	if _, err := agent.RunTask(m.cwd, m.ctl.Status().Session, "sleep 600"); err != nil {
+	if _, err := core.RunTask(m.cwd, m.ctl.Status().Session, "sleep 600"); err != nil {
 		t.Fatal(err)
 	}
 	m.menu = &menuState{page: menuTasks}
@@ -1033,16 +1032,16 @@ func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 func TestClientErrorsAndNoticesOnlyAppearInTracing(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.add("error", "client failure")
-	next, _ := m.Update(control.Event{Kind: "error", Text: "agent failure"})
+	next, _ := m.Update(core.Event{Kind: "error", Text: "agent failure"})
 	m = next.(model)
-	next, _ = m.Update(control.Event{Kind: "notice", Text: "status notice"})
+	next, _ = m.Update(core.Event{Kind: "notice", Text: "status notice"})
 	m = next.(model)
 	for _, text := range []string{"client failure", "agent failure", "status notice"} {
 		if strings.Contains(ansi.Strip(m.timeline()), text) {
 			t.Fatalf("event leaked into chat: %s", text)
 		}
 		trace := m.ctl.Trace()
-		if !slices.ContainsFunc(trace, func(e agent.TraceEntry) bool { return e.Text == text }) {
+		if !slices.ContainsFunc(trace, func(e core.TraceEntry) bool { return e.Text == text }) {
 			t.Fatalf("event missing in Tracing: %s", text)
 		}
 	}
@@ -1116,7 +1115,7 @@ func TestOnboardingStepsPersistProviderAndSelectModel(t *testing.T) {
 	if m.menu.form.step != 0 || m.menu.form.input.Value() != "local" {
 		t.Fatal("Shift+Tab did not restore field")
 	}
-	values := []string{"local", "http://127.0.0.1:1/v1", "private-test-key", agent.APIChat}
+	values := []string{"local", "http://127.0.0.1:1/v1", "private-test-key", core.APIChat}
 	for i, value := range values {
 		m.menu.form.input.SetValue(value)
 		if i == 2 && strings.Contains(m.View(), value) {
@@ -1128,7 +1127,7 @@ func TestOnboardingStepsPersistProviderAndSelectModel(t *testing.T) {
 		t.Fatal("provider form did not advance to model selection")
 	}
 	s := m.ctl.Settings()
-	if p := s.Providers["local"]; p.API != agent.APIChat || p.APIKey != "private-test-key" {
+	if p := s.Providers["local"]; p.API != core.APIChat || p.APIKey != "private-test-key" {
 		t.Fatalf("provider: %+v", p)
 	}
 	m.openManualModel()
@@ -1187,7 +1186,7 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	m.menu = &menuState{page: menuTracing}
 	for _, kind := range []string{"system", "user", "assistant", "thinking", "bash", "output", "error", "notice", "task", "event", "hook"} {
-		m.menu.trace = append(m.menu.trace, agent.TraceEntry{Kind: kind, Text: "needle text"})
+		m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: kind, Text: "needle text"})
 	}
 	for _, e := range m.menu.trace {
 		m.menu.query = ":" + e.Kind + " needle"
@@ -1257,10 +1256,10 @@ func TestSingleAccentAndProjectMetadata(t *testing.T) {
 		t.Fatal("error red or neutral queued pulse lost")
 	}
 	defer applyTheme(nil)
-	if len(agent.AccentColors) != 20 {
+	if len(core.AccentColors) != 20 {
 		t.Fatal("expected 20 accents")
 	}
-	rows := infoRows(control.Info{Name: "Project", Description: "Description", Color: "teal"})
+	rows := infoRows(core.Info{Name: "Project", Description: "Description", Color: "teal"})
 	var text string
 	for _, row := range rows {
 		text += row.label + "\n"
@@ -1380,7 +1379,7 @@ func TestListLimitHintAndTraceCache(t *testing.T) {
 	m.width, m.height = 100, 50
 	m.menu = &menuState{page: menuTracing}
 	for i := 0; i < 25; i++ {
-		m.menu.trace = append(m.menu.trace, agent.TraceEntry{Kind: "user", Text: fmt.Sprintf("entry %d", i)})
+		m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: "user", Text: fmt.Sprintf("entry %d", i)})
 	}
 	lines := m.pageLines("", 56)
 	if len(lines) != 11 || !strings.Contains(lines[10], "15 more items") {
@@ -1502,7 +1501,7 @@ func TestTracingEntryNavigationPreservesList(t *testing.T) {
 			m := bareModel(t, t.TempDir())
 			m.width, m.height = 90, 24
 			m.menu = &menuState{page: menuTracing, direct: direct, query: "match", selected: 1,
-				trace: []agent.TraceEntry{
+				trace: []core.TraceEntry{
 					{Kind: "output", Text: "match first"},
 					{Kind: "output", Text: "not included"},
 					{Kind: "output", Text: "match middle\n" + strings.Repeat("line\n", 100)},
@@ -1750,7 +1749,7 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 	q := newEventQueue()
 	defer q.Close()
 	for i := 0; i < 2000; i++ {
-		q.Push(control.Event{Kind: "done", Text: fmt.Sprint(i)})
+		q.Push(core.Event{Kind: "done", Text: fmt.Sprint(i)})
 	}
 	if len(q.items) > 256 || q.spill == nil {
 		t.Fatalf("queue not bounded: %d", len(q.items))
@@ -1764,9 +1763,9 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 	if _, ok := q.TryPop(); ok || q.spill != nil {
 		t.Fatal("queue/spool not drained")
 	}
-	q.Push(agentEvent(agent.Event{Kind: "delta", ID: "x", Text: "a"}))
-	q.Push(agentEvent(agent.Event{Kind: "delta", ID: "x", Text: "b"}))
-	q.Push(agentEvent(agent.Event{Kind: "assistant", ID: "x", Text: "ab", Final: true}))
+	q.Push(agentEvent(core.TurnEvent{Kind: "delta", ID: "x", Text: "a"}))
+	q.Push(agentEvent(core.TurnEvent{Kind: "delta", ID: "x", Text: "b"}))
+	q.Push(agentEvent(core.TurnEvent{Kind: "assistant", ID: "x", Text: "ab", Final: true}))
 	e, _ := q.TryPop()
 	final, _ := q.TryPop()
 	if e.Agent.Text != "ab" || !final.Agent.Final {
@@ -1777,7 +1776,7 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	id := m.ctl.Status().Session
-	if _, err := agent.RunTask(m.cwd, id, "sleep 30"); err != nil {
+	if _, err := core.RunTask(m.cwd, id, "sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	next, _ := m.switchSession("")
@@ -1802,13 +1801,13 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 	q := newEventQueue()
 	defer q.Close()
 	for i := 0; i < 257; i++ {
-		q.Push(control.Event{Kind: "done"})
+		q.Push(core.Event{Kind: "done"})
 	}
 	if err := q.spill.Close(); err != nil {
 		t.Fatal(err)
 	}
-	q.Push(control.Event{Kind: "done"})
-	var failure control.Event
+	q.Push(core.Event{Kind: "done"})
+	var failure core.Event
 	for {
 		e, ok := q.TryPop()
 		if !ok {
@@ -1830,11 +1829,11 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 
 func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
 	m := bareModel(t, t.TempDir())
-	if _, err := agent.RunTask(m.cwd, m.ctl.Status().Session, "sleep 30"); err != nil {
+	if _, err := core.RunTask(m.cwd, m.ctl.Status().Session, "sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	m.ctl.LogEvent("notice", "older notice")
-	m.entries = []entry{{Kind: "reasoning", Text: "live thinking", Preview: true, Meta: &agent.Metadata{At: time.Now().Add(time.Second)}}}
+	m.entries = []entry{{Kind: "reasoning", Text: "live thinking", Preview: true, Meta: &core.Metadata{At: time.Now().Add(time.Second)}}}
 	trace := m.sessionTrace()
 	if len(trace) < 2 || trace[len(trace)-1].Text != "live thinking" || trace[len(trace)-2].Text != "older notice" {
 		t.Fatalf("live trace order: %+v", trace)
@@ -1903,5 +1902,47 @@ func TestChatTopMarginSurvivesMessagesAndScrolling(t *testing.T) {
 	f.m.refresh(true)
 	if f.m.viewport.topMargin() != 0 {
 		t.Fatal("margin hides content in one-row terminal")
+	}
+}
+
+func TestScrollUpMovesThroughComposerBeforeChat(t *testing.T) {
+	for _, text := range []string{"", "draft", "first\nsecond\nthird\nfourth\nfifth", strings.Repeat("word ", 90)} {
+		for _, wheel := range []bool{false, true} {
+			t.Run(fmt.Sprintf("length=%d/wheel=%t", len(text), wheel), func(t *testing.T) {
+				m := bareModel(t, "/project")
+				m.add("assistant", strings.Repeat("history line\n\n", 100))
+				m.setComposer(text)
+				m.input.SetCursor(len([]rune(strings.Split(text, "\n")[m.input.Line()])))
+				m.refresh(true)
+				var msg tea.Msg = tea.KeyMsg{Type: tea.KeyUp}
+				steps := 1
+				if wheel {
+					msg = tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}
+					steps = 3
+				}
+				for range 100 {
+					before := m.viewport.YOffset
+					if before == 0 {
+						t.Fatal("history unexpectedly reached the top")
+					}
+					probe := m.input
+					remaining := 0
+					for probe.Line() > 0 || probe.LineInfo().RowOffset > 0 {
+						probe.CursorUp()
+						remaining++
+					}
+					next, _ := m.update(msg)
+					m = next.(model)
+					want := max(0, before-max(0, steps-remaining))
+					if m.viewport.YOffset != want || m.input.Value() != text {
+						t.Fatalf("offset=%d, want %d; composer=%q", m.viewport.YOffset, want, m.input.Value())
+					}
+					if remaining == 0 {
+						return
+					}
+				}
+				t.Fatal("cursor never reached the top of the composer")
+			})
+		}
 	}
 }

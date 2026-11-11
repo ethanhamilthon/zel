@@ -16,9 +16,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"zel/internal/agent"
-	"zel/internal/shell"
-	"zel/internal/tui"
+	"zel/internal/core"
 )
 
 //go:embed help.txt
@@ -70,7 +68,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "tasks", "view", "events", "session":
+	case "version", "help", "--help", "-h", "tasks", "view", "events", "session", "init":
 		return true
 	}
 	return false
@@ -94,18 +92,41 @@ func (f *failedWriter) Write(p []byte) (int, error) {
 
 var Version = "dev"
 
-func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer) error {
+type Options struct {
+	Open        func(string, core.Options) (*core.Runtime, error)
+	Interactive func(context.Context, *core.Runtime, string) error
+}
+
+func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer, options Options) error {
 	w := &failedWriter{w: out}
-	err := run(ctx, args, in, w, diagnostics)
+	err := run(ctx, args, in, w, diagnostics, options)
 	if err == nil && w.err != nil {
 		err = fmt.Errorf("write output: %w", w.err)
 	}
 	return err
 }
 
-func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer) error {
+func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer, options Options) error {
 	if len(args) > 0 {
 		switch args[0] {
+		case "init":
+			if len(args) != 1 {
+				return errors.New("usage: zel init")
+			}
+			dir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			created, err := core.InitProject(dir)
+			if err != nil {
+				return err
+			}
+			if created {
+				fmt.Fprintln(out, "Created ZEL.md")
+			} else {
+				fmt.Fprintln(out, "ZEL.md already exists; left unchanged")
+			}
+			return nil
 		case "version", "help", "--help", "-h":
 			if len(args) > 1 {
 				return fmt.Errorf("%s takes no arguments", args[0])
@@ -128,7 +149,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			return modelsCommand(ctx, args[1:], out, diagnostics)
 		}
 	}
-	return sessionCommand(ctx, args, in, out)
+	return sessionCommand(ctx, args, in, out, options)
 }
 
 func flagSet(name string, define func(*flag.FlagSet)) *flag.FlagSet {
@@ -168,20 +189,20 @@ func viewCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	endpoint, err := agent.Endpoint(cwd, session)
+	endpoint, err := core.Endpoint(cwd, session)
 	if err != nil {
 		return err
 	}
-	home, err := agent.ZelHome(cwd)
+	home, err := core.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
 	for _, path := range fs.Args() {
-		image, err := shell.CaptureImageCopy(path, filepath.Join(home, "attachments"))
+		image, err := core.CaptureImageCopy(path, filepath.Join(home, "attachments"))
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		if _, err = agent.Send(endpoint, agent.Message{Image: &image}); err != nil {
+		if _, err = core.Send(endpoint, core.Message{Image: &image}); err != nil {
 			_ = os.Remove(image.Path)
 			return fmt.Errorf("%s: %w", path, err)
 		}
@@ -196,11 +217,11 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 		return errors.New("usage: zel models [--json]")
 	}
 	cwd, _ := os.Getwd() // only resolves a relative ZEL_HOME, which then reports its own error
-	home, err := agent.ZelHome(cwd)
+	home, err := core.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
-	settings, err := agent.LoadConfig(home, cwd)
+	settings, err := core.LoadConfig(home, cwd)
 	if err != nil {
 		return err
 	}
@@ -208,7 +229,7 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 	if len(providers) == 0 {
 		return errors.New("no providers configured: open zel to add a provider")
 	}
-	choices, errs := agent.AllModels(ctx, providers)
+	choices, errs := core.AllModels(ctx, providers)
 	if ctx.Err() != nil {
 		return cancelled
 	}
@@ -233,7 +254,7 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 	return nil
 }
 
-func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
+func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	var prompt, provider, model, effort string
 	fs := flagSet("zel", func(fs *flag.FlagSet) {
 		fs.StringVar(&prompt, "p", "", "run a prompt without the TUI")
@@ -266,10 +287,10 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	if err != nil {
 		return err
 	}
-	opts := agent.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort}
+	opts := core.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort}
 	if headless {
 		opts.Mode = "headless"
-		opts.SessionReady = func(a *agent.Agent) error {
+		opts.SessionReady = func(a *core.Runtime) error {
 			if hint := a.Settings().SetupHint(); hint != "" {
 				return errors.New(hint)
 			}
@@ -280,13 +301,17 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			return err
 		}
 	}
-	a, err := agent.New(cwd, opts)
+	open := options.Open
+	if open == nil {
+		open = core.New
+	}
+	a, err := open(cwd, opts)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
 	if headless {
-		if err := a.Run(ctx, prompt, func(agent.Event) {}); err != nil {
+		if err := a.Run(ctx, prompt, func(core.TurnEvent) {}); err != nil {
 			return cancelledOr(ctx, err)
 		}
 		_, err := fmt.Fprintln(out, a.FinalText())
@@ -294,8 +319,10 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	}
 	running, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	tui.Version = Version
-	err = tui.Run(running, a, cwd)
+	if options.Interactive == nil {
+		return errors.New("interactive frontend is unavailable")
+	}
+	err = options.Interactive(running, a, cwd)
 	if cause := context.Cause(running); ctx.Err() == nil && cause != nil {
 		return cause
 	}
@@ -310,7 +337,7 @@ func cancelledOr(ctx context.Context, err error) error {
 }
 
 // modelList is the JSON shape used by the models helper.
-func modelList(choices []agent.ModelChoice) []map[string]string {
+func modelList(choices []core.ModelChoice) []map[string]string {
 	list := make([]map[string]string, 0, len(choices))
 	for _, c := range choices {
 		list = append(list, map[string]string{"provider": c.Provider, "model": c.Model})
@@ -331,7 +358,7 @@ func readSessionCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	records, err := agent.ReadSession(cwd, id)
+	records, err := core.ReadSession(cwd, id)
 	if err != nil {
 		return err
 	}

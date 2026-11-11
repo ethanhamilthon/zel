@@ -6,17 +6,17 @@ import (
 	"strings"
 	"time"
 
-	"zel/internal/agent"
+	"zel/internal/core"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
 // traceLabel is the first column of the Tracing page: the kind of the entry.
-func traceLabel(e agent.TraceEntry) string { return e.Kind }
+func traceLabel(e core.TraceEntry) string { return e.Kind }
 
 // traceDetail is the second column: when it happened and its first line, or the
 // number of lines for a long body.
-func traceDetail(e agent.TraceEntry) string {
+func traceDetail(e core.TraceEntry) string {
 	first, rest, _ := strings.Cut(strings.TrimSpace(ansi.Strip(e.Text)), "\n")
 	first = strings.Join(strings.Fields(first), " ")
 	if rest != "" {
@@ -29,7 +29,7 @@ func traceDetail(e agent.TraceEntry) string {
 }
 
 // traceTitle is the header of one traced entry.
-func traceTitle(e agent.TraceEntry) string {
+func traceTitle(e core.TraceEntry) string {
 	if e.At.IsZero() {
 		return e.Kind
 	}
@@ -37,7 +37,7 @@ func traceTitle(e agent.TraceEntry) string {
 }
 
 // traceText is the body of one traced entry, keeping the raw text.
-func traceText(e agent.TraceEntry) string {
+func traceText(e core.TraceEntry) string {
 	if strings.TrimSpace(e.Text) == "" {
 		return "(empty)"
 	}
@@ -46,9 +46,9 @@ func traceText(e agent.TraceEntry) string {
 
 // History is committed at the end of a model response; include the streaming
 // records the TUI has already received while that response is still in flight.
-func (m model) sessionTrace() []agent.TraceEntry {
+func (m model) sessionTrace() []core.TraceEntry {
 	trace := m.ctl.Trace()
-	var live []agent.TraceEntry
+	var live []core.TraceEntry
 	for _, record := range m.entries {
 		if !record.Preview {
 			continue
@@ -64,10 +64,10 @@ func (m model) sessionTrace() []agent.TraceEntry {
 		if record.Meta != nil && !record.Meta.At.IsZero() {
 			at = record.Meta.At
 		}
-		live = append(live, agent.TraceEntry{Kind: kind, Text: record.Text, At: at})
+		live = append(live, core.TraceEntry{Kind: kind, Text: record.Text, At: at})
 	}
 	trace = append(trace, live...)
-	slices.SortStableFunc(trace, func(a, b agent.TraceEntry) int { return a.At.Compare(b.At) })
+	slices.SortStableFunc(trace, func(a, b core.TraceEntry) int { return a.At.Compare(b.At) })
 	return trace
 }
 

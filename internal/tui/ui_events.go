@@ -12,13 +12,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"zel/internal/agent"
-	"zel/internal/control"
+	"zel/internal/core"
 )
 
 // Run runs the terminal interface until the user exits.
 // The caller remains responsible for closing the agent and releasing session ownership.
-func Run(ctx context.Context, a *agent.Agent, cwd string) error {
+func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	keyboard := keyboardProtocol{}
 	defer keyboard.close()
 	m := newModel(a, cwd)
@@ -114,7 +113,7 @@ func (m model) turnSteps() int {
 	return steps
 }
 
-func (m model) handleControl(e control.Event) (tea.Model, tea.Cmd) {
+func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 	follow := m.viewport.AtBottom()
 	var cmd tea.Cmd
 	switch e.Kind {
@@ -136,7 +135,7 @@ func (m model) handleControl(e control.Event) (tea.Model, tea.Cmd) {
 		m.refresh(true)
 		cmd = workingPulse(m.ctl.Status().Started)
 	case "agent":
-		m.entries = agent.ApplyEvent(m.entries, *e.Agent)
+		m.entries = core.ApplyEvent(m.entries, *e.Agent)
 		if meta := e.Agent.Meta; meta != nil && meta.ContextInput != nil {
 			m.contextTokens = *meta.ContextInput
 		}
@@ -177,7 +176,7 @@ func (m model) handleControl(e control.Event) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *model) restoreUnsent(unsent []agent.Input) {
+func (m *model) restoreUnsent(unsent []core.Input) {
 	if m.pendingSteer != 0 {
 		for _, in := range unsent {
 			if in.QueueID == m.pendingSteer && m.input.Value() == m.pendingText {

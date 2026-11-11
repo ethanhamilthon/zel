@@ -1,0 +1,210 @@
+package core
+
+import (
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"zel/internal/shell"
+)
+
+func (a *Runtime) addInput(input Input, emit func(TurnEvent)) {
+	a.commitInput(input)
+	e := inputEvent(input)
+	e.Meta = a.itemMeta[len(a.History)-1]
+	emit(e)
+}
+
+func (a *Runtime) commitInput(input Input) {
+	if input.SentAt.IsZero() {
+		input.SentAt = time.Now()
+	}
+	defer func() { a.setItemMeta(len(a.History)-1, Metadata{At: input.SentAt}) }()
+	text := input.Display()
+	if len(input.Images) == 0 {
+		a.message("user", text)
+		return
+	}
+	parts := []any{map[string]any{"type": "input_text", "text": text + imageOriginals(input.Images)}}
+	for _, img := range input.Images {
+		parts = append(parts, map[string]any{"type": "input_image", "image_url": img.URL, "detail": "auto"})
+	}
+	a.histMu.Lock()
+	a.History = append(a.History, raw(map[string]any{"role": "user", "content": parts}))
+	a.histMu.Unlock()
+}
+
+const originalImage = "\nOriginal image (for crops): "
+
+func imageOriginals(images []shell.Image) string {
+	var text strings.Builder
+	for _, img := range images {
+		if img.Path != "" {
+			text.WriteString(originalImage + strconv.Quote(img.Path))
+		}
+	}
+	return text.String()
+}
+
+func inputEvent(input Input) TurnEvent {
+	kind := "user"
+	if input.Notice || IsNotice(input.Text) {
+		kind = "notice"
+	}
+	return TurnEvent{Kind: kind, Text: input.Display()}
+}
+
+type Steering struct {
+	mu      sync.Mutex
+	pending []Input
+	wake    func()
+	typed   chan struct{}
+}
+
+func (s *Steering) typedSignal() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.typed == nil {
+		s.typed = make(chan struct{}, 1)
+	}
+	return s.typed
+}
+
+func (s *Steering) drainTyped() {
+	select {
+	case <-s.typedSignal():
+	default:
+	}
+}
+
+func (s *Steering) hasTyped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.ContainsFunc(s.pending, func(input Input) bool { return !input.Notice })
+}
+
+func (s *Steering) OnPush(wake func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wake = wake
+}
+
+const maxQueued = 64
+
+func (a *Runtime) Queue() *Steering { return a.queue }
+
+// PushNotice is reserved for completions of admitted tasks; admission bounds
+// pending notices plus running tasks, so final results never need to be dropped.
+func (s *Steering) PushNotice(input Input) {
+	input.SentAt = time.Now()
+	s.mu.Lock()
+	s.pending = append(s.pending, input)
+	wake := s.wake
+	s.mu.Unlock()
+	if wake != nil {
+		wake()
+	}
+}
+
+func (s *Steering) Push(input Input) bool {
+	input.SentAt = time.Now()
+	s.mu.Lock()
+	if len(s.pending) >= 2*maxQueued || (!input.Notice && len(s.pending)-s.noticeCountLocked() >= maxQueued) {
+		s.mu.Unlock()
+		return false
+	}
+	s.pending = append(s.pending, input)
+	wake := s.wake
+	if s.typed != nil && !input.Notice {
+		select {
+		case s.typed <- struct{}{}:
+		default:
+		}
+	}
+	s.mu.Unlock()
+	if wake != nil {
+		wake()
+	}
+	return true
+}
+
+func (s *Steering) Take() []Input {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pending
+	s.pending = nil
+	return pending
+}
+
+func (s *Steering) Pop() (Input, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return Input{}, false
+	}
+	input := s.pending[0]
+	s.pending = s.pending[1:]
+	return input, true
+}
+
+func (s *Steering) RemoveComposer() []Input {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var composer []Input
+	s.pending = slices.DeleteFunc(s.pending, func(input Input) bool {
+		if !input.Notice {
+			composer = append(composer, input)
+		}
+		return !input.Notice
+	})
+	return composer
+}
+
+func (s *Steering) Recall() (Input, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.pending) - 1; i >= 0; i-- {
+		if input := s.pending[i]; !input.Notice {
+			s.pending = slices.Delete(s.pending, i, i+1)
+			return input, true
+		}
+	}
+	return Input{}, false
+}
+
+func (s *Steering) Pending() []Input {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(s.pending), func(input Input) bool { return input.Notice })
+}
+
+// Withdraw removes only the identified composer input, never notices or other clients' messages.
+func (s *Steering) Withdraw(id uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, input := range s.pending {
+		if id != 0 && input.QueueID == id && !input.Notice {
+			s.pending = slices.Delete(s.pending, i, i+1)
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Steering) noticeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.noticeCountLocked()
+}
+
+func (s *Steering) noticeCountLocked() int {
+	n := 0
+	for _, input := range s.pending {
+		if input.Notice {
+			n++
+		}
+	}
+	return n
+}

@@ -16,11 +16,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"zel/internal/agent"
-	"zel/internal/control"
+	"zel/internal/core"
 )
 
-type entry = agent.Record
+type entry = core.Record
 type renderedEntry struct {
 	source   entry
 	width    int
@@ -31,7 +30,7 @@ type renderedEntry struct {
 }
 type model struct {
 	editorActive              bool
-	ctl                       *control.Controller
+	ctl                       *core.Controller
 	term                      termState
 	events                    *eventQueue
 	input                     textarea.Model
@@ -61,7 +60,7 @@ type model struct {
 	layoutWidth               int
 	layout                    []composerRow
 	startCmd                  tea.Cmd
-	models                    []agent.ModelChoice
+	models                    []core.ModelChoice
 	modelsLoading             bool
 	modelsKey                 string
 	modelsAt                  time.Time
@@ -112,14 +111,14 @@ func newComposer() textarea.Model {
 	return input
 }
 
-func newModel(a *agent.Agent, cwd string) model {
+func newModel(a *core.Runtime, cwd string) model {
 	input := newComposer()
 
 	events := newEventQueue()
-	ctl := control.New(a, func(e control.Event) { events.Push(e) })
+	ctl := core.NewController(a, func(e core.Event) { events.Push(e) })
 	linkBase = cwd
 	m := model{ctl: ctl, events: events, input: input, viewport: pager{Width: 80, Height: 24}, width: 80, height: 24, cwd: cwd}
-	if home, err := agent.ZelHome(cwd); err == nil {
+	if home, err := core.ZelHome(cwd); err == nil {
 		m.attachments = filepath.Join(home, "attachments")
 	}
 	if session, err := ctl.Session(); err == nil {
@@ -186,7 +185,7 @@ func (m *model) refresh(follow bool) {
 func (m *model) add(kind, text string) {
 	switch kind {
 	case "assistant", "user":
-		m.entries = agent.ApplyEvent(m.entries, agent.Event{Kind: kind, Text: text})
+		m.entries = core.ApplyEvent(m.entries, core.TurnEvent{Kind: kind, Text: text})
 		m.refresh(false)
 	default:
 		m.ctl.LogEvent(kind, text)
@@ -194,7 +193,7 @@ func (m *model) add(kind, text string) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if e, ok := msg.(control.Event); !ok || e.Kind != "done" {
+	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
 		m.syncSteer()
 	}
 	next, cmd := m.update(msg)
@@ -257,8 +256,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		current := m.ctl.Settings().Provider
 		m.models, m.modelsAt = v.models, time.Now()
-		slices.SortStableFunc(m.models, func(a, b agent.ModelChoice) int {
-			rank := func(c agent.ModelChoice) int { return map[bool]int{true: 0, false: 1}[c.Provider == current] }
+		slices.SortStableFunc(m.models, func(a, b core.ModelChoice) int {
+			rank := func(c core.ModelChoice) int { return map[bool]int{true: 0, false: 1}[c.Provider == current] }
 			return cmp.Compare(rank(a), rank(b))
 		})
 		m.refresh(true)
@@ -314,6 +313,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.menu != nil {
 			return m.menuMouse(v)
 		}
+		if v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonWheelUp {
+			return m, m.scrollUp(3)
+		}
 		if cmd, handled := m.mouseSelection(v); handled {
 			m.refresh(false)
 			return m, cmd
@@ -331,7 +333,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.stop("error", "Copy failed: "+v.err.Error())
 		}
 		return m, nil
-	case control.Event:
+	case core.Event:
 		return m.handleControl(v)
 	case menuShortcut:
 		if m.menu != nil && m.menu.page == menuForm {
@@ -438,6 +440,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
+			if v.String() == "up" {
+				return m, m.scrollUp(1)
+			}
 		case "enter":
 			if m.pasting {
 				return m.stop("notice", "Clipboard read in progress; wait before submitting.")
@@ -451,7 +456,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
-			return m.sendInput(agent.Input{Text: text})
+			return m.sendInput(core.Input{Text: text})
 		}
 		return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
 	}
@@ -468,6 +473,21 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
+}
+
+// scrollUp traverses the composer's visual rows before scrolling chat.
+func (m *model) scrollUp(rows int) tea.Cmd {
+	return m.edit(false, func() tea.Cmd {
+		var cmds []tea.Cmd
+		for range rows {
+			if m.input.Line() == 0 && m.input.LineInfo().RowOffset == 0 {
+				m.viewport.ScrollUp(1)
+			} else {
+				cmds = append(cmds, m.updateInput(tea.KeyMsg{Type: tea.KeyUp}))
+			}
+		}
+		return tea.Batch(cmds...)
+	})
 }
 
 func (m *model) edit(follow bool, change func() tea.Cmd) tea.Cmd {
@@ -506,7 +526,7 @@ func (m model) View() string {
 	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
 }
 
-func (m model) sendInput(input agent.Input) (tea.Model, tea.Cmd) {
+func (m model) sendInput(input core.Input) (tea.Model, tea.Cmd) {
 	if m.pendingSteer != 0 {
 		return m, nil
 	}
@@ -515,7 +535,7 @@ func (m model) sendInput(input agent.Input) (tea.Model, tea.Cmd) {
 	if err := m.ctl.Input(input); err != nil {
 		return m.reject(err)
 	}
-	if slices.ContainsFunc(m.ctl.Status().Queued, func(in agent.Input) bool { return in.QueueID == input.QueueID }) {
+	if slices.ContainsFunc(m.ctl.Status().Queued, func(in core.Input) bool { return in.QueueID == input.QueueID }) {
 		m.pendingSteer, m.pendingText = input.QueueID, m.input.Value()
 	} else {
 		m.input.Reset()

@@ -37,6 +37,11 @@ environment variable with `{{$VARIABLE}}`.
 
 ## Project instructions: ZEL.md
 
+Run `zel init` in a project folder to create `ZEL.md`. It uses the folder name,
+a random supported color, and the exact contents of a local `AGENTS.md` as the
+instruction body when present (otherwise empty). An existing `ZEL.md` is never
+overwritten. This command does not require a provider or create a session.
+
 ```markdown
 ---
 name: My project
@@ -145,6 +150,11 @@ The editor shares the terminal and returns to Files when it closes.
 
 ### Shortcuts
 
+Up moves through the input's visual rows (including wrapped lines), then scrolls
+chat once the cursor reaches the top row. Scrolling upward with the mouse follows
+the same order and preserves your draft. Completion lists and queued-input recall
+retain their existing keyboard priority.
+
 - Ctrl+K: Menu
 - Ctrl+M: Models
 - Ctrl+R: Resume
@@ -210,6 +220,8 @@ Zel executes commands with your user permissions and network access, not inside
 a sandbox. Review project hooks before trusting an unfamiliar `ZEL.md`.
 
 ## Contributing
+
+See [Architecture](docs/ARCHITECTURE.md) for package boundaries and ownership.
 
 Keep code, UI, docs, and comments in English. Run `make test` before committing
 features or fixes. Prefer focused unit tests, at most two test files per package.

@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"zel/internal/agent"
+	"zel/internal/core"
 )
 
 type formState struct {
@@ -41,7 +41,7 @@ func (m *model) openProviderForm(name string, onboarding bool) {
 		p.BaseURL = "https://api.openai.com/v1"
 	}
 	if p.API == "" {
-		p.API = agent.APIResponses
+		p.API = core.APIResponses
 	}
 	m.startForm(&formState{kind: "provider", original: name, onboarding: onboarding, fields: []string{"Name", "Base URL", "API key", "API type (responses / chat)"}, values: []string{name, p.BaseURL, p.APIKey, p.API}})
 }
@@ -122,7 +122,7 @@ func validateFormField(f *formState) error {
 				return fmt.Errorf("Enter an HTTP(S) base URL")
 			}
 		case 3:
-			if value != agent.APIResponses && value != agent.APIChat {
+			if value != core.APIResponses && value != core.APIChat {
 				return fmt.Errorf("Choose responses or chat")
 			}
 		}
@@ -159,7 +159,7 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 				s.Provider = name
 			}
 		}
-		s.Providers[name] = agent.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[3]}
+		s.Providers[name] = core.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[3]}
 	case "setting":
 		if f.setting == 0 {
 			s.UI.Editor = f.values[0]
@@ -183,7 +183,7 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.menu.provider, m.menu.model = f.values[0], f.values[1]
-		m.menu.page, m.menu.form, m.menu.query, m.menu.search, m.menu.selected = menuEffort, nil, "", nil, slices.Index(agent.Efforts, "medium")
+		m.menu.page, m.menu.form, m.menu.query, m.menu.search, m.menu.selected = menuEffort, nil, "", nil, slices.Index(core.Efforts, "medium")
 		return m, nil
 	}
 	if err := m.ctl.UpdateSettings(s); err != nil {

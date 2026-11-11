@@ -8,14 +8,14 @@ import (
 	"os"
 	"sync"
 
-	"zel/internal/control"
+	"zel/internal/core"
 )
 
 // eventQueue hands controller events to one consumer. Push never blocks, because the controller
 // calls it under its lock.
 type eventQueue struct {
 	mu            sync.Mutex
-	items         []control.Event
+	items         []core.Event
 	wake          chan struct{}
 	spill         *os.File
 	read, written int64
@@ -27,7 +27,7 @@ func newEventQueue() *eventQueue {
 	return &eventQueue{wake: make(chan struct{}, 1)}
 }
 
-func (q *eventQueue) Push(item control.Event) {
+func (q *eventQueue) Push(item core.Event) {
 	q.mu.Lock()
 	if !q.stopped {
 		// Adjacent deltas share one bounded chunk; final events are never coalesced.
@@ -46,12 +46,12 @@ func (q *eventQueue) Push(item control.Event) {
 	}
 }
 
-func (q *eventQueue) TryPop() (item control.Event, ok bool) {
+func (q *eventQueue) TryPop() (item core.Event, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.items) > 0 {
 		item = q.items[0]
-		q.items[0] = control.Event{}
+		q.items[0] = core.Event{}
 		q.items = q.items[1:]
 		return item, true
 	}
@@ -80,21 +80,21 @@ func (q *eventQueue) TryPop() (item control.Event, ok bool) {
 		}
 	}
 	if q.failure != nil {
-		item = control.Event{Kind: "fatal", Text: q.failure.Error()}
+		item = core.Event{Kind: "fatal", Text: q.failure.Error()}
 		q.failure = nil
 		return item, true
 	}
 	return item, false
 }
 
-func (q *eventQueue) Pop(ctx context.Context) (control.Event, bool) {
+func (q *eventQueue) Pop(ctx context.Context) (core.Event, bool) {
 	for {
 		if item, ok := q.TryPop(); ok {
 			return item, true
 		}
 		select {
 		case <-ctx.Done():
-			var zero control.Event
+			var zero core.Event
 			return zero, false
 		case <-q.wake:
 		}
@@ -103,7 +103,7 @@ func (q *eventQueue) Pop(ctx context.Context) (control.Event, bool) {
 
 // Overflow is spooled to an unlinked private file, bounding queue memory while
 // retaining event order and final results without waiting for the UI consumer.
-func (q *eventQueue) spillEvent(item control.Event) error {
+func (q *eventQueue) spillEvent(item core.Event) error {
 	if q.spill == nil {
 		f, err := os.CreateTemp("", "zel-events-*")
 		if err != nil {
@@ -131,7 +131,7 @@ func (q *eventQueue) spillEvent(item control.Event) error {
 	return nil
 }
 
-func mergeEvent(last *control.Event, next control.Event) bool {
+func mergeEvent(last *core.Event, next core.Event) bool {
 	if last.Kind != "agent" || next.Kind != "agent" || last.Agent == nil || next.Agent == nil {
 		return false
 	}

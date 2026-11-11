@@ -18,7 +18,7 @@
 - [x] Remove JSON-mode dispatch, flags, startup paths and mode-specific environment handling where no longer needed
 - [x] Remove JSON-mode tests and fixtures; retain coverage for shared controller behavior
 - [x] Remove `docs/JSON.md` and all JSON-mode references from help, README and other documentation
-- [x] Review `internal/control` after removal: keep the TUI controller, remove abstractions and public surface that existed only for JSON mode
+- [x] Review `internal/core` after removal: keep the TUI controller, remove abstractions and public surface that existed only for JSON mode
 - [x] Verify the remaining CLI helpers still work; do not remove helper output formats merely because they use JSON
 - [x] JSON outbox backpressure, blocked stdout shutdown and text-only recall/unsent protocol issues are superseded by removal, not separate fixes
 

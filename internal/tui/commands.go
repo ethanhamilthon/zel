@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"zel/internal/agent"
+	"zel/internal/core"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -28,7 +28,7 @@ func help() string {
 	return keyboardHelp + "\n\nHost access: the bash tool runs commands with your permissions; not an OS security sandbox."
 }
 
-func sessionTitle(s agent.SessionSummary) string {
+func sessionTitle(s core.SessionSummary) string {
 	title := []rune(s.Title)
 	if len(title) == 0 {
 		return "(no message)"
@@ -51,7 +51,7 @@ func sessionTime(t time.Time) string {
 }
 
 // taskRow splits a background task into the menu's label and detail columns.
-func taskRow(t agent.Task) (label, detail string) {
+func taskRow(t core.Task) (label, detail string) {
 	status := t.Status
 	if t.ExitCode != nil && *t.ExitCode != 0 {
 		status += fmt.Sprintf(" (%d)", *t.ExitCode)
@@ -65,7 +65,7 @@ func taskRow(t agent.Task) (label, detail string) {
 
 type modelsLoaded struct {
 	key    string
-	models []agent.ModelChoice
+	models []core.ModelChoice
 	errs   map[string]string
 	err    error
 }

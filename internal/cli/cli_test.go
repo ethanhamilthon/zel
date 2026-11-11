@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"zel/internal/agent"
+	"zel/internal/core"
 )
 
 func TestIsHelper(t *testing.T) {
@@ -62,7 +62,7 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 	t.Setenv("ZEL_HOME", t.TempDir())
 	t.Setenv("ZEL_CONFIG", "")
 	var out, diagnostics strings.Builder
-	err := Run(context.Background(), []string{"-p", "hello"}, strings.NewReader(""), &out, &diagnostics)
+	err := Run(context.Background(), []string{"-p", "hello"}, strings.NewReader(""), &out, &diagnostics, Options{})
 	if err == nil || !strings.Contains(err.Error(), "No provider") || out.Len() != 0 {
 		t.Fatalf("output=%q err=%v", out.String(), err)
 	}
@@ -123,10 +123,10 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 				fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"final answer\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"final answer\"}]}]}}\n\n")
 			}))
 			defer server.Close()
-			settings := agent.DefaultSettings()
+			settings := core.DefaultSettings()
 			settings.Provider, settings.Model = "p", "default"
-			settings.Providers["p"] = agent.Provider{BaseURL: server.URL}
-			if err := agent.WriteConfig(home, settings); err != nil {
+			settings.Providers["p"] = core.Provider{BaseURL: server.URL}
+			if err := core.WriteConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
 			config := filepath.Join(t.TempDir(), "instructions.md")
@@ -140,12 +140,12 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Errorf("startup hooks ran before session ID: %v", err)
 				}
 				// The ID must already be readable, without acquiring or changing the session.
-				if _, err := agent.ReadSession(cwd, id); err != nil {
+				if _, err := core.ReadSession(cwd, id); err != nil {
 					t.Errorf("session not persisted before stdout: %v", err)
 				}
 			}}
 			var diagnostics strings.Builder
-			err := Run(ctx, []string{"-p", "hello", "--provider", "p", "--model", "override", "--effort", "high", "--config", config}, strings.NewReader(""), out, &diagnostics)
+			err := Run(ctx, []string{"-p", "hello", "--provider", "p", "--model", "override", "--effort", "high", "--config", config}, strings.NewReader(""), out, &diagnostics, Options{})
 			hook, hookErr := os.ReadFile(filepath.Join(filepath.Dir(config), "hook-values"))
 			if hookErr != nil || string(hook) != "headless/p/override/high" {
 				t.Fatalf("startup hook overrides: %q err=%v", hook, hookErr)
@@ -157,12 +157,12 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 				if err != nil || out.String() != session+"\nfinal answer\n" {
 					t.Fatalf("stdout=%q err=%v", out.String(), err)
 				}
-				records, err := agent.ReadSession(cwd, session)
+				records, err := core.ReadSession(cwd, session)
 				if err != nil || len(records) < 2 || records[len(records)-1].Text != "final answer" {
 					t.Fatalf("saved records=%v err=%v", records, err)
 				}
 				var snapshot strings.Builder
-				if err := Run(context.Background(), []string{"session", "-s", session}, strings.NewReader(""), &snapshot, &diagnostics); err != nil || !strings.Contains(snapshot.String(), "final answer") {
+				if err := Run(context.Background(), []string{"session", "-s", session}, strings.NewReader(""), &snapshot, &diagnostics, Options{}); err != nil || !strings.Contains(snapshot.String(), "final answer") {
 					t.Fatalf("session helper: %q err=%v", snapshot.String(), err)
 				}
 			} else {
@@ -173,10 +173,28 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Fatalf("cancel exit=%d", ExitCode(err))
 				}
 			}
-			saved, err := agent.LoadConfig(home, cwd)
+			saved, err := core.LoadConfig(home, cwd)
 			if err != nil || saved.Model != "default" || saved.Effort != "medium" {
 				t.Fatalf("defaults changed: %+v err=%v", saved, err)
 			}
 		})
+	}
+}
+
+func TestInitCommand(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if !IsHelper([]string{"init"}) {
+		t.Fatal("init must not start a session")
+	}
+	var out, diagnostics strings.Builder
+	if err := Run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Created ZEL.md") {
+		t.Fatalf("output: %s", out.String())
+	}
+	if err := Run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {
+		t.Fatal("expected usage error")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"zel/internal/entities"
 
 	"golang.org/x/image/draw"
 )
@@ -22,10 +23,7 @@ const (
 	maxImageEdge       = 2048
 )
 
-type Image struct {
-	Path string `json:"path,omitempty"`
-	URL  string `json:"url"`
-}
+type Image = entities.Image
 
 func CaptureImageCopy(path, directory string) (Image, error) {
 	// Check the file type before os.Open, which blocks on a FIFO until a writer

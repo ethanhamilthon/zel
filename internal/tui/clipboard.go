@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"zel/internal/shell"
+	"zel/internal/core"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,8 +73,8 @@ func readClipboardImage(ctx context.Context, directory, platform string, run fun
 	if len(data) == 0 {
 		return "", nil
 	}
-	if len(data) > shell.MaxImageInputBytes {
-		return "", fmt.Errorf("clipboard image exceeds %d bytes", shell.MaxImageInputBytes)
+	if len(data) > core.MaxImageInputBytes {
+		return "", fmt.Errorf("clipboard image exceeds %d bytes", core.MaxImageInputBytes)
 	}
 	return path, os.WriteFile(path, data, 0600)
 }

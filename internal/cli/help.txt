@@ -9,6 +9,7 @@ USAGE
   zel tasks list|status|stop [-s ID] [TASK]
   zel view [-s ID] PATH...
   zel events [-s ID]
+  zel init
   zel version
   zel --help | -h | help
 
@@ -19,6 +20,8 @@ GETTING STARTED
   Preferences and API keys are stored locally in ~/.zel/zel.db, not encrypted.
 
 COMMANDS
+  init            Create ZEL.md here using the folder name, a random color and
+                  local AGENTS.md instructions, if present. Never overwrite it.
   --config FILE   Load this ZEL.md-format instruction file after all other layers.
   -p PROMPT       Run one task without the TUI. Print the persisted session ID
                   first, then the final answer and exit. Diagnostics go to stderr.
