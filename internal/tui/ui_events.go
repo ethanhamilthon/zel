@@ -241,5 +241,8 @@ func (m *model) refreshMenu() {
 			mu.sessions = sessions
 		}
 	}
-	mu.selected = min(mu.selected, max(0, len(m.menuRows())-1))
+	// Text pages retain their parent list selection; their own rows are empty.
+	if mu.page != menuText {
+		mu.selected = min(mu.selected, max(0, len(m.menuRows())-1))
+	}
 }

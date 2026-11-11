@@ -1581,3 +1581,39 @@ func TestNewSessionShortcutBlockedDuringTurn(t *testing.T) {
 		t.Fatal("Ctrl+N did not report that the session is busy")
 	}
 }
+
+func TestTracingNavigationAcrossRefresh(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.entries = []entry{
+		{Kind: "output", Text: "match first", Preview: true},
+		{Kind: "output", Text: "excluded", Preview: true},
+		{Kind: "output", Text: "match middle", Preview: true},
+		{Kind: "output", Text: "match last", Preview: true},
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	m.menu.query, m.menu.selected = "match", 2
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	for _, step := range []struct {
+		key      tea.KeyType
+		text     string
+		selected int
+	}{
+		{tea.KeyLeft, "match middle", 1},
+		{tea.KeyLeft, "match first", 0},
+		{tea.KeyRight, "match middle", 1},
+		{tea.KeyRight, "match last", 2},
+	} {
+		next, _ := m.Update(menuTick{})
+		m = next.(model)
+		m = key(m, tea.KeyMsg{Type: step.key})
+		if !strings.Contains(m.menu.text, step.text) || m.menu.selected != step.selected {
+			t.Fatalf("navigation after refresh: selected=%d text=%q; want %d %q", m.menu.selected, m.menu.text, step.selected, step.text)
+		}
+	}
+	next, _ := m.Update(menuTick{})
+	m = next.(model)
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.menu == nil || m.menu.page != menuTracing || m.menu.selected != 2 || m.menu.query != "match" {
+		t.Fatal("refresh lost the tracing list state")
+	}
+}
