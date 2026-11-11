@@ -188,7 +188,7 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		screen = screen[:len(screen)-1]
 	}
 	if len(screen) == 0 {
-		screen = screenRows{"", ""}
+		screen = screenRows{""}
 	} else {
 		screen = append(screen, "", "")
 	}

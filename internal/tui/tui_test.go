@@ -202,7 +202,7 @@ func TestNativeCursorPosition(t *testing.T) {
 	m.viewport.Width, m.viewport.Height = 20, 3
 	m.viewport.lines = []string{"header", "▌ ab" + composerCursorMarker + "界", "footer"}
 	view := m.View()
-	if !strings.HasSuffix(view, "\x1b]1337;ZelCaret;2;5\x07") || strings.Contains(view, composerCursorMarker) {
+	if !strings.HasSuffix(view, "\x1b]1337;ZelCaret;3;5\x07") || strings.Contains(view, composerCursorMarker) {
 		t.Fatalf("wrong native cursor position: %q", view)
 	}
 	m.viewport.YOffset = 2
@@ -1414,8 +1414,10 @@ func TestListLimitHintAndTraceCache(t *testing.T) {
 func TestInputBlankLines(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	m.input.SetValue("draft")
-	rows := m.timelineRows(0)
-	if m.inputTop < 1 || strings.TrimSpace(ansi.Strip(rows[m.inputTop-1])) != "" || strings.TrimSpace(ansi.Strip(rows[m.inputTop+m.input.Height()])) != "" {
+	m.refresh(true)
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	top := m.inputTop + m.viewport.topMargin() - m.viewport.YOffset
+	if top < 1 || strings.TrimSpace(rows[top-1]) != "" || strings.TrimSpace(rows[top+m.input.Height()]) != "" {
 		t.Fatalf("composer needs blank lines: %q", rows)
 	}
 	m.openMenu()
@@ -1704,9 +1706,11 @@ func TestComposerAlwaysHasBlankRowAboveIt(t *testing.T) {
 	f.m.refresh(true)
 	check := func(state string) {
 		t.Helper()
-		rows := f.m.timelineRows(0)
-		if f.m.inputTop < 1 || strings.TrimSpace(ansi.Strip(rows[f.m.inputTop-1])) != "" {
-			t.Fatalf("%s: composer lost blank row: top=%d rows=%q", state, f.m.inputTop, rows)
+		f.m.refresh(true)
+		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
+		top := f.m.inputTop + f.m.viewport.topMargin() - f.m.viewport.YOffset
+		if top < 1 || strings.TrimSpace(rows[top-1]) != "" {
+			t.Fatalf("%s: composer lost blank row: top=%d rows=%q", state, top, rows)
 		}
 	}
 	check("empty")
@@ -1834,5 +1838,70 @@ func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
 	trace := m.sessionTrace()
 	if len(trace) < 2 || trace[len(trace)-1].Text != "live thinking" || trace[len(trace)-2].Text != "older notice" {
 		t.Fatalf("live trace order: %+v", trace)
+	}
+}
+
+func TestChatTopMarginSurvivesMessagesAndScrolling(t *testing.T) {
+	f := newFixture(t, true)
+	gate := make(chan struct{})
+	f.hold.Store(&gate)
+	f.m.width, f.m.height = 60, 12
+	check := func(state string) {
+		t.Helper()
+		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
+		if len(rows) != f.m.height || strings.TrimSpace(rows[0]) != "" {
+			t.Fatalf("%s: missing screen top margin: %q", state, rows)
+		}
+	}
+	f.m.refresh(true)
+	check("new session")
+	if f.m.inputTop != 0 {
+		t.Fatal("new session has duplicate top spacing")
+	}
+	f.m.input.SetValue("hello")
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyEnter})
+	awaitRequest(t, f.m)
+	f.m.refresh(true)
+	check("after sending")
+	close(gate)
+	f.settle(t)
+	check("after answer")
+	id := f.m.ctl.Status().Session
+	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	check("new session after conversation")
+	if err := f.m.ctl.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	f.m = settle(f.m)
+	check("resumed session")
+	for i := 0; i < 30; i++ {
+		f.m.entries = append(f.m.entries, entry{Kind: "assistant", Text: fmt.Sprintf("row %d", i)})
+	}
+	f.m.refresh(true)
+	check("scrolled to bottom")
+	if f.m.viewport.YOffset == 0 {
+		t.Fatal("test did not overflow viewport")
+	}
+	f.m.viewport.GotoTop()
+	check("scrolled to top")
+	f.m.viewport.ScrollDown(3)
+	check("scrolled midway")
+	f.m.height = 4
+	f.m.refresh(true)
+	check("resized")
+	f.m.input.SetValue("draft")
+	f.m.refresh(true)
+	y := f.m.inputTop + f.m.viewport.topMargin() - f.m.viewport.YOffset
+	if offset, ok := f.m.composerOffset(2, y); !ok || offset != 0 {
+		t.Fatalf("margin shifted composer mouse mapping: %d %v", offset, ok)
+	}
+	f.m.viewport.YOffset = f.m.inputTop + 1
+	if _, ok := f.m.composerOffset(2, 0); ok {
+		t.Fatal("blank screen margin accepts composer clicks")
+	}
+	f.m.height = 1
+	f.m.refresh(true)
+	if f.m.viewport.topMargin() != 0 {
+		t.Fatal("margin hides content in one-row terminal")
 	}
 }

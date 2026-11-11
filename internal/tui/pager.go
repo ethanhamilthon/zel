@@ -12,6 +12,7 @@ import (
 // timeline again.
 type pager struct {
 	Width, Height, YOffset int
+	TopMargin              int
 	lines                  []string
 }
 
@@ -22,7 +23,9 @@ func (p *pager) SetLines(lines []string) {
 	}
 }
 
-func (p pager) maxYOffset() int { return max(0, len(p.lines)-p.Height) }
+func (p pager) topMargin() int     { return min(p.TopMargin, max(0, p.Height-1)) }
+func (p pager) contentHeight() int { return max(1, p.Height-p.topMargin()) }
+func (p pager) maxYOffset() int    { return max(0, len(p.lines)-p.contentHeight()) }
 
 func (p pager) AtBottom() bool { return p.YOffset >= p.maxYOffset() }
 
@@ -41,9 +44,9 @@ func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 	case tea.KeyMsg:
 		switch v.String() {
 		case "pgdown":
-			p.ScrollDown(p.Height)
+			p.ScrollDown(p.contentHeight())
 		case "pgup":
-			p.ScrollUp(p.Height)
+			p.ScrollUp(p.contentHeight())
 		}
 	case tea.MouseMsg:
 		if v.Action != tea.MouseActionPress {
@@ -61,6 +64,6 @@ func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 
 func (p pager) View() string {
 	top := min(max(0, p.YOffset), len(p.lines))
-	visible := p.lines[top:min(len(p.lines), top+p.Height)]
+	visible := append(make([]string, p.topMargin()), p.lines[top:min(len(p.lines), top+p.contentHeight())]...)
 	return lipgloss.NewStyle().Width(p.Width).Height(p.Height).MaxWidth(p.Width).MaxHeight(p.Height).Render(strings.Join(visible, "\n"))
 }

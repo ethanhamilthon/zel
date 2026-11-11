@@ -174,6 +174,7 @@ func (m *model) refresh(follow bool) {
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)
 	m.viewport.Height = max(1, m.height)
+	m.viewport.TopMargin = 1
 	m.viewport.SetLines(m.timelineRows(renderBudget))
 	m.frameAt, m.dirty = time.Now(), false
 	if follow {

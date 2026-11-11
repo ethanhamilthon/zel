@@ -145,13 +145,16 @@ func (m *model) composerScroll(rows []composerRow) int {
 }
 
 func (m *model) composerOffset(x, y int) (int, bool) {
+	if y < m.viewport.topMargin() || y >= m.viewport.Height {
+		return 0, false
+	}
 	value := m.input.Value()
 	if value == "" {
 		return 0, false
 	}
 	rows := m.composerRows()
 	height := m.input.Height()
-	r := y + m.viewport.YOffset - m.inputTop
+	r := y - m.viewport.topMargin() + m.viewport.YOffset - m.inputTop
 	if r < 0 || r >= height {
 		return 0, false
 	}

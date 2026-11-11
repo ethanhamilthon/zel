@@ -86,3 +86,8 @@
 - [x] Merge history, task starts and logged notices/errors by timestamp instead of appending task/event blocks; keep equal timestamps stable and undated legacy entries first.
 - [x] Save event timestamps with nanosecond precision and timezone; retain support for legacy local-time logs and multiline messages.
 - [x] Merge live preview records into the same chronological order, with focused regression tests.
+
+## Persistent chat screen margin
+
+- [x] Reserve one blank screen row above the chat viewport, independent of timeline contents and scroll position; avoid doubling it in an empty session. The earlier composer-gap fix did not preserve the top-of-screen margin.
+- [x] Account for the margin in scrolling, native cursor and composer mouse coordinates. Verify rendered frames before/after sending, completion, new/resume, scrolling and resize; retain usable content in a one-row terminal.
