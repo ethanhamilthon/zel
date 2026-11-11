@@ -1443,3 +1443,141 @@ func TestFilesAndQuitKittyShortcuts(t *testing.T) {
 		}
 	}
 }
+
+func TestTracingOpensLatestEntry(t *testing.T) {
+	for _, shortcut := range []bool{false, true} {
+		t.Run(fmt.Sprint(shortcut), func(t *testing.T) {
+			m := bareModel(t, t.TempDir())
+			m.width, m.height = 90, 24
+			for i := range 30 {
+				m.entries = append(m.entries, entry{Kind: "output", Text: fmt.Sprintf("live %d", i), Preview: true})
+			}
+			if shortcut {
+				m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
+			} else {
+				m.menu = &menuState{page: menuMain, selected: 4}
+				next, _ := m.menuActivate()
+				m = next.(model)
+			}
+			count := len(m.menu.trace)
+			if count < 30 || m.menu.selected != count-1 {
+				t.Fatalf("latest entry not selected: %d of %d", m.menu.selected, count)
+			}
+			first, visible := m.listWindow(len(m.menuRows()))
+			if first+visible != count {
+				t.Fatalf("latest entry not visible: %d + %d != %d", first, visible, count)
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if !strings.Contains(m.menu.text, "live 29") {
+				t.Fatalf("opened wrong entry: %q", m.menu.text)
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+			if m.menu == nil || m.menu.page != menuTracing || m.menu.selected != count-1 {
+				t.Fatal("Esc did not restore the latest entry in the list")
+			}
+		})
+	}
+	m := bareModel(t, t.TempDir())
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if m.menu.selected != max(0, len(m.menu.trace)-1) {
+		t.Fatal("invalid selection for an empty or initial trace")
+	}
+}
+
+func TestTracingEntryNavigationPreservesList(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		t.Run(fmt.Sprint(direct), func(t *testing.T) {
+			m := bareModel(t, t.TempDir())
+			m.width, m.height = 90, 24
+			m.menu = &menuState{page: menuTracing, direct: direct, query: "match", selected: 1,
+				trace: []agent.TraceEntry{
+					{Kind: "output", Text: "match first"},
+					{Kind: "output", Text: "not included"},
+					{Kind: "output", Text: "match middle\n" + strings.Repeat("line\n", 100)},
+					{Kind: "output", Text: "match last"},
+				},
+			}
+			m.menuRows() // Exercise the filtered-list cache as well.
+			first, visible := m.listWindow(3)
+			next, _ := m.menuActivate()
+			m = next.(model)
+			if m.menu.query != "match" || m.menu.traceIndex != 2 {
+				t.Fatal("opening an entry lost the filter or opened the wrong entry")
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+			if m.menu.offset == 0 || m.menu.traceIndex != 2 {
+				t.Fatal("Down should scroll the current entry")
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+			if m.menu == nil || m.menu.page != menuTracing || m.menu.query != "match" || m.menu.selected != 1 {
+				t.Fatal("Esc did not preserve list state")
+			}
+			if f, v := m.listWindow(3); f != first || v != visible {
+				t.Fatal("Esc changed the list position")
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+			for _, step := range []struct {
+				key   tea.KeyType
+				index int
+			}{
+				{tea.KeyRight, 3}, {tea.KeyRight, 3}, {tea.KeyLeft, 2}, {tea.KeyLeft, 0}, {tea.KeyLeft, 0},
+			} {
+				m = key(m, tea.KeyMsg{Type: step.key})
+				if m.menu.traceIndex != step.index || m.menu.query != "match" || m.menu.offset != 0 {
+					t.Fatalf("navigation lost state: %+v", m.menu)
+				}
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+			if m.menu.page != menuTracing || m.menu.selected != 0 || m.menu.query != "match" {
+				t.Fatal("Esc did not select the currently viewed entry")
+			}
+			if direct {
+				m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+				if m.menu != nil {
+					t.Fatal("Esc from a shortcut-opened list should return to chat")
+				}
+			}
+		})
+	}
+}
+
+func TestNewSessionShortcut(t *testing.T) {
+	for _, menu := range []bool{false, true} {
+		t.Run(fmt.Sprint(menu), func(t *testing.T) {
+			m := bareModel(t, t.TempDir())
+			before, err := m.ctl.Session()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if menu {
+				m.openMenu()
+			}
+			m = key(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+			after, err := m.ctl.Session()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.ID == after.ID || m.menu != nil {
+				t.Fatal("Ctrl+N did not create a new session and return to chat")
+			}
+		})
+	}
+}
+
+func TestNewSessionShortcutBlockedDuringTurn(t *testing.T) {
+	m, release := busyModel(t)
+	defer release()
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if !m.ctl.Status().Busy {
+		t.Fatal("Ctrl+N interrupted the active turn")
+	}
+	found := false
+	for _, e := range m.ctl.Trace() {
+		if e.Kind == "error" && strings.Contains(e.Text, "Wait for the active turn") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Ctrl+N did not report that the session is busy")
+	}
+}

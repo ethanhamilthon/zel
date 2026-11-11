@@ -72,3 +72,20 @@ func (m model) sessionTrace() []agent.TraceEntry {
 	result = append(result, live...)
 	return append(result, trace[at:]...)
 }
+
+// moveTrace navigates the filtered list without losing its search or selection.
+func (m *model) moveTrace(delta int) {
+	mu := m.menu
+	mu.page = menuTracing
+	indices := m.menuIndices(m.rawMenuRows())
+	selected := mu.selected + delta
+	mu.page = menuText
+	if selected < 0 || selected >= len(indices) {
+		return
+	}
+	mu.selected = selected
+	mu.traceIndex = indices[selected]
+	e := mu.trace[mu.traceIndex]
+	mu.offset = 0
+	mu.title, mu.text = "Menu/Tracing/"+e.Kind, traceTitle(e)+"\n\n"+traceText(e)
+}

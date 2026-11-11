@@ -148,6 +148,7 @@ The editor shares the terminal and returns to Files when it closes.
 - Ctrl+K: Menu
 - Ctrl+M: Models
 - Ctrl+R: Resume
+- Ctrl+N: New session
 - Ctrl+I: Info
 - Ctrl+T: Tracing
 - Ctrl+F: Files
@@ -155,6 +156,9 @@ The editor shares the terminal and returns to Files when it closes.
 - Ctrl+C: Stop the active turn (does not exit)
 - Ctrl+E: edit the draft externally; saving restores it without sending
 - Esc: back; shortcut-opened pages return directly to chat
+- Tracing opens at the latest entry; Enter opens it full screen
+- In a tracing entry: Left/Right switch entries within the filtered list,
+  Up/Down scroll, and Esc returns to the list with its filter and selection
 
 Ctrl+M and Ctrl+I require Kitty keyboard protocol support to distinguish them
 from Enter and Tab; otherwise use Menu. New session and Resume are blocked

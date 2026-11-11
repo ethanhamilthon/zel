@@ -12,7 +12,7 @@ import (
 )
 
 const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, rename, info, reload, quit)\n" +
-	"Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing · Ctrl+F: files · Ctrl+E: editor (Ctrl+M/I require Kitty keyboard protocol)\n" +
+	"Ctrl+N: new session · Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing · Ctrl+F: files · Ctrl+E: editor (Ctrl+M/I require Kitty keyboard protocol)\n" +
 	"Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline\n" +
 	"Sending while zel works: a running command moves to the background (menu: Tasks) and the model reads your message next\n" +
 	"Clipboard: Ctrl+V (Cmd+V when forwarded)\n" +
@@ -21,6 +21,7 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, re
 	"Click a link or a path in backticks to open it\n" +
 	"PgUp/PgDn or mouse wheel: scroll timeline\n" +
 	"The chat shows only user messages and answers; the Tracing menu has the rest\n" +
+	"Tracing entry: Left/Right switch entries · Up/Down scroll · Esc returns to the list\n" +
 	"Esc / Ctrl+C: cancel current turn · Ctrl+Q: save and quit"
 
 func help() string {

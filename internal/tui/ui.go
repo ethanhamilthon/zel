@@ -353,6 +353,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.String() == "ctrl+t" {
 			return m.openMenuPage(menuTracing)
 		}
+		if v.String() == "ctrl+n" {
+			m = m.closeMenu()
+			m.resetCompletions()
+			return m.submit(m.ctl.NewSession())
+		}
 		if v.String() == "ctrl+r" {
 			return m.openMenuPage(menuResume)
 		}

@@ -56,7 +56,7 @@ var menuTitles = map[menuPage]string{
 type menuRow struct{ label, detail string }
 
 var mainRows = []menuRow{
-	{"Resume", "Saved sessions"}, {"New session", "Fresh chat, re-read config"}, {"Models", "Model, reasoning effort"},
+	{"Resume", "Saved sessions"}, {"New session", "Fresh chat, re-read config · Ctrl+N"}, {"Models", "Model, reasoning effort"},
 	{"Tasks", "Background tasks"}, {"Tracing", "Everything the session did"}, {"Rename", "Rename this session"},
 	{"Info", "Session, config, tokens"}, {"Reload", "Re-read the config"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Save and exit"}, {"Editor", "Edit input · Ctrl+E"},
@@ -544,6 +544,10 @@ func (m model) closeMenu() model {
 
 func (m model) menuBack() (tea.Model, tea.Cmd) {
 	mu := m.menu
+	if mu.page == menuText && mu.parent == menuTracing {
+		mu.page, mu.offset, mu.title, mu.text = menuTracing, 0, "", ""
+		return m, nil
+	}
 	if mu.direct {
 		return m.closeMenu(), nil
 	}
@@ -575,6 +579,14 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch v.String() {
 		case "esc":
 			return m.menuBack()
+		case "left", "right":
+			if mu.page == menuText && mu.parent == menuTracing {
+				delta := 1
+				if v.String() == "left" {
+					delta = -1
+				}
+				m.moveTrace(delta)
+			}
 		case "up", "pgup":
 			m.scrollText(-max(1, m.menuBodyRoom()/2))
 		case "down", "pgdown":
@@ -699,6 +711,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			mu.listCache = nil
 			mu.parent = menuMain
 			open(menuTracing)
+			mu.selected = max(0, len(mu.trace)-1)
 		case 5:
 			mu.name = ""
 			open(menuRename)
@@ -835,7 +848,9 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 func (m *model) openText(title, text string) {
 	m.menu.parent, m.menu.page, m.menu.offset = m.menu.page, menuText, 0
 	m.menu.title, m.menu.text = title, text
-	m.menu.query, m.menu.search = "", nil
+	if m.menu.parent != menuTracing {
+		m.menu.query, m.menu.search = "", nil
+	}
 }
 
 // openMenuPage uses the same page-loading actions as the main menu.

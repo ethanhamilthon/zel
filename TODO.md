@@ -1,8 +1,8 @@
-## Zel 0.2.0 checklist
+## Zel 0.2.0
 
-- [x] Add Ctrl+F for Files and Ctrl+Q for Quit.
-- [x] Use Ctrl+C only to stop the active turn; exit only with Ctrl+Q or the menu.
-- [x] Leave a blank line above and below every input.
-- [x] Fix typed search in Files (and other searchable menus).
-- [x] Cache Files and Tracing rows and filtered results between source/query changes.
-- [x] Render at most 10 items per list, with a remaining-items count below.
+- [x] Open Tracing with the latest entry selected and visible
+- [x] Navigate full-screen tracing entries with Left/Right; keep Up/Down for scrolling
+- [x] Return from a tracing entry with Esc, preserving the list filter and selection
+- [x] Add Ctrl+N to start a new session, blocked during active turns
+
+Release: bump VERSION to 0.2.0, run `make test`, commit the changes, and install with `make install`
