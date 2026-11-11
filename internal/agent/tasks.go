@@ -256,7 +256,7 @@ func (a *Agent) LogEvent(kind, text string) {
 	}
 	defer file.Close()
 	text = strings.ReplaceAll(strings.TrimSpace(text), "\n", "\n    ")
-	fmt.Fprintf(file, "%s %s %s\n", time.Now().Format("2006-01-02 15:04:05"), kind, text)
+	fmt.Fprintf(file, "%s %s %s\n", time.Now().Format(time.RFC3339Nano), kind, text)
 }
 
 func SessionTasks(home, session string) ([]Task, error) {

@@ -429,3 +429,70 @@ func TestHookTimeoutKillsProcessGroup(t *testing.T) {
 		t.Fatalf("timeout not traced: %s", errors)
 	}
 }
+
+func TestTraceMergesSourcesChronologically(t *testing.T) {
+	t.Setenv("ZEL_HOME", t.TempDir())
+	a, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	a.message("user", "first")
+	a.setItemMeta(0, Metadata{At: base})
+	a.message("assistant", "last")
+	a.setItemMeta(1, Metadata{At: base.Add(5 * time.Second)})
+	// Two records with equal timestamps must keep their original history order.
+	a.message("assistant", "same-time")
+	a.setItemMeta(2, Metadata{At: base.Add(5 * time.Second)})
+	if _, err := a.db.Exec(`INSERT INTO tasks(session,id,command,status,started,log) VALUES(?, 't1','build','done',?,'')`, a.id, base.Add(time.Second).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	path := EventsLog(a.home, a.id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data := base.Add(2*time.Second).Format(time.RFC3339Nano) + " error failure\n    detail\n" + base.Add(3*time.Second).Format(time.RFC3339Nano) + " notice recovery\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	entries := a.Trace()
+	var order []string
+	for _, e := range entries {
+		order = append(order, e.Kind+":"+e.Text)
+	}
+	want := "user:first|task:t1 $ build · done|error:failure\ndetail|notice:recovery|assistant:last|assistant:same-time"
+	if strings.Join(order, "|") != want {
+		t.Fatalf("trace order: %q", order)
+	}
+}
+
+func TestTraceEventTimestampsSupportLegacyLocalAndPreciseNewLogs(t *testing.T) {
+	previous := time.Local
+	time.Local = time.FixedZone("test", 3*60*60)
+	defer func() { time.Local = previous }()
+	t.Setenv("ZEL_HOME", t.TempDir())
+	a, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	path := EventsLog(a.home, a.id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("2026-01-02 03:04:05 error legacy\n    multiline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	a.LogEvent("notice", "new")
+	after := time.Now()
+	entries := a.eventTrace()
+	expected := time.Date(2026, 1, 2, 0, 4, 5, 0, time.UTC)
+	if len(entries) != 2 || !entries[0].At.Equal(expected) || entries[0].Text != "legacy\nmultiline" {
+		t.Fatalf("legacy log: %+v", entries)
+	}
+	if entries[1].At.Before(before) || entries[1].At.After(after) {
+		t.Fatalf("new timestamp lost precision/zone: %+v", entries[1])
+	}
+}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,18 +60,15 @@ func (m model) sessionTrace() []agent.TraceEntry {
 		case "reasoning":
 			kind = "thinking"
 		}
-		live = append(live, agent.TraceEntry{Kind: kind, Text: record.Text})
-	}
-	at := len(trace)
-	for i, e := range trace {
-		if e.Kind == "task" || e.Kind == "event" {
-			at = i
-			break
+		at := time.Now()
+		if record.Meta != nil && !record.Meta.At.IsZero() {
+			at = record.Meta.At
 		}
+		live = append(live, agent.TraceEntry{Kind: kind, Text: record.Text, At: at})
 	}
-	result := append([]agent.TraceEntry(nil), trace[:at]...)
-	result = append(result, live...)
-	return append(result, trace[at:]...)
+	trace = append(trace, live...)
+	slices.SortStableFunc(trace, func(a, b agent.TraceEntry) int { return a.At.Compare(b.At) })
+	return trace
 }
 
 // moveTrace navigates the filtered list without losing its search or selection.

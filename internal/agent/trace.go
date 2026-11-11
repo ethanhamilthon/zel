@@ -2,6 +2,7 @@ package agent
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -24,11 +25,13 @@ func traceKind(kind string) string {
 	return kind
 }
 
-// Trace lists everything the session has done: the history, which holds the system
-// prompt and the tool traffic the chat hides, then its background tasks and the
-// notices and errors clients wrote to the session events log.
+// Trace merges history, background tasks (at their start time), and logged
+// notices/errors chronologically. Stable ties preserve source order; undated
+// legacy history and the system prompt stay before timestamped entries.
 func (a *Agent) Trace() []TraceEntry {
-	return append(append(a.historyTrace(), a.taskTrace()...), a.eventTrace()...)
+	entries := append(append(a.historyTrace(), a.taskTrace()...), a.eventTrace()...)
+	slices.SortStableFunc(entries, func(a, b TraceEntry) int { return a.At.Compare(b.At) })
+	return entries
 }
 
 func (a *Agent) historyTrace() (entries []TraceEntry) {
@@ -77,14 +80,23 @@ func (a *Agent) eventTrace() (entries []TraceEntry) {
 			entries[len(entries)-1].Text += "\n" + strings.TrimRight(line[4:], " ")
 			continue
 		}
-		if len(line) < 21 {
+		stamp, rest, ok := strings.Cut(line, " ")
+		if !ok {
 			continue
 		}
-		at, err := time.Parse("2006-01-02 15:04:05", line[:19])
+		at, err := time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {
-			continue
+			// Legacy logs used local wall time, without an offset or subseconds.
+			if len(line) < 21 {
+				continue
+			}
+			at, err = time.ParseInLocation(time.DateTime, line[:19], time.Local)
+			if err != nil {
+				continue
+			}
+			rest = line[20:]
 		}
-		kind, text, _ := strings.Cut(line[20:], " ")
+		kind, text, _ := strings.Cut(rest, " ")
 		entries = append(entries, TraceEntry{Kind: kind, Text: text, At: at})
 	}
 	return entries

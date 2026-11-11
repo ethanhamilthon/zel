@@ -1823,3 +1823,16 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 		t.Fatal("fatal queue failure did not terminate the UI explicitly")
 	}
 }
+
+func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	if _, err := agent.RunTask(m.cwd, m.ctl.Status().Session, "sleep 30"); err != nil {
+		t.Fatal(err)
+	}
+	m.ctl.LogEvent("notice", "older notice")
+	m.entries = []entry{{Kind: "reasoning", Text: "live thinking", Preview: true, Meta: &agent.Metadata{At: time.Now().Add(time.Second)}}}
+	trace := m.sessionTrace()
+	if len(trace) < 2 || trace[len(trace)-1].Text != "live thinking" || trace[len(trace)-2].Text != "older notice" {
+		t.Fatalf("live trace order: %+v", trace)
+	}
+}

@@ -80,3 +80,9 @@
 - Task logs retain their first 8 MiB plus a truncation marker. Task admission bounds running tasks plus pending completion notices to 64; composer inputs have a separate 64-item limit. UI events coalesce adjacent deltas and spill ordered overflow from a 256-event memory queue to a private temporary file.
 - Image originals are retained indefinitely rather than age-deleted. Reading/resuming a saved session reports missing originals while preserving embedded previews.
 - Verification: `make test` (gofmt, vet, race tests), PTY startup/Esc/Ctrl+Q smoke, subprocess headless/session-reader smoke with a local fake provider, and focused new/resume, deletion, image and helper regressions. No external-provider credentials were needed.
+
+## Tracing chronology
+
+- [x] Merge history, task starts and logged notices/errors by timestamp instead of appending task/event blocks; keep equal timestamps stable and undated legacy entries first.
+- [x] Save event timestamps with nanosecond precision and timezone; retain support for legacy local-time logs and multiline messages.
+- [x] Merge live preview records into the same chronological order, with focused regression tests.
