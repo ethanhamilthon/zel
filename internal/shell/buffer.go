@@ -5,15 +5,18 @@ import (
 	"strings"
 )
 
-type outputBuffer struct {
+// OutputBuffer bounds retained output to equal-sized head and tail sections.
+// The truncation marker is additional to the configured byte budget.
+type OutputBuffer struct {
 	limit      int
 	head, tail []byte
 	size       int
 }
 
-func newOutputBuffer(limit int) *outputBuffer { return &outputBuffer{limit: limit} }
+func NewOutputBuffer(limit int) *OutputBuffer { return &OutputBuffer{limit: limit} }
+func newOutputBuffer(limit int) *OutputBuffer { return NewOutputBuffer(limit) }
 
-func (b *outputBuffer) Write(p []byte) (int, error) {
+func (b *OutputBuffer) Write(p []byte) (int, error) {
 	total := len(p)
 	b.size += total
 	if b.limit <= 0 {
@@ -25,15 +28,20 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 		n := min(len(p), room)
 		b.head, p = append(b.head, p[:n]...), p[n:]
 	}
-	b.tail = append(b.tail, p...)
-	if keep := b.limit - half; len(b.tail) > keep {
-		copy(b.tail[:keep], b.tail[len(b.tail)-keep:])
-		b.tail = b.tail[:keep]
+	keep := b.limit - half
+	if len(p) >= keep {
+		b.tail = append(b.tail[:0], p[len(p)-keep:]...)
+	} else {
+		if drop := len(b.tail) + len(p) - keep; drop > 0 {
+			copy(b.tail, b.tail[drop:])
+			b.tail = b.tail[:len(b.tail)-drop]
+		}
+		b.tail = append(b.tail, p...)
 	}
 	return total, nil
 }
 
-func (b *outputBuffer) Text() string {
+func (b *OutputBuffer) Text() string {
 	if b.limit <= 0 || b.size <= b.limit {
 		return strings.ToValidUTF8(string(b.head)+string(b.tail), "")
 	}

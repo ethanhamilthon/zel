@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -14,7 +14,7 @@ import (
 const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, rename, info, reload, quit)\n" +
 	"Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing · Ctrl+E: editor (Ctrl+M/I require Kitty keyboard protocol)\n" +
 	"Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline\n" +
-	"Sending while dashy works: a running command moves to the background (menu: Tasks) and the model reads your message next\n" +
+	"Sending while zel works: a running command moves to the background (menu: Tasks) and the model reads your message next\n" +
 	"Clipboard: Ctrl+V (Cmd+V when forwarded)\n" +
 	"Edit a queued message to withdraw it; Enter queues the edited draft again\n" +
 	"Up on empty input: recall a message the model has not read yet\n" +
@@ -79,7 +79,7 @@ const modelsCacheTTL = 10 * time.Minute
 // configured providers is cached; a stale list stays visible while it refreshes.
 func (m *model) fetchModels() tea.Cmd {
 	settings := m.ctl.Settings()
-	if settings.SetupHint() != "" {
+	if len(settings.Providers) == 0 {
 		return nil
 	}
 	key := fmt.Sprint(settings.Providers)

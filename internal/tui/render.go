@@ -12,19 +12,19 @@ import (
 )
 
 var (
-	cyan             = lipgloss.Color("#79d9ff")
-	foreground       = lipgloss.Color("#d5ddeb")
-	muted            = lipgloss.Color("#8794a8")
+	cyan             = lipgloss.Color("#d97757")
+	foreground       = lipgloss.Color("#d6d6d6")
+	muted            = lipgloss.Color("#929292")
 	codeGray         = lipgloss.Color("#a0a0a0")
 	darkGray         = lipgloss.Color("#606060")
-	inputBlue        = lipgloss.Color("#8aadff")
+	inputBlue        = lipgloss.Color("#d97757")
 	inputBackground  = lipgloss.Color("#202020")
 	selectBackground = lipgloss.Color("#303030")
-	assistantColor   = lipgloss.Color("#9bdef5")
-	errorColor       = lipgloss.Color("#f09eac")
-	warnColor        = lipgloss.Color("#e5c07b")
-	queueColor       = lipgloss.Color("#e5845c")
-	infoColor        = lipgloss.Color("#d7c38b")
+	assistantColor   = lipgloss.Color("#d97757")
+	errorColor       = lipgloss.Color("#e27878")
+	warnColor        = lipgloss.Color("#d97757")
+	queueColor       = lipgloss.Color("#606060")
+	infoColor        = lipgloss.Color("#d97757")
 	markdownStyle    = fmt.Sprintf(markdownTemplate, assistantColor, cyan, warnColor, muted,
 		infoColor, errorColor, inputBlue, inputBlue)
 )
@@ -123,7 +123,7 @@ func renderRail(text string, width int, queued bool) string {
 	return strings.Join(lines, "\n")
 }
 
-const composerCursorMarker = "\x1b]1337;DashyCursor\x07"
+const composerCursorMarker = "\x1b]1337;ZelCursor\x07"
 
 func (m model) inputBlock() string {
 	return renderRail(m.input.View(), m.width, m.pendingSteer != 0)
@@ -149,10 +149,6 @@ func (m *model) timelineRows(budget time.Duration) []string {
 	}
 	for len(m.cache) < len(m.entries) {
 		m.cache = append(m.cache, renderedEntry{})
-	}
-	if key := fmt.Sprint(m.ctl.Settings().UI.Show("turn_stats")); key != m.statsKey {
-		m.statsKey, m.cache = key, make([]renderedEntry, len(m.entries))
-		showTurnStats = m.ctl.Settings().UI.Show("turn_stats")
 	}
 	started, rendered := time.Now(), 0
 	m.renderPending = false

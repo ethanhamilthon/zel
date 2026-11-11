@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"dashy/internal/shell"
+	"zel/internal/shell"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"

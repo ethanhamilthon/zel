@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"dashy/internal/shell"
+	"zel/internal/shell"
 )
 
 var BashToolDescription = strings.TrimSpace(bashMD)
@@ -50,7 +50,7 @@ func partialCode(arguments string) string {
 }
 
 type Options struct {
-	Mode string // tui or json, exported as DASHY_MODE
+	Mode string // tui or json, exported as ZEL_MODE
 }
 
 type Agent struct {
@@ -79,7 +79,7 @@ type Agent struct {
 }
 
 func New(dir string, opts Options) (*Agent, error) {
-	home, err := DashyHome(dir)
+	home, err := ZelHome(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +99,12 @@ func New(dir string, opts Options) (*Agent, error) {
 		a.Close()
 		return nil, err
 	}
+	a.fire("app_start", nil)
 	a.fire("session_start", nil)
 	return a, nil
 }
 
-// loadConfig reads config.toml; the session's model selection stays.
+// loadConfig reads preferences and ZEL.md; the session's model selection stays.
 func (a *Agent) ReloadConfig() error {
 	return a.loadConfig(a.Shell.Dir)
 }
@@ -147,7 +148,13 @@ func (a *Agent) Run(ctx context.Context, text string, emit func(Event)) error {
 
 func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (err error) {
 	started, untitled := time.Now(), a.title == "" && a.DefaultTitle() == ""
-	a.fire("turn_start", map[string]string{"DASHY_TURN_SOURCE": map[bool]string{true: "notice", false: "user"}[input.Notice], "DASHY_MESSAGE_FILE": input.Text})
+	if !input.Notice {
+		if a.UserMessages() == 0 {
+			a.fire("first_message", map[string]string{"ZEL_MESSAGE": input.Text})
+		}
+		a.fire("user_message", map[string]string{"ZEL_MESSAGE": input.Text})
+	}
+	a.fire("turn_start", map[string]string{"ZEL_TURN_SOURCE": map[bool]string{true: "notice", false: "user"}[input.Notice], "ZEL_MESSAGE": input.Text})
 	defer func() {
 		err = a.safeError(err)
 		status := "ok"
@@ -157,9 +164,9 @@ func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (er
 		case err != nil:
 			status = "error"
 			emit(Event{Kind: "error", Text: err.Error()})
-			a.fire("error", map[string]string{"DASHY_ERROR": err.Error()})
+			a.fire("error", map[string]string{"ZEL_ERROR": err.Error()})
 		}
-		a.fire("turn_end", map[string]string{"DASHY_TURN_STATUS": status, "DASHY_TURN_DURATION_MS": millis(time.Since(started))})
+		a.fire("turn_end", map[string]string{"ZEL_TURN_STATUS": status, "ZEL_TURN_DURATION_MS": millis(time.Since(started))})
 		if a.HasSavedSession() {
 			if e := a.saveHistory(); e != nil {
 				err = errors.Join(err, e)
@@ -191,7 +198,7 @@ func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (er
 				a.addInput(instruction, emit)
 				accepted = true
 				if !instruction.Notice {
-					a.fire("steer_accepted", map[string]string{"DASHY_MESSAGE_FILE": instruction.Text})
+					a.fire("user_message", map[string]string{"ZEL_MESSAGE": instruction.Text})
 				}
 			}
 		}
@@ -207,7 +214,7 @@ func (a *Agent) RunInput(ctx context.Context, input Input, emit func(Event)) (er
 	shown.Meta = a.itemMeta[len(a.History)-1]
 	emit(shown)
 	if untitled && a.DefaultTitle() != "" {
-		a.fire("session_title_change", nil)
+		// Session title is derived from the first message.
 	}
 
 	turnSeq := len(a.History) - 1
@@ -323,10 +330,10 @@ func (a *Agent) runTool(ctx context.Context, callID, name, arguments string, emi
 		a.queue.drainTyped()
 		detach = a.queue.typedSignal()
 	}
-	a.fire("shell_start", map[string]string{"DASHY_COMMAND_FILE": args.Command})
+	a.fire("bash_start", map[string]string{"ZEL_COMMAND": args.Command})
 	shellStarted := time.Now()
 	result, bg := a.Shell.Run(ctx, args.Command, timeout, limit, detach)
-	a.fire("shell_end", map[string]string{"DASHY_COMMAND_FILE": args.Command, "DASHY_EXIT_CODE": strconv.Itoa(result.ExitCode), "DASHY_DURATION_MS": millis(time.Since(shellStarted))})
+	a.fire("bash_end", map[string]string{"ZEL_COMMAND": args.Command, "ZEL_EXIT_CODE": strconv.Itoa(result.ExitCode), "ZEL_OUTPUT": result.Output, "ZEL_DURATION_MS": millis(time.Since(shellStarted))})
 	if bg == nil {
 		return result
 	}
@@ -334,11 +341,11 @@ func (a *Agent) runTool(ctx context.Context, callID, name, arguments string, emi
 	if err != nil {
 		_ = bg.Cmd.Cancel()
 		_ = bg.Wait()
-		return shell.Result{Output: result.Output + "\n[dashy: stopped; could not move it to the background: " + err.Error() + "]\n", ExitCode: 130, Error: true}
+		return shell.Result{Output: result.Output + "\n[zel: stopped; could not move it to the background: " + err.Error() + "]\n", ExitCode: 130, Error: true}
 	}
 	emit(Event{Kind: "notice", Text: "Command moved to the background as task " + id + "."})
 	return shell.Result{Output: fmt.Sprintf("The user sent a new message, so this command moved to the background as task %s and keeps running. "+
-		"Its result arrives as <task-result id=%q> when it ends; check it with: dashy tasks status %s\n\nOutput so far:\n%s", id, id, id, cmp.Or(result.Output, "(none)"))}
+		"Its result arrives as <task-result id=%q> when it ends; check it with: zel tasks status %s\n\nOutput so far:\n%s", id, id, id, cmp.Or(result.Output, "(none)"))}
 }
 
 func (a *Agent) itemID(index int64) string {
@@ -348,10 +355,13 @@ func (a *Agent) itemID(index int64) string {
 func (a *Agent) request(ctx context.Context, emit func(Event)) (items []json.RawMessage, err error) {
 	requestStarted := time.Now()
 	a.fire("model_request_start", nil)
+	for _, text := range a.takePasted() {
+		a.addInput(Input{Text: text, Notice: true}, emit)
+	}
 	defer func() {
-		vars := map[string]string{"DASHY_DURATION_MS": millis(time.Since(requestStarted))}
+		vars := map[string]string{"ZEL_DURATION_MS": millis(time.Since(requestStarted))}
 		if err != nil {
-			vars["DASHY_ERROR"] = err.Error()
+			vars["ZEL_ERROR"] = err.Error()
 		}
 		a.fire("model_request_end", vars)
 	}()

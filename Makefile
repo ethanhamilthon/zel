@@ -1,17 +1,17 @@
 .PHONY: install dev test clean mockup
 
 BINDIR ?= $(HOME)/.local/bin
-DEV_HOME ?= $(HOME)/.dashydev
+DEV_HOME ?= $(HOME)/.zeldev
 
-# Build dashy into BINDIR (default ~/.local/bin) so it can be run from anywhere.
+# Build zel into BINDIR (default ~/.local/bin) so it can be run from anywhere.
 install:
 	mkdir -p $(BINDIR)
-	go build -o $(BINDIR)/dashy .
-	@echo "installed $(BINDIR)/dashy"
+	go build -o $(BINDIR)/zel .
+	@echo "installed $(BINDIR)/zel"
 
 # Run from source with an isolated dev home.
 dev:
-	DASHY_HOME=$(DEV_HOME) go run . $(ARGS)
+	ZEL_HOME=$(DEV_HOME) go run . $(ARGS)
 
 # The checks CI runs: formatting, vet and the tests with the race detector.
 test:
@@ -25,4 +25,4 @@ clean:
 
 # Render the current TUI states into docs/mockup/index.html.
 mockup:
-	DASHY_MOCKUP=$(CURDIR)/docs/mockup go test ./internal/tui -run TestMockupFrames -count=1
+	ZEL_MOCKUP=$(CURDIR)/docs/mockup go test ./internal/tui -run TestMockupFrames -count=1

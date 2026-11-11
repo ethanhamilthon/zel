@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"dashy/internal/cli"
+	"zel/internal/cli"
 )
 
 //go:embed VERSION

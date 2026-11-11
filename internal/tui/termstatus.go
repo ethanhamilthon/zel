@@ -20,12 +20,12 @@ type termState struct {
 	state, title string // state: idle, working, done or error
 	frame        int
 	lastTitle    string
-	background   string // OSC 11 color set from [ui.theme] background
+	background   string // optional OSC 11 terminal background
 	used         bool
 }
 
 // setBackground paints the terminal's default background through OSC 11, so every
-// cell without its own color follows [ui.theme] background; empty restores the default.
+// cell without its own color follows this background; empty restores the default.
 func (t *termState) setBackground(color string) {
 	color = oscColor(color)
 	if color == t.background {
@@ -120,7 +120,7 @@ func termTitle(title string) string {
 		return r
 	}, title)), " ")
 	if title == "" {
-		return "dashy"
+		return "zel"
 	}
 	if r := []rune(title); len(r) > 40 {
 		return string(r[:39]) + "…"

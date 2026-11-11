@@ -1,19 +1,21 @@
 package agent
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -32,55 +34,47 @@ const (
 )
 
 type Provider struct {
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	API     string `toml:"api"`
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	API     string `json:"api"`
 }
 
 func (p Provider) key() string { return p.APIKey }
 
-// UI holds the [ui] display options: event toggles and theme colors.
+// UI holds application display preferences.
 type UI struct {
 	Editor string
-	Events map[string]bool
-	Theme  map[string]string
+	Theme  map[string]string `json:"-"`
 }
 
-// Show reports whether an [ui.events] toggle is on; missing toggles are on.
-func (u UI) Show(event string) bool {
-	on, ok := u.Events[event]
-	return on || !ok
-}
+// SystemBlock is a Markdown body from one project instruction layer.
+type SystemBlock struct{ Name, Value string }
 
-// SystemBlock is one [system.NAME] prompt block: type "text" or "bash".
-type SystemBlock struct{ Name, Type, Value string }
-
-// Hook is one [hooks.NAME] command run on agent events.
+// Hook is a command subscribed to a project lifecycle event.
 type Hook struct {
-	Name        string
-	Events      []string
-	Run         string
-	Timeout     int
-	Enabled     bool
-	PasteOutput bool
+	Name   string
+	Events []string
+	Run    string
+	Dir    string
 }
 
 // Settings is the effective configuration: the layers of ConfigPaths merged in
 // order, plus the session's model selection.
 type Settings struct {
-	DBPath, Provider, Model, Effort string
-	ReasoningSummary                bool
-	ShellOutput, ShellTimeout       int
-	UI                              UI
-	Providers                       map[string]Provider
-	System                          []SystemBlock
-	Hooks                           []Hook
-	Sources                         map[string]string // config file that last set provider, model or effort
+	DBPath                    string `json:"-"`
+	Provider, Model, Effort   string
+	ReasoningSummary          bool
+	ShellOutput, ShellTimeout int
+	UI                        UI
+	Providers                 map[string]Provider
+	System                    []SystemBlock `json:"-"`
+	Hooks                     []Hook        `json:"-"`
+	Name, Description, Color  string        `json:"-"`
 }
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", ReasoningSummary: true, ShellOutput: ShellOutput, ShellTimeout: ShellTimeout,
-		UI: UI{Events: map[string]bool{}, Theme: map[string]string{}}, Providers: map[string]Provider{}, Sources: map[string]string{}}
+		UI: UI{Theme: map[string]string{}}, Providers: map[string]Provider{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {
@@ -101,7 +95,7 @@ func (s Settings) SetupHint() string {
 	case s.Provider != "" && s.Model != "":
 		return ""
 	case len(s.Providers) == 0:
-		return "No provider configured · run dashy setup or edit config.toml"
+		return "No provider configured · open Providers in the menu"
 	}
 	return "No model selected · choose one in the Ctrl+K menu"
 }
@@ -137,228 +131,214 @@ func validateSettings(s Settings) error {
 	return nil
 }
 
-// fileConfig is the config.toml schema; pointers tell set values from missing ones.
-type fileConfig struct {
-	Agent struct {
-		DBPath           *string `toml:"db_path"`
-		Provider         *string `toml:"provider"`
-		Model            *string `toml:"model"`
-		Effort           *string `toml:"effort"`
-		ReasoningSummary *bool   `toml:"reasoning_summary"`
-		ShellOutput      *int    `toml:"shell_output"`
-		ShellTimeout     *int    `toml:"shell_timeout"`
-	} `toml:"agent"`
-	UI struct {
-		Editor *string `toml:"editor"`
-		// The line caps are gone: the chat shows user messages and answers only, and the
-		// trace of a turn lives in the Tracing menu. They stay parsed so that an
-		// older config.toml still loads.
-		BashLines     *int              `toml:"bash_lines"`
-		OutputLines   *int              `toml:"output_lines"`
-		ThinkingLines *int              `toml:"thinking_lines"`
-		Events        map[string]bool   `toml:"events"`
-		Theme         map[string]string `toml:"theme"`
-	} `toml:"ui"`
-	Provider map[string]struct {
-		BaseURL *string `toml:"base_url"`
-		APIKey  *string `toml:"api_key"`
-		API     *string `toml:"api"`
-	} `toml:"provider"`
-	System map[string]struct {
-		Type  string `toml:"type"`
-		Value string `toml:"value"`
-	} `toml:"system"`
-	Hooks map[string]struct {
-		Events      []string `toml:"events"`
-		Run         string   `toml:"run"`
-		Timeout     int      `toml:"timeout"`
-		Enabled     *bool    `toml:"enabled"`
-		PasteOutput bool     `toml:"paste_output"`
-	} `toml:"hooks"`
+var AccentColors = map[string]string{
+	"terracotta": "#d97757", "rose": "#c98798", "dusty-pink": "#c59baa", "mauve": "#b69ab8",
+	"lavender": "#a79bc8", "violet": "#a18bc0", "slate": "#8e9db5", "blue": "#82a5c6",
+	"sky": "#8ab6c9", "teal": "#80b3ad", "sage": "#9bb49a", "olive": "#acb18b",
+	"moss": "#93a382", "sand": "#c6b38c", "ochre": "#c4a46d", "amber": "#c9a179",
+	"peach": "#d3a28e", "clay": "#b88e7c", "copper": "#bd937c", "plum": "#ab8fa6",
 }
 
 var envReference = regexp.MustCompile(`\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 
-// Expand replaces {{$VAR}} references with environment values, as config.toml does.
 func Expand(s string) string { return expand(s) }
-
-// expand replaces {{$VAR}} with the environment value.
 func expand(s string) string {
 	return envReference.ReplaceAllStringFunc(s, func(m string) string { return os.Getenv(m[3 : len(m)-2]) })
 }
-
-func expandPath(path string) string {
-	if rest, ok := strings.CutPrefix(path, "~/"); ok || path == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, rest)
-		}
-	}
-	return path
-}
-
-// FlagConfig is the file named by --config; relative paths resolve against the project directory.
 func FlagConfig(dir string) string {
-	path := os.Getenv("DASHY_CONFIG")
+	path := os.Getenv("ZEL_CONFIG")
 	if path != "" && !filepath.IsAbs(path) {
 		path = filepath.Join(dir, path)
 	}
 	return path
 }
-
-// ConfigPaths are the config files in merge order: $DASHY_HOME/config.toml, every
-// dashy.toml from the filesystem root down to dir, then the --config file.
 func ConfigPaths(home, dir string) []string {
 	var local []string
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		local = append(local, filepath.Join(d, "dashy.toml"))
+		local = append(local, filepath.Join(d, "ZEL.md"))
 		if filepath.Dir(d) == d {
 			break
 		}
 	}
 	slices.Reverse(local)
-	paths := append([]string{filepath.Join(home, "config.toml")}, local...)
+	paths := append([]string{filepath.Join(home, "ZEL.md")}, local...)
 	if flagged := FlagConfig(dir); flagged != "" {
 		paths = append(paths, flagged)
 	}
-	return paths
+	seen := map[string]bool{}
+	var unique []string
+	for i := len(paths) - 1; i >= 0; i-- {
+		path := filepath.Clean(paths[i])
+		if !seen[path] {
+			unique = append(unique, path)
+			seen[path] = true
+		}
+	}
+	slices.Reverse(unique)
+	return unique
 }
 
-// LoadConfig merges the ConfigPaths layers over the defaults. Missing files are
-// skipped, except the --config one; malformed files are errors.
+// LoadConfig reads database preferences and layers project instructions over them.
 func LoadConfig(home, dir string) (Settings, error) {
 	s := DefaultSettings()
-	s.DBPath = filepath.Join(home, "dashy.db")
-	flagged := FlagConfig(dir)
+	s.DBPath = filepath.Join(home, "zel.db")
+	db, err := openDB(s.DBPath)
+	if err != nil {
+		return s, err
+	}
+	var data string
+	err = db.QueryRow(`SELECT data FROM preferences WHERE id = 1`).Scan(&data)
+	db.Close()
+	if err == nil {
+		err = json.Unmarshal([]byte(data), &s)
+	} else if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	if err != nil {
+		return s, fmt.Errorf("preferences: %w", err)
+	}
+	// Stored preferences must never supply project instructions or identity.
+	s.System, s.Hooks = nil, nil
 	for _, path := range ConfigPaths(home, dir) {
 		err := mergeConfig(&s, path)
-		if errors.Is(err, os.ErrNotExist) && path != flagged {
+		if errors.Is(err, os.ErrNotExist) && path != FlagConfig(dir) {
 			continue
 		}
 		if err != nil {
-			return Settings{}, err
+			return s, err
 		}
 	}
 	if s.Effort == "" {
 		s.Effort = "medium"
 	}
+	if s.Color == "" {
+		s.Color = "terracotta"
+	}
+	accent, ok := AccentColors[s.Color]
+	if !ok {
+		return s, fmt.Errorf("unknown project color %q", s.Color)
+	}
+	s.UI.Theme = map[string]string{"accent": accent}
+	for name, p := range s.Providers {
+		p.APIKey = expand(p.APIKey)
+		s.Providers[name] = p
+	}
 	return s, validateSettings(s)
 }
 
 func mergeConfig(s *Settings, path string) error {
-	var f fileConfig
-	md, err := toml.DecodeFile(path, &f)
-	if err == nil {
-		if undecoded := md.Undecoded(); len(undecoded) > 0 {
-			err = fmt.Errorf("unknown key %s", undecoded[0])
-		}
-	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	for target, value := range map[*string]*string{&s.DBPath: f.Agent.DBPath, &s.Provider: f.Agent.Provider, &s.Model: f.Agent.Model, &s.Effort: f.Agent.Effort} {
-		if value != nil {
-			*target = expand(*value)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	body := text
+	if strings.HasPrefix(text, "---\n") {
+		lines := strings.Split(text[4:], "\n")
+		end := slices.Index(lines, "---")
+		if end < 0 {
+			return fmt.Errorf("%s: unclosed YAML front matter", path)
 		}
-	}
-	s.DBPath = expandPath(s.DBPath)
-	s.Sources = maps.Clone(s.Sources)
-	for key, value := range map[string]*string{"provider": f.Agent.Provider, "model": f.Agent.Model, "effort": f.Agent.Effort} {
-		if value != nil {
-			s.Sources[key] = path
+		front, rest := strings.Join(lines[:end], "\n"), strings.Join(lines[end+1:], "\n")
+		var f struct {
+			Name        *string   `yaml:"name"`
+			Description *string   `yaml:"description"`
+			Color       *string   `yaml:"color"`
+			Hooks       yaml.Node `yaml:"hooks"`
 		}
-	}
-	for target, value := range map[*int]*int{&s.ShellOutput: f.Agent.ShellOutput, &s.ShellTimeout: f.Agent.ShellTimeout} {
-		if value != nil {
-			*target = *value
+		dec := yaml.NewDecoder(strings.NewReader(front))
+		dec.KnownFields(true)
+		if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: %w", path, err)
 		}
-	}
-	if f.Agent.ReasoningSummary != nil {
-		s.ReasoningSummary = *f.Agent.ReasoningSummary
-	}
-	if f.UI.Editor != nil {
-		s.UI.Editor = *f.UI.Editor
-	}
-	s.UI.Events = merged(s.UI.Events, f.UI.Events)
-	s.UI.Theme = merged(s.UI.Theme, f.UI.Theme)
-	s.Providers = maps.Clone(s.Providers)
-	// A provider merges by field, so a later layer can set only its api_key.
-	for name, p := range f.Provider {
-		merged := s.Providers[name]
-		for target, value := range map[*string]*string{&merged.BaseURL: p.BaseURL, &merged.APIKey: p.APIKey, &merged.API: p.API} {
-			if value != nil {
-				*target = expand(*value)
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return fmt.Errorf("%s: front matter must contain one YAML document", path)
+		}
+		for dst, v := range map[*string]*string{&s.Name: f.Name, &s.Description: f.Description, &s.Color: f.Color} {
+			if v != nil {
+				*dst = *v
 			}
 		}
-		s.Providers[name] = merged
+		if f.Hooks.Kind != 0 && f.Hooks.Kind != yaml.MappingNode {
+			return fmt.Errorf("%s: hooks must map events to commands", path)
+		}
+		seenEvents := map[string]bool{}
+		for i := 0; i < len(f.Hooks.Content); i += 2 {
+			event, node := f.Hooks.Content[i].Value, f.Hooks.Content[i+1]
+			if seenEvents[event] {
+				return fmt.Errorf("%s: duplicate hook event %q; use a command list", path, event)
+			}
+			seenEvents[event] = true
+			if !slices.Contains(HookEvents, event) {
+				return fmt.Errorf("%s: unknown hook event %q", path, event)
+			}
+			var commands []string
+			if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
+				commands = []string{node.Value}
+			} else if node.Kind == yaml.SequenceNode {
+				if err := node.Decode(&commands); err != nil {
+					return fmt.Errorf("%s: %w", path, err)
+				}
+			} else {
+				return fmt.Errorf("%s: hook %s requires a command or list of commands", path, event)
+			}
+			for _, command := range commands {
+				if strings.TrimSpace(command) == "" {
+					return fmt.Errorf("%s: empty hook command", path)
+				}
+				s.Hooks = append(s.Hooks, Hook{Name: path + ":" + event, Events: []string{event}, Run: command, Dir: filepath.Dir(path)})
+			}
+		}
+		body = rest
 	}
-	// Blocks and hooks keep file order; a later entry with the same name replaces the earlier one.
-	for _, key := range md.Keys() {
-		if len(key) != 2 {
-			continue
-		}
-		name := key[1]
-		switch key[0] {
-		case "system":
-			b := f.System[name]
-			if b.Type != "text" && b.Type != "bash" {
-				return fmt.Errorf("%s: system.%s: type must be text or bash", path, name)
-			}
-			s.System = upsert(s.System, SystemBlock{name, b.Type, expand(b.Value)}, func(x SystemBlock) string { return x.Name })
-		case "hooks":
-			h := f.Hooks[name]
-			hook := Hook{Name: name, Events: h.Events, Run: expand(h.Run), Timeout: h.Timeout, Enabled: h.Enabled == nil || *h.Enabled, PasteOutput: h.PasteOutput}
-			if hook.Timeout == 0 {
-				hook.Timeout = HookTimeout
-			}
-			if hook.Timeout < 0 || hook.Timeout > ShellMaxTimeout {
-				return fmt.Errorf("%s: hooks.%s: timeout must be 1..%d seconds", path, name, ShellMaxTimeout)
-			}
-			s.Hooks = upsert(s.Hooks, hook, func(x Hook) string { return x.Name })
-		}
+	if strings.TrimSpace(body) != "" {
+		s.System = append(s.System, SystemBlock{Name: path, Value: body})
 	}
 	return nil
 }
 
-func merged[V any](base, over map[string]V) map[string]V {
-	out := maps.Clone(base)
-	if out == nil {
-		out = map[string]V{}
+// WriteConfig persists only application preferences, never project instructions.
+func WriteConfig(home string, s Settings) error {
+	if err := validateSettings(s); err != nil {
+		return err
 	}
-	maps.Copy(out, over)
-	return out
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	db, err := openDB(filepath.Join(home, "zel.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO preferences(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, string(data))
+	return err
 }
 
-func upsert[T any](list []T, item T, name func(T) string) []T {
-	list = slices.Clone(list)
-	if i := slices.IndexFunc(list, func(x T) bool { return name(x) == name(item) }); i >= 0 {
-		list[i] = item
-		return list
+// UpdateSettings is called between turns by the settings/provider UI.
+func (a *Agent) UpdateSettings(s Settings) error {
+	if err := WriteConfig(a.home, s); err != nil {
+		return err
 	}
-	return append(list, item)
+	return a.ReloadConfig()
 }
-
-func DashyHome(cwd string) (string, error) {
-	dir := os.Getenv("DASHY_HOME")
+func ZelHome(cwd string) (string, error) {
+	dir := os.Getenv("ZEL_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, ".dashy")
+		dir = filepath.Join(home, ".zel")
 	} else if !filepath.IsAbs(dir) {
 		dir = filepath.Join(cwd, dir)
 	}
 	return filepath.Abs(dir)
 }
 
-// DBPath is the configured SQLite path for helper commands that run without an agent.
-func DBPath(home string) string {
-	cwd, _ := os.Getwd()
-	if s, err := LoadConfig(home, cwd); err == nil {
-		return s.DBPath
-	}
-	return filepath.Join(home, "dashy.db")
-}
+// DBPath is the SQLite state path for helper commands that run without an agent.
+func DBPath(home string) string { return filepath.Join(home, "zel.db") }
 
 func (a *Agent) DBPath() string { return a.Settings().DBPath }
 
@@ -433,69 +413,4 @@ func (a *Agent) Settings() Settings {
 	a.cfg.mu.Lock()
 	defer a.cfg.mu.Unlock()
 	return a.settingsLocked()
-}
-
-// WriteConfig writes s as $home/config.toml, private to the user.
-func WriteConfig(home string, s Settings) error {
-	var agentTable struct {
-		DBPath           string `toml:"db_path,omitempty"`
-		Provider         string `toml:"provider,omitempty"`
-		Model            string `toml:"model,omitempty"`
-		Effort           string `toml:"effort,omitempty"`
-		ReasoningSummary bool   `toml:"reasoning_summary"`
-		ShellOutput      int    `toml:"shell_output"`
-		ShellTimeout     int    `toml:"shell_timeout"`
-	}
-	agentTable.DBPath, agentTable.Provider, agentTable.Model, agentTable.Effort = s.DBPath, s.Provider, s.Model, s.Effort
-	agentTable.ReasoningSummary, agentTable.ShellOutput, agentTable.ShellTimeout = s.ReasoningSummary, s.ShellOutput, s.ShellTimeout
-	var ui struct {
-		Editor string            `toml:"editor,omitempty"`
-		Events map[string]bool   `toml:"events"`
-		Theme  map[string]string `toml:"theme"`
-	}
-	ui.Editor = s.UI.Editor
-	ui.Events, ui.Theme = s.UI.Events, s.UI.Theme
-	var out strings.Builder
-	section := func(header string, table any) error {
-		if header != "" {
-			out.WriteString(header + "\n")
-		}
-		err := toml.NewEncoder(&out).Encode(table)
-		out.WriteString("\n")
-		return err
-	}
-	tables := []any{map[string]any{"agent": agentTable}, map[string]any{"ui": ui}}
-	if len(s.Providers) > 0 {
-		tables = append(tables, map[string]any{"provider": s.Providers})
-	}
-	for _, table := range tables {
-		if err := section("", table); err != nil {
-			return err
-		}
-	}
-	// Explicit headers keep system blocks and hooks in order.
-	for _, b := range s.System {
-		if err := section("[system."+tomlKey(b.Name)+"]", map[string]string{"type": b.Type, "value": b.Value}); err != nil {
-			return err
-		}
-	}
-	for _, h := range s.Hooks {
-		hook := map[string]any{"events": h.Events, "run": h.Run, "timeout": h.Timeout, "enabled": h.Enabled, "paste_output": h.PasteOutput}
-		if err := section("[hooks."+tomlKey(h.Name)+"]", hook); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(home, 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(home, "config.toml"), []byte(out.String()), 0600)
-}
-
-var bareKey = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-func tomlKey(name string) string {
-	if bareKey.MatchString(name) {
-		return name
-	}
-	return strconv.Quote(name)
 }

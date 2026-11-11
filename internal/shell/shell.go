@@ -26,8 +26,8 @@ type Runner struct {
 }
 
 // Command builds `bash -c script` in its own process group in dir. extra
-// overrides the inherited environment; BASH_ENV and the session variables DASHY_MODE,
-// DASHY_SOURCE and DASHY_ENDPOINT are never inherited, pagers are disabled and the running
+// overrides the inherited environment; BASH_ENV and the session variables ZEL_MODE,
+// ZEL_SOURCE and ZEL_ENDPOINT are never inherited, pagers are disabled and the running
 // binary's directory leads PATH. Cancelling ctx kills the whole group. Start it with cmd.Start and finish it with Reap.
 func Command(ctx context.Context, dir string, extra map[string]string, script string) *exec.Cmd {
 	bash := "/bin/bash"
@@ -53,7 +53,7 @@ func Command(ctx context.Context, dir string, extra map[string]string, script st
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		// Session variables belong to this session: a sub-agent must not inherit its parent's endpoint.
-		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" || key == "DASHY_MODE" || key == "DASHY_SOURCE" || key == "DASHY_ENDPOINT" {
+		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" || key == "ZEL_MODE" || key == "ZEL_SOURCE" || key == "ZEL_ENDPOINT" {
 			continue
 		}
 		cmd.Env = append(cmd.Env, entry)
@@ -102,7 +102,7 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 	out := &switchWriter{w: buffer}
 	cmd.Stdout, cmd.Stderr = out, out
 	if ctx.Err() != nil {
-		return Result{Output: "\n[dashy: cancelled]\n", ExitCode: 130, Error: true}, nil
+		return Result{Output: "\n[zel: cancelled]\n", ExitCode: 130, Error: true}, nil
 	}
 	if err := cmd.Start(); err != nil {
 		io.WriteString(buffer, err.Error()+"\n")
@@ -133,9 +133,9 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 	var exit *exec.ExitError
 	switch {
 	case result.ExitCode == 130:
-		io.WriteString(buffer, "\n[dashy: cancelled]\n")
+		io.WriteString(buffer, "\n[zel: cancelled]\n")
 	case result.ExitCode == 124:
-		io.WriteString(buffer, fmt.Sprintf("\n[dashy: timed out after %s]\n", timeout))
+		io.WriteString(buffer, fmt.Sprintf("\n[zel: timed out after %s]\n", timeout))
 	case errors.As(err, &exit):
 		result.ExitCode = exit.ExitCode()
 		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
@@ -143,7 +143,7 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 		}
 	case err != nil:
 		result.ExitCode = 1
-		io.WriteString(buffer, fmt.Sprintf("\n[dashy: %v]\n", err))
+		io.WriteString(buffer, fmt.Sprintf("\n[zel: %v]\n", err))
 	}
 	result.Output = buffer.Text()
 	result.Error = result.ExitCode != 0
@@ -165,7 +165,7 @@ type Background struct {
 	Cmd    *exec.Cmd
 	done   <-chan error
 	out    *switchWriter
-	buffer *outputBuffer
+	buffer *OutputBuffer
 }
 
 func (b *Background) Redirect(w io.Writer) {

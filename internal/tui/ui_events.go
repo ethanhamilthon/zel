@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"dashy/internal/agent"
-	"dashy/internal/control"
+	"zel/internal/agent"
+	"zel/internal/control"
 )
 
 // Run runs the terminal interface until the user exits.

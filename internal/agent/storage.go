@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"crypto/rand"
-	"dashy/internal/shell"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"zel/internal/shell"
 )
 
 func (a *Agent) openProject(dir string) error {

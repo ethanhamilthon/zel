@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 )
 
 // Controller is the single entry point for the TUI and JSON mode. One turn is

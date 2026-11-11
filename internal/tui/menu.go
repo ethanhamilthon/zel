@@ -2,15 +2,17 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 )
 
 // The menu (Ctrl+K) replaces the slash commands: a block centered on the screen
@@ -37,12 +39,17 @@ const (
 	menuInfo
 	menuHelp
 	menuText
+	menuProviders
+	menuProvider
+	menuForm
+	menuSettings
+	menuFiles
 )
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
 	menuTasks: "Menu/Tasks", menuTask: "Menu/Tasks/Task", menuTracing: "Menu/Tracing",
-	menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
+	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuFiles: "Menu/Files", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
 }
 
 type menuRow struct{ label, detail string }
@@ -52,9 +59,14 @@ var mainRows = []menuRow{
 	{"Tasks", "Background tasks"}, {"Tracing", "Everything the session did"}, {"Rename", "Rename this session"},
 	{"Info", "Session, config, tokens"}, {"Reload", "Re-read the config"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Save and exit"}, {"Editor", "Edit input · Ctrl+E"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse and edit"},
 }
 
 type menuState struct {
+	form            *formState
+	directory       string
+	files           []fileItem
+	providerNames   []string
 	direct          bool // opened by a shortcut, not through Menu
 	traceIndex      int
 	page            menuPage
@@ -81,6 +93,27 @@ func (m model) rawMenuRows() []menuRow {
 		rows = slices.Clone(mainRows)
 		if n := m.ctl.Status().Tasks; n > 0 {
 			rows[3].detail = fmt.Sprintf("%d running", n)
+		}
+	case menuProviders:
+		rows = []menuRow{{"Add provider", ""}}
+		for _, name := range mu.providerNames {
+			rows = append(rows, menuRow{name, m.ctl.Settings().Providers[name].BaseURL})
+		}
+	case menuProvider:
+		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
+	case menuSettings:
+		s := m.ctl.Settings()
+		rows = []menuRow{{"Editor", s.UI.Editor}, {"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}}
+	case menuFiles:
+		for _, f := range mu.files {
+			detail := "file"
+			if f.dir {
+				detail = "directory"
+			}
+			rows = append(rows, menuRow{f.name, detail})
+		}
+		if len(rows) == 0 {
+			rows = []menuRow{{"Unable to read directory", mu.status}}
 		}
 	case menuResume:
 		for _, s := range mu.sessions {
@@ -140,11 +173,14 @@ func (m model) rawMenuRows() []menuRow {
 	case menuRename:
 		rows = []menuRow{{mu.name + "▏", "empty = default title"}}
 	}
+	if mu.page == menuModel {
+		rows = append(rows, menuRow{"Retry model listing", ""}, menuRow{"Enter model manually", ""})
+	}
 	return rows
 }
 
 func searchableMenu(page menuPage) bool {
-	return page == menuMain || page == menuResume || page == menuModel || page == menuEffort || page == menuTracing
+	return page == menuMain || page == menuResume || page == menuModel || page == menuEffort || page == menuTracing || page == menuProviders || page == menuFiles
 }
 
 func searchMatches(text, query string) bool {
@@ -160,15 +196,27 @@ func searchMatches(text, query string) bool {
 // menuIndices preserves action identities when the visible rows are filtered.
 func (m model) menuIndices(rows []menuRow) []int {
 	var indices []int
+	query := m.menu.query
+	kind := ""
+	if m.menu.page == menuTracing && strings.HasPrefix(query, ":") {
+		fields := strings.Fields(query)
+		kind, query = strings.ToLower(strings.TrimPrefix(fields[0], ":")), strings.Join(fields[1:], " ")
+	}
 	for i, row := range rows {
 		text := row.label + " " + row.detail
 		if m.menu.page == menuResume && i < len(m.menu.sessions) {
 			text = m.menu.sessions[i].Title + " " + row.detail
 		}
 		if m.menu.page == menuTracing && i < len(m.menu.trace) {
-			text += " " + m.menu.trace[i].Text
+			e := m.menu.trace[i]
+			if kind != "" && e.Kind != kind {
+				continue
+			}
+			text += " " + e.Text
+		} else if kind != "" {
+			continue
 		}
-		if !searchableMenu(m.menu.page) || m.menu.page == menuModel || searchMatches(text, m.menu.query) {
+		if !searchableMenu(m.menu.page) || m.menu.page == menuModel || searchMatches(text, query) {
 			indices = append(indices, i)
 		}
 	}
@@ -264,6 +312,9 @@ func (m *model) updateMenuSearch(msg tea.Msg) tea.Cmd {
 }
 
 func (m model) menuView() string {
+	if m.menu.page == menuForm {
+		return m.formView()
+	}
 	pad, w := strings.Repeat(" ", m.menuLeft()), m.menuWidth()
 	title, shortcut := m.menuHead()
 	lines := make([]string, 0, m.height)
@@ -286,7 +337,7 @@ func (m model) menuView() string {
 		}
 		lines[i] = strings.ReplaceAll(line, composerCursorMarker, "")
 	}
-	return strings.Join(lines[:m.height], "\n") + fmt.Sprintf("\x1b]1337;DashyCaret;%d;%d\x07", row, column)
+	return strings.Join(lines[:m.height], "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
 }
 
 // menuBodyStart is the screen row of the first body line and menuBodyRoom the
@@ -324,7 +375,14 @@ func (m model) menuWidth() int { return max(10, min(menuWidth, m.width-4)) }
 func (m model) menuHead() (title, shortcut string) {
 	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T"}[m.menu.page]
 	if m.menu.page == menuMain {
-		title = "dashy v" + strings.TrimPrefix(Version, "v") + "/Menu"
+		name := m.ctl.Settings().Name
+		if name == "" {
+			name = "Menu"
+		}
+		title = "zel " + strings.TrimPrefix(Version, "v") + "/" + name
+	}
+	if m.menu.page == menuFiles {
+		title = "Menu/Files " + m.menu.directory
 	}
 	if m.menu.page == menuText {
 		title = m.menu.title
@@ -447,6 +505,9 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 }
 
 func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.menu.page == menuForm {
+		return m.formKey(v)
+	}
 	mu := m.menu
 	n := len(m.menuRows())
 	if mu.page == menuText || mu.page == menuInfo {
@@ -501,6 +562,9 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) menuMouse(v tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.menu.page == menuForm {
+		return m, nil
+	}
 	mu := m.menu
 	if v.Action != tea.MouseActionPress {
 		return m, nil
@@ -590,9 +654,59 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m, nil
 		case 10:
 			return m.editInput()
+		case 11:
+			m.openProviders()
+		case 12:
+			open(menuSettings)
+		case 13:
+			open(menuFiles)
+			m.readDirectory(m.cwd)
 		case 9:
 			m = m.closeMenu()
 			return m.quit()
+		}
+	case menuProviders:
+		if index == 0 {
+			m.openProviderForm("", false)
+		} else if index-1 < len(mu.providerNames) {
+			mu.provider = mu.providerNames[index-1]
+			open(menuProvider)
+		}
+	case menuProvider:
+		if index == 0 {
+			m.openProviderForm(mu.provider, false)
+		} else {
+			settings := m.ctl.Settings()
+			delete(settings.Providers, mu.provider)
+			if settings.Provider == mu.provider {
+				settings.Provider, settings.Model = "", ""
+			}
+			if err := m.ctl.UpdateSettings(settings); err != nil {
+				return m.reject(err)
+			}
+			m.models = nil
+			m.modelsAt = time.Time{}
+			m.openProviders()
+		}
+	case menuSettings:
+		if index == 3 {
+			settings := m.ctl.Settings()
+			settings.ReasoningSummary = !settings.ReasoningSummary
+			if err := m.ctl.UpdateSettings(settings); err != nil {
+				return m.reject(err)
+			}
+		} else {
+			m.openSettingForm(index)
+		}
+	case menuFiles:
+		if index < len(mu.files) {
+			f := mu.files[index]
+			path := filepath.Join(mu.directory, f.name)
+			if f.dir {
+				m.readDirectory(path)
+			} else {
+				return m.editFile(path)
+			}
 		}
 	case menuResume:
 		if index < len(mu.sessions) {
@@ -601,7 +715,16 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.submit(m.ctl.Resume(mu.sessions[index].ID))
 		}
 	case menuModel:
-		if found := m.filteredModels(); index < len(found) {
+		found := m.filteredModels()
+		if index == len(m.rawMenuRows())-2 {
+			m.modelsAt = time.Time{}
+			return m, m.fetchModels()
+		}
+		if index == len(m.rawMenuRows())-1 {
+			m.openManualModel()
+			return m, nil
+		}
+		if index < len(found) {
 			mu.provider, mu.model = found[index].Provider, found[index].Model
 			open(menuEffort)
 			mu.selected = slices.Index(agent.Efforts, "medium")

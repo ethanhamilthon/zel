@@ -2,134 +2,82 @@ package agent
 
 import (
 	"context"
-	"dashy/internal/shell"
 	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"zel/internal/shell"
 )
 
 func TestLoadConfigLayers(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	dir := filepath.Join(root, "projects", "app")
-	t.Setenv("DASHY_TEST_KEY", "sk-secret")
-	writeFile(t, filepath.Join(home, "config.toml"), `
-[agent]
-provider = "p"
-model = "m"
-effort = "low"
-db_path = "~/x.db"
-
-[ui]
-bash_lines = -1
-editor = "global-editor"
-
-[ui.events]
-tasks = true
-hook_output = false
-
-[provider.p]
-base_url = "http://127.0.0.1:1/v1"
-
-[system.b]
-type = "text"
-value = "global b"
-
-[system.a]
-type = "text"
-value = "global a"
-`)
-	// A parent directory layer: only the key of a provider defined globally.
-	writeFile(t, filepath.Join(root, "projects", "dashy.toml"), `
-[agent]
-model = "parent"
-
-[provider.p]
-api_key = "{{$DASHY_TEST_KEY}}"
-
-[system.b]
-type = "text"
-value = "parent b"
-`)
-	writeFile(t, filepath.Join(dir, "dashy.toml"), `
-[agent]
-model = "project"
-
-[ui]
-editor = "project-editor --wait"
-
-[system.c]
-type = "bash"
-value = "echo c"
-
-[hooks.h]
-events = ["turn_end"]
-run = "true"
-`)
-	flagged := filepath.Join(root, "flag.toml")
-	writeFile(t, flagged, "[agent]\neffort = \"high\"\n")
-	t.Setenv("DASHY_CONFIG", flagged)
-	s, err := LoadConfig(home, dir)
+	t.Setenv("ZEL_TEST_KEY", "sk-secret")
+	settings := DefaultSettings()
+	settings.Provider, settings.Model = "p", "m"
+	settings.Providers["p"] = Provider{BaseURL: "http://127.0.0.1:1/v1", APIKey: "{{$ZEL_TEST_KEY}}"}
+	settings.UI.Editor = "nvim --clean"
+	if err := WriteConfig(home, settings); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(home, "ZEL.md"), "---\nname: Global\ncolor: sage\nhooks:\n  turn_start: echo global\n---\nGlobal prompt")
+	writeFile(t, filepath.Join(root, "projects", "ZEL.md"), "---\ndescription: Parent description\nhooks:\n  turn_start: echo parent\n---\nParent prompt")
+	writeFile(t, filepath.Join(dir, "ZEL.md"), "---\nname: Project\nhooks:\n  turn_start: [echo local, echo other]\n---\nLocal prompt")
+	flagged := filepath.Join(root, "override.md")
+	writeFile(t, flagged, "---\ncolor: blue\n---\nFlag prompt")
+	t.Setenv("ZEL_CONFIG", flagged)
+	loaded, err := LoadConfig(home, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	userHome, _ := os.UserHomeDir()
-	p := s.Providers["p"]
-	if s.Model != "project" || s.Effort != "high" || p.APIKey != "sk-secret" || p.BaseURL != "http://127.0.0.1:1/v1" || s.DBPath != filepath.Join(userHome, "x.db") {
-		t.Fatalf("merged %+v", s)
+	if loaded.Name != "Project" || loaded.Description != "Parent description" || loaded.Color != "blue" || loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.Editor != "nvim --clean" {
+		t.Fatalf("loaded %+v", loaded)
 	}
-	if s.UI.Editor != "project-editor --wait" {
-		t.Fatalf("editor = %q", s.UI.Editor)
+	var prompts []string
+	for _, b := range loaded.System {
+		prompts = append(prompts, b.Value)
 	}
-	if !s.UI.Show("tasks") || s.UI.Show("hook_output") || !s.UI.Show("errors") || !s.UI.Show("untouched") {
-		t.Fatalf("ui %+v", s.UI)
+	if strings.Join(prompts, "|") != "Global prompt|Parent prompt|Local prompt|Flag prompt" || len(loaded.Hooks) != 4 {
+		t.Fatalf("layers %+v", loaded)
 	}
-	var names []string
-	for _, b := range s.System {
-		names = append(names, b.Name+"="+b.Value)
+	if Redact(loaded, "key sk-secret") != "key [redacted]" {
+		t.Fatal("API key not redacted")
 	}
-	if got := strings.Join(names, ","); got != "b=parent b,a=global a,c=echo c" {
-		t.Fatalf("system order %q", got)
+	if err := WriteConfig(home, loaded); err != nil {
+		t.Fatal(err)
 	}
-	if len(s.Hooks) != 1 || s.Hooks[0].Timeout != HookTimeout || !s.Hooks[0].Enabled {
-		t.Fatalf("hooks %+v", s.Hooks)
+	again, err := LoadConfig(home, dir)
+	if err != nil || len(again.System) != 4 || len(again.Hooks) != 4 {
+		t.Fatalf("project state was persisted: %+v %v", again, err)
 	}
-	if Redact(s, "key sk-secret") != "key [redacted]" {
-		t.Fatal("api key not redacted")
+	if _, err := os.Stat(filepath.Join(home, "config.toml")); !os.IsNotExist(err) {
+		t.Fatal("TOML file created")
 	}
-	// The --config file must exist; the other layers are optional.
-	t.Setenv("DASHY_CONFIG", filepath.Join(root, "missing.toml"))
-	if _, err := LoadConfig(home, dir); err == nil || !strings.Contains(err.Error(), "missing.toml") {
-		t.Fatalf("missing --config: %v", err)
+	t.Setenv("ZEL_CONFIG", filepath.Join(root, "missing.md"))
+	if _, err := LoadConfig(home, dir); err == nil {
+		t.Fatal("missing explicit file accepted")
 	}
 }
 
-func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
-	home := t.TempDir()
-	writeFile(t, filepath.Join(home, "config.toml"), "[agent]\nmodle = \"x\"\n")
-	if _, err := LoadConfig(home, t.TempDir()); err == nil || !strings.Contains(err.Error(), "modle") {
-		t.Fatalf("err = %v", err)
+func TestLoadConfigRejectsMalformedFrontMatter(t *testing.T) {
+	for _, text := range []string{"---\nmodle: x\n---\n", "---\ncolor: unknown\n---\n", "---\nhooks:\n  unknown: echo hi\n---\n", "---\nname: x", "---\nhooks: []\n---\n", "---\nhooks:\n  turn_start: ''\n---\n"} {
+		home, dir := t.TempDir(), t.TempDir()
+		writeFile(t, filepath.Join(dir, "ZEL.md"), text)
+		if _, err := LoadConfig(home, dir); err == nil {
+			t.Fatalf("accepted %q", text)
+		}
 	}
 }
 
-func TestSystemBlocksBuildThePrompt(t *testing.T) {
+func TestProjectPromptBuildsTheRequest(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		s, err := LoadConfig(home, dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.System = []SystemBlock{{"main", "text", "You are Dashy."}, {"pwd", "bash", "echo cwd=$(basename \"$PWD\")"}, {"fail", "bash", "echo nope; exit 1"}}
-		if err := WriteConfig(home, s); err != nil {
-			t.Fatal(err)
-		}
-	})
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) { writeFile(t, filepath.Join(dir, "ZEL.md"), "You are Zel.") })
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	want := "You are Dashy.\n\ncwd=" + filepath.Base(a.Shell.Dir)
-	if !strings.Contains(fp.requests()[0], `"instructions":`+string(raw(want))) {
+	if !strings.Contains(fp.requests()[0], `"instructions":"You are Zel."`) {
 		t.Fatalf("request: %s", fp.requests()[0])
 	}
 }
@@ -170,7 +118,7 @@ func TestSessionLockIsExclusive(t *testing.T) {
 	}
 	defer b.Close()
 	err = b.Resume(a.SessionID())
-	if err == nil || !strings.Contains(err.Error(), "in use by another dashy process") {
+	if err == nil || !strings.Contains(err.Error(), "in use by another zel process") {
 		t.Fatalf("second owner: %v", err)
 	}
 }
@@ -230,42 +178,27 @@ func TestRecordsDerivedFromHistory(t *testing.T) {
 	}
 }
 
-func TestSaveDefaultEditsTheSourceLayers(t *testing.T) {
-	root := t.TempDir()
-	home, dir := filepath.Join(root, "home"), filepath.Join(root, "proj")
-	global := filepath.Join(home, "config.toml")
-	writeFile(t, global, "# my config\n[agent]\nprovider = \"p\" # main\neffort = 'low'\n\n[provider.p]\nbase_url = \"http://127.0.0.1:1/v1\"\n")
-	writeFile(t, filepath.Join(dir, "dashy.toml"), "[ui]\nbash_lines = 1\n\n[agent]\nmodel = \"old\"\n\n[ui.events]\ntasks = true\n")
-	os.Chmod(global, 0640)
-	base, err := LoadConfig(home, dir)
-	if err != nil {
+func TestSaveDefaultUsesDatabase(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	s := DefaultSettings()
+	s.Providers["p"] = Provider{BaseURL: "http://localhost:1"}
+	path := filepath.Join(dir, "ZEL.md")
+	original := "---\nname: Untouched\n---\nPrompt"
+	writeFile(t, path, original)
+	if err := SaveDefault(home, s, selection{"p", "new", "high"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveDefault(home, base, selection{"p", "new", "high"}); err != nil {
-		t.Fatal(err)
+	loaded, err := LoadConfig(home, dir)
+	if err != nil || loaded.Model != "new" || loaded.Effort != "high" {
+		t.Fatalf("settings %+v %v", loaded, err)
 	}
-	if data, _ := os.ReadFile(global); string(data) != "# my config\n[agent]\nprovider = \"p\" # main\neffort = \"high\"\n\n[provider.p]\nbase_url = \"http://127.0.0.1:1/v1\"\n" {
-		t.Fatalf("global: %q", data)
+	data, _ := os.ReadFile(path)
+	if string(data) != original {
+		t.Fatal("ZEL.md changed")
 	}
-	if info, _ := os.Stat(global); info.Mode().Perm() != 0640 {
-		t.Fatalf("mode %v", info.Mode())
-	}
-	if data, _ := os.ReadFile(filepath.Join(dir, "dashy.toml")); string(data) != "[ui]\nbash_lines = 1\n\n[agent]\nmodel = \"new\"\n\n[ui.events]\ntasks = true\n" {
-		t.Fatalf("project: %q", data)
-	}
-	s, err := LoadConfig(home, dir)
-	if err != nil || s.Model != "new" || s.Effort != "high" {
-		t.Fatalf("reloaded %+v %v", s, err)
-	}
-
-	// Keys no layer sets go to the global config; an [agent] table is added when missing.
-	empty := filepath.Join(root, "empty")
-	writeFile(t, filepath.Join(empty, "config.toml"), "[ui]\nbash_lines = 2\n")
-	if err := SaveDefault(empty, DefaultSettings(), selection{"p", "m", ""}); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(empty, "config.toml")); string(data) != "[ui]\nbash_lines = 2\n\n[agent]\nprovider = \"p\"\nmodel = \"m\"\n" {
-		t.Fatalf("added table: %q", data)
+	info, err := os.Stat(filepath.Join(home, "zel.db"))
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("database permissions: %v %v", info, err)
 	}
 }
 
@@ -278,18 +211,19 @@ func TestMediumReasoningDefault(t *testing.T) {
 			t.Fatal("default effort option is still listed")
 		}
 	}
-	for _, value := range []string{"", "effort = \"\"", "effort = \"high\""} {
+	for _, effort := range []string{"medium", "high"} {
 		home, project := t.TempDir(), t.TempDir()
-		writeFile(t, filepath.Join(home, "config.toml"), "[agent]\n"+value+"\n")
-		s, err := LoadConfig(home, project)
-		want := "medium"
-		if strings.Contains(value, "high") {
-			want = "high"
+		settings := DefaultSettings()
+		settings.Effort = effort
+		if err := WriteConfig(home, settings); err != nil {
+			t.Fatal(err)
 		}
-		if err != nil || s.Effort != want {
-			t.Fatalf("loaded effort = %q, %v", s.Effort, err)
+		loaded, err := LoadConfig(home, project)
+		if err != nil || loaded.Effort != effort {
+			t.Fatalf("effort %s, %v", loaded.Effort, err)
 		}
 	}
+
 }
 
 func TestLegacyAndOmittedSessionEffortUseMedium(t *testing.T) {
@@ -312,7 +246,7 @@ func TestLegacyAndOmittedSessionEffortUseMedium(t *testing.T) {
 }
 
 func TestTraceListsHistoryTasksAndEvents(t *testing.T) {
-	t.Setenv("DASHY_HOME", t.TempDir())
+	t.Setenv("ZEL_HOME", t.TempDir())
 	a, err := New(t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -349,5 +283,149 @@ func TestEditorConfigurationRoundTrip(t *testing.T) {
 	}
 	if loaded.UI.Editor != settings.UI.Editor {
 		t.Fatalf("editor %q, want %q", loaded.UI.Editor, settings.UI.Editor)
+	}
+}
+
+func TestHookOutputIsBoundedAndFailuresAreTraceOnly(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	a.cfg.mu.Lock()
+	base := a.cfg.base
+	base.ShellOutput = 4096
+	base.Hooks = []Hook{
+		{Name: "large", Events: []string{"turn_start"}, Run: "printf '%02048d' 0 | tr '0' 'A'; printf '%03000d' 0 | tr '0' 'X'; printf '%02048d' 0 | tr '0' 'Z'"},
+		{Name: "failed", Events: []string{"turn_start"}, Run: "echo rejected; echo stderr-message >&2; exit 7"},
+		{Name: "empty", Events: []string{"turn_start"}, Run: "printf '   '"},
+	}
+	if err := a.applyLocked(base); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.mu.Unlock()
+	a.fire("turn_start", nil)
+	output := a.takePasted()
+	if len(output) != 1 || !strings.Contains(output[0], strings.Repeat("A", 2048)+"\n[output truncated:") || !strings.Contains(output[0], "first 2048 + last 2048 kept)") || !strings.Contains(output[0], strings.Repeat("Z", 2048)+"\n</hook-output>") || strings.Contains(output[0], "XXXX") {
+		t.Fatalf("output: %q", output)
+	}
+	var trace string
+	for _, e := range a.Trace() {
+		trace += e.Kind + ":" + e.Text + "\n"
+	}
+	if !strings.Contains(trace, "stderr-message") || !strings.Contains(trace, "failed: exit status 7") {
+		t.Fatalf("trace: %s", trace)
+	}
+	if len(a.takePasted()) != 0 {
+		t.Fatal("output consumed twice")
+	}
+}
+
+func TestHookLifecycleAndTurnBoundaries(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if n == 1 {
+			return bashReply("c1", "printf bash-output")
+		}
+		return textReply("done")
+	}}
+	var logPath string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		logPath = filepath.Join(dir, "events.txt")
+		var hooks strings.Builder
+		for _, event := range HookEvents {
+			hooks.WriteString("  " + event + ": './hook.sh'\n")
+		}
+		writeFile(t, filepath.Join(dir, "ZEL.md"), "---\nhooks:\n"+hooks.String()+"---\nProject instructions")
+		writeFile(t, filepath.Join(dir, "hook.sh"), `#!/bin/sh
+printf '%s:%s:%s:%s\n' "$ZEL_EVENT" "$ZEL_SESSION_ID" "$ZEL_MESSAGE" "$ZEL_COMMAND" >> events.txt
+case "$ZEL_EVENT" in
+ turn_start) echo before-turn ;;
+ model_request_start) echo before-request ;;
+ bash_end) printf 'after-bash:%s\n' "$ZEL_OUTPUT" ;;
+ turn_end) echo after-turn ;;
+ app_exit|session_close) echo closing-only ;;
+esac
+`)
+		if err := os.Chmod(filepath.Join(dir, "hook.sh"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := turn(t, a, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fp.requests()) != 2 {
+		t.Fatal("hook output triggered an additional request")
+	}
+	reqs := fp.requests()
+	if !strings.Contains(reqs[0], "before-turn") || !strings.Contains(reqs[0], "before-request") || strings.Contains(reqs[0], "after-turn") || !strings.Contains(reqs[1], "after-bash:bash-output") {
+		t.Fatalf("requests: %v", reqs)
+	}
+	if _, err := turn(t, a, "second"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fp.requests()[2], "after-turn") {
+		t.Fatal("turn-end output not delivered on next user turn")
+	}
+	id := a.SessionID()
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn(t, a, "resumed"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fp.requests()[3], "closing-only") {
+		t.Fatal("closing output reached model")
+	}
+	a.Close()
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for event, want := range map[string]int{"first_message:": 1, "user_message:": 3, "app_start:": 1, "app_exit:": 1, "session_start:": 3, "session_close:": 3, "bash_start:": 1, "bash_end:": 1} {
+		count := 0
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, event) {
+				count++
+			}
+		}
+		if count != want {
+			t.Fatalf("%s count %d want %d\n%s", event, count, want, text)
+		}
+	}
+	if !strings.Contains(text, "user_message:"+id+":first:") {
+		t.Fatalf("missing event environment: %s", text)
+	}
+}
+
+func TestHookTimeoutKillsProcessGroup(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	a.cfg.mu.Lock()
+	base := a.cfg.base
+	base.Hooks = []Hook{{Name: "timeout", Events: []string{"app_exit"}, Run: "sleep 60 & wait"}}
+	if err := a.applyLocked(base); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.mu.Unlock()
+	started := time.Now()
+	a.fire("app_exit", nil)
+	elapsed := time.Since(started)
+	if elapsed < 9*time.Second || elapsed > 13*time.Second {
+		t.Fatalf("timeout took %s", elapsed)
+	}
+	if len(a.takePasted()) != 0 {
+		t.Fatal("closing hook output queued")
+	}
+	base.Hooks = nil
+	a.cfg.mu.Lock()
+	_ = a.applyLocked(base)
+	a.cfg.mu.Unlock()
+	var errors string
+	for _, e := range a.Trace() {
+		if e.Kind == "error" {
+			errors += e.Text
+		}
+	}
+	if !strings.Contains(errors, "Hook timeout failed") {
+		t.Fatalf("timeout not traced: %s", errors)
 	}
 }

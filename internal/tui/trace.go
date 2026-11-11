@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 
 	"github.com/charmbracelet/x/ansi"
 )

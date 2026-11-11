@@ -1,10 +1,10 @@
 #!/bin/sh
-# Install the latest dashy release.
-# Usage: curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/dashy/main/scripts/install.sh | sh
+# Install the latest zel release.
+# Usage: curl -fsSL ZEL_REPO=owner/repository sh scripts/install.sh
 set -eu
 
-repo="ethanhamilthon/dashy"
-bindir="${DASHY_BINDIR:-$HOME/.local/bin}"
+repo="${ZEL_REPO:?Set ZEL_REPO to the GitHub repository hosting Zel releases}"
+bindir="${ZEL_BINDIR:-$HOME/.local/bin}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -26,7 +26,7 @@ darwin | linux) ;;
 	;;
 esac
 
-version="${DASHY_VERSION:-}"
+version="${ZEL_VERSION:-}"
 if [ -z "$version" ]; then
 	version=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" |
 		sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -37,9 +37,9 @@ fi
 		exit 1
 	}
 
-asset="dashy_${os}_${arch}.tar.gz"
+asset="zel_${os}_${arch}.tar.gz"
 base="https://github.com/$repo/releases/download/$version"
-echo "downloading dashy $version ($os/$arch)"
+echo "downloading zel $version ($os/$arch)"
 curl -fsSL -o "$tmp/$asset" "$base/$asset"
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
 
@@ -62,9 +62,9 @@ fi
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 mkdir -p "$bindir"
-install -m 755 "$tmp/dashy" "$bindir/dashy"
-echo "installed $bindir/dashy"
+install -m 755 "$tmp/zel" "$bindir/zel"
+echo "installed $bindir/zel"
 case ":$PATH:" in
 *":$bindir:"*) ;;
-*) echo "add $bindir to PATH to run dashy" ;;
+*) echo "add $bindir to PATH to run zel" ;;
 esac

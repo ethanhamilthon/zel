@@ -2,8 +2,6 @@ package tui
 
 import (
 	"context"
-	"dashy/internal/agent"
-	"dashy/internal/control"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,6 +13,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+	"zel/internal/agent"
+	"zel/internal/control"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -202,11 +202,11 @@ func TestNativeCursorPosition(t *testing.T) {
 	m.viewport.Width, m.viewport.Height = 20, 3
 	m.viewport.lines = []string{"header", "▌ ab" + composerCursorMarker + "界", "footer"}
 	view := m.View()
-	if !strings.HasSuffix(view, "\x1b]1337;DashyCaret;2;5\x07") || strings.Contains(view, composerCursorMarker) {
+	if !strings.HasSuffix(view, "\x1b]1337;ZelCaret;2;5\x07") || strings.Contains(view, composerCursorMarker) {
 		t.Fatalf("wrong native cursor position: %q", view)
 	}
 	m.viewport.YOffset = 2
-	if got := m.View(); !strings.HasSuffix(got, "\x1b]1337;DashyCaret;0;0\x07") {
+	if got := m.View(); !strings.HasSuffix(got, "\x1b]1337;ZelCaret;0;0\x07") {
 		t.Fatalf("offscreen cursor not hidden: %q", got)
 	}
 }
@@ -222,16 +222,16 @@ func TestCursorOutputRestoresRendererAndTerminal(t *testing.T) {
 		}
 		return buf.String()
 	}
-	frame := "\x1b[?1049hhello\x1b]1337;DashyCaret;2;5\x07"
+	frame := "\x1b[?1049hhello\x1b]1337;ZelCaret;2;5\x07"
 	got := write(frame)
-	if strings.Contains(got, "DashyCaret") || !strings.HasSuffix(got, "\x1b7\x1b[6 q\x1b[2;5H\x1b[?25h") {
+	if strings.Contains(got, "ZelCaret") || !strings.HasSuffix(got, "\x1b7\x1b[6 q\x1b[2;5H\x1b[?25h") {
 		t.Fatalf("native caret not positioned: %q", got)
 	}
 	got = write("next frame")
 	if !strings.HasPrefix(got, "\x1b8next frame") {
 		t.Fatalf("renderer position not restored: %q", got)
 	}
-	got = write("\x1b]1337;DashyCaret;0;0\x07")
+	got = write("\x1b]1337;ZelCaret;0;0\x07")
 	if !strings.HasSuffix(got, "\x1b[?25l") || out.saved {
 		t.Fatalf("offscreen caret not hidden: %q", got)
 	}
@@ -326,8 +326,8 @@ func TestScanWalkBounded(t *testing.T) {
 
 	_ = os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0755)
 	_ = os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("git config"), 0644)
-	_ = os.MkdirAll(filepath.Join(dir, ".dashy"), 0755)
-	_ = os.WriteFile(filepath.Join(dir, ".dashy", "state"), []byte("state"), 0644)
+	_ = os.MkdirAll(filepath.Join(dir, ".zel"), 0755)
+	_ = os.WriteFile(filepath.Join(dir, ".zel", "state"), []byte("state"), 0644)
 	_ = os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0755)
 	_ = os.WriteFile(filepath.Join(dir, "node_modules", "pkg", "index.js"), []byte("js"), 0644)
 
@@ -341,7 +341,7 @@ func TestScanWalkBounded(t *testing.T) {
 		t.Fatalf("scanProjectFiles error: %v", err)
 	}
 
-	want := []string{".dashy/", ".git/", "link_to_src/", "node_modules/", "root.txt", "src/"}
+	want := []string{".git/", ".zel/", "link_to_src/", "node_modules/", "root.txt", "src/"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("direct children = %v, want %v", paths, want)
 	}
@@ -395,7 +395,7 @@ func TestMenuModelSearch(t *testing.T) {
 		t.Fatalf("filtered = %v", got)
 	}
 	m.menu.query = "other gpt"
-	if got := m.menuRows(); len(got) != 1 || got[0].label != "No matches" {
+	if got := m.menuRows(); len(got) != 3 || got[0].label != "No matches" {
 		t.Fatalf("rows = %v", got)
 	}
 }
@@ -500,7 +500,7 @@ func TestTermStateTurn(t *testing.T) {
 	out := captureTerm(t)
 	var ts termState
 	ts.start("")
-	if got := out.String(); got != "\x1b]9;4;3\x07\x1b]2;⠋ dashy\x07" {
+	if got := out.String(); got != "\x1b]9;4;3\x07\x1b]2;⠋ zel\x07" {
 		t.Fatalf("start = %q", got)
 	}
 	out.Reset()
@@ -761,7 +761,7 @@ func TestMenuHeadersSearchCaretAndShortcutBytes(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.openMenu()
 	view := m.menuView()
-	if !strings.Contains(ansi.Strip(view), "dashy v"+strings.TrimPrefix(Version, "v")+"/Menu") || !strings.Contains(view, "▌") || strings.Contains(view, "DashyCaret;0;0") || strings.Contains(view, composerCursorMarker) {
+	if !strings.Contains(ansi.Strip(view), "zel "+strings.TrimPrefix(Version, "v")+"/Menu") || !strings.Contains(view, "▌") || strings.Contains(view, "ZelCaret;0;0") || strings.Contains(view, composerCursorMarker) {
 		t.Fatalf("main header or search caret missing: %q", view)
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mdel")})
@@ -817,7 +817,7 @@ func TestTracingPageListsSessionTrace(t *testing.T) {
 		t.Fatalf("Tracing row opened %v", m.menu.page)
 	}
 	m.menu.trace = []agent.TraceEntry{
-		{Kind: "system", Text: "You are Dashy"},
+		{Kind: "system", Text: "You are Zel"},
 		{Kind: "user", Text: "fix it"},
 		{Kind: "bash", Text: "rg bug"},
 		{Kind: "output", Text: "a\nb"},
@@ -1076,7 +1076,7 @@ func TestEditorReleasesKeyboardProtocol(t *testing.T) {
 	message := tea.KeyMsg{Type: tea.KeyCtrlE}
 	keyboard.filter(current, message)
 	if keyboard.enabled {
-		t.Fatal("Dashy keyboard protocol left active for editor")
+		t.Fatal("Zel keyboard protocol left active for editor")
 	}
 	keyboard.filter(current, editorFinished{})
 	if keyboard.enabled {
@@ -1090,5 +1090,217 @@ func TestEditorReleasesKeyboardProtocol(t *testing.T) {
 	data, err := io.ReadAll(reader)
 	if err != nil || string(data) != "\x1b[<u\x1b[>5u" {
 		t.Fatalf("keyboard handoff: %q, %v", data, err)
+	}
+}
+
+func TestOnboardingStepsPersistProviderAndSelectModel(t *testing.T) {
+	f := newFixture(t, false)
+	m := f.m
+	if m.menu == nil || m.menu.page != menuForm || !m.menu.form.onboarding {
+		t.Fatal("first-run onboarding missing")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Welcome to Zel") || !strings.Contains(view, "Tab / Shift+Tab") {
+		t.Fatalf("onboarding hints missing: %s", view)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("local")})
+	m = key(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.menu.form.step != 0 {
+		t.Fatal("left arrow changed step")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.menu.form.step != 1 || m.menu.form.values[0] != "local" {
+		t.Fatal("Tab did not preserve field")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.menu.form.step != 0 || m.menu.form.input.Value() != "local" {
+		t.Fatal("Shift+Tab did not restore field")
+	}
+	values := []string{"local", "http://127.0.0.1:1/v1", "private-test-key", agent.APIChat}
+	for i, value := range values {
+		m.menu.form.input.SetValue(value)
+		if i == 2 && strings.Contains(m.View(), value) {
+			t.Fatal("API key visible in form")
+		}
+		m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if m.menu.page != menuModel {
+		t.Fatal("provider form did not advance to model selection")
+	}
+	s := m.ctl.Settings()
+	if p := s.Providers["local"]; p.API != agent.APIChat || p.APIKey != "private-test-key" {
+		t.Fatalf("provider: %+v", p)
+	}
+	m.openManualModel()
+	m.menu.form.input.SetValue("local")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.menu.form.input.SetValue("custom-model")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuEffort {
+		t.Fatal("manual model did not open effort picker")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu != nil || m.ctl.Settings().Model != "custom-model" || m.ctl.Settings().Effort != "medium" {
+		t.Fatalf("selection: %+v", m.ctl.Settings())
+	}
+}
+
+func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
+	f := newFixture(t, true)
+	m := f.m
+	m.menu = &menuState{}
+	m.openProviderForm("p", false)
+	m.menu.form.input.SetValue("p")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.menu.form.input.SetValue("invalid")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.form.step != 1 || m.menu.form.err == "" {
+		t.Fatal("invalid provider URL accepted")
+	}
+	m.menu.page = menuSettings
+	m.openSettingForm(1)
+	m.menu.form.input.SetValue("4096")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuSettings || m.ctl.Settings().ShellOutput != 4096 {
+		t.Fatal("output preference not saved")
+	}
+	m.openSettingForm(2)
+	m.menu.form.input.SetValue("0")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuForm || m.menu.form.err == "" {
+		t.Fatal("invalid timeout accepted")
+	}
+	m.menu = &menuState{page: menuProvider, provider: "p", selected: 1}
+	next, _ := m.menuActivate()
+	m = next.(model)
+	if len(m.ctl.Settings().Providers) != 0 || m.ctl.Settings().Provider != "" {
+		t.Fatal("selected provider not deleted safely")
+	}
+}
+
+func TestTracingPrefixFiltersEveryType(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.menu = &menuState{page: menuTracing}
+	for _, kind := range []string{"system", "user", "assistant", "thinking", "bash", "output", "error", "notice", "task", "event", "hook"} {
+		m.menu.trace = append(m.menu.trace, agent.TraceEntry{Kind: kind, Text: "needle text"})
+	}
+	for _, e := range m.menu.trace {
+		m.menu.query = ":" + e.Kind + " needle"
+		rows := m.menuRows()
+		if len(rows) != 1 || rows[0].label != e.Kind {
+			t.Fatalf("query %s: %v", m.menu.query, rows)
+		}
+	}
+	m.menu.query = ":USER\tneedle"
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "user" {
+		t.Fatalf("case/whitespace: %v", rows)
+	}
+	m.menu.query = ":user absent"
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
+		t.Fatalf("unmatched text: %v", rows)
+	}
+	m.menu.query = "needle"
+	if len(m.menuRows()) != len(m.menu.trace) {
+		t.Fatal("ordinary search changed")
+	}
+}
+
+func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", ".hidden"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "folder"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := bareModel(t, dir)
+	m.menu = &menuState{page: menuFiles}
+	m.readDirectory(dir)
+	var names []string
+	for _, f := range m.menu.files {
+		names = append(names, f.name)
+	}
+	if strings.Join(names, ",") != ".,..,folder,.hidden,a.txt" {
+		t.Fatalf("files: %v", names)
+	}
+	m.menu.query = "folder"
+	next, _ := m.menuActivate()
+	m = next.(model)
+	if m.menu.directory != filepath.Join(dir, "folder") || m.menu.query != "" {
+		t.Fatal("filtered directory navigation failed")
+	}
+	m.menu.selected = 1
+	next, _ = m.menuActivate()
+	m = next.(model)
+	if m.menu.directory != dir {
+		t.Fatal("parent navigation failed")
+	}
+}
+
+func TestSingleAccentAndProjectMetadata(t *testing.T) {
+	applyTheme(map[string]string{"accent": "#80b3ad"})
+	for _, color := range []string{string(inputBlue), string(cyan), string(assistantColor), string(infoColor), string(warnColor)} {
+		if color != "#80b3ad" {
+			t.Fatalf("independent accent: %s", color)
+		}
+	}
+	if string(errorColor) == string(inputBlue) || string(queueColor) == string(inputBlue) {
+		t.Fatal("error red or neutral queued pulse lost")
+	}
+	defer applyTheme(nil)
+	if len(agent.AccentColors) != 20 {
+		t.Fatal("expected 20 accents")
+	}
+	rows := infoRows(control.Info{Name: "Project", Description: "Description", Color: "teal"})
+	var text string
+	for _, row := range rows {
+		text += row.label + "\n"
+	}
+	if !strings.Contains(text, "Project\nDescription\nColor: teal") {
+		t.Fatalf("project metadata missing: %s", text)
+	}
+}
+
+func TestFilesEditorRestoresBrowserWithoutChangingDraft(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf edited > \"$1\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "sh "+script)
+	m := bareModel(t, dir)
+	m.setComposer("draft")
+	m.menu = &menuState{page: menuFiles}
+	m.readDirectory(dir)
+	for i, f := range m.menu.files {
+		if f.name == "file.txt" {
+			m.menu.selected = i
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var program *tea.Program
+	var editorErr error
+	program = tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(strings.NewReader("\r")), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if e, ok := msg.(fileEditorFinished); ok {
+			editorErr = e.err
+			go program.Send(tea.QuitMsg{})
+		}
+		return msg
+	}))
+	next, err := program.Run()
+	if err != nil || editorErr != nil {
+		t.Fatalf("program %v editor %v", err, editorErr)
+	}
+	result := next.(model)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "edited" || result.menu == nil || result.menu.page != menuFiles || result.input.Value() != "draft" {
+		t.Fatal("file editing did not restore browser and preserve draft")
 	}
 }

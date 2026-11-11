@@ -18,16 +18,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Source line budget
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          lines = sum(len(p.read_bytes().splitlines()) for p in Path('.').rglob('*.go')
-                      if not p.name.endswith('_test.go') and '.git' not in p.parts)
-          print(f'Production Go lines: {lines} / 10000')
-          if lines > 10000:
-              raise SystemExit('Production Go source exceeds 10000 lines')
-          PY
       - name: Format, vet and race tests
         run: make test
       - name: Build

@@ -13,13 +13,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/mattn/go-isatty"
 
-	"dashy/internal/agent"
-	"dashy/internal/shell"
-	"dashy/internal/tui"
+	"zel/internal/agent"
+	"zel/internal/shell"
+	"zel/internal/tui"
 )
 
 //go:embed help.txt
@@ -124,8 +123,6 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			return modelsCommand(ctx, args[1:], out, diagnostics)
 		case "json":
 			return jsonCommand(ctx, args[1:], in, out, diagnostics)
-		case "setup":
-			return setupCommand(ctx, args[1:], in, out)
 		}
 	}
 	return sessionCommand(ctx, args, in, out)
@@ -138,7 +135,7 @@ func flagSet(name string, define func(*flag.FlagSet)) *flag.FlagSet {
 	return fs
 }
 
-// parseWithConfig parses fs with a --config flag and exports the file as DASHY_CONFIG,
+// parseWithConfig parses fs with a --config flag and exports the file as ZEL_CONFIG,
 // so the agent, its bash tool and helper commands all read the same layers.
 func parseWithConfig(fs *flag.FlagSet, args []string) error {
 	config := fs.String("config", "", "config file merged on top of the others")
@@ -152,7 +149,7 @@ func parseWithConfig(fs *flag.FlagSet, args []string) error {
 	if err != nil {
 		return err
 	}
-	return os.Setenv("DASHY_CONFIG", path)
+	return os.Setenv("ZEL_CONFIG", path)
 }
 
 func viewCommand(args []string) error {
@@ -162,7 +159,7 @@ func viewCommand(args []string) error {
 		return fmt.Errorf("view: %w", err)
 	}
 	if fs.NArg() == 0 {
-		return errors.New("usage: dashy view [-s ID] PATH [PATH ...]")
+		return errors.New("usage: zel view [-s ID] PATH [PATH ...]")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -172,7 +169,7 @@ func viewCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	home, err := agent.DashyHome(cwd)
+	home, err := agent.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
@@ -193,10 +190,10 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 	var asJSON bool
 	fs := flagSet("models", func(fs *flag.FlagSet) { fs.BoolVar(&asJSON, "json", false, "print JSON") })
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return errors.New("usage: dashy models [--json]")
+		return errors.New("usage: zel models [--json]")
 	}
-	cwd, _ := os.Getwd() // only resolves a relative DASHY_HOME, which then reports its own error
-	home, err := agent.DashyHome(cwd)
+	cwd, _ := os.Getwd() // only resolves a relative ZEL_HOME, which then reports its own error
+	home, err := agent.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
@@ -206,7 +203,7 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 	}
 	providers := settings.Providers
 	if len(providers) == 0 {
-		return errors.New("no providers configured: run dashy setup or edit config.toml")
+		return errors.New("no providers configured: open zel to add a provider")
 	}
 	choices, errs := agent.AllModels(ctx, providers)
 	if ctx.Err() != nil {
@@ -234,9 +231,9 @@ func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Write
 }
 
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
-	fs := flagSet("dashy", func(*flag.FlagSet) {})
+	fs := flagSet("zel", func(*flag.FlagSet) {})
 	if err := parseWithConfig(fs, args); err != nil {
-		return fmt.Errorf("%w (see dashy --help)", err)
+		return fmt.Errorf("%w (see zel --help)", err)
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
@@ -255,53 +252,12 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	defer a.Close()
 	running, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	if err := watchProviders(running, a.Settings(), stop); err != nil {
-		return err
-	}
 	tui.Version = Version
 	err = tui.Run(running, a, cwd)
 	if cause := context.Cause(running); ctx.Err() == nil && cause != nil {
 		return cause
 	}
 	return cancelledOr(ctx, err)
-}
-
-// watchProviders fails at once when no provider is configured. Otherwise it lists
-// the models of every provider in the background and calls fail with a guide when
-// none of them answers, so a broken setup ends the session instead of every turn failing.
-func watchProviders(ctx context.Context, s agent.Settings, fail func(error)) error {
-	home, err := agent.DashyHome(".")
-	if err != nil {
-		return err
-	}
-	if len(s.Providers) == 0 {
-		return providerGuide(home, nil)
-	}
-	go func() {
-		listing, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, errs := agent.AllModels(listing, s.Providers)
-		if ctx.Err() == nil && len(errs) == len(s.Providers) {
-			fail(providerGuide(home, errs))
-		}
-	}()
-	return nil
-}
-
-func providerGuide(home string, failures map[string]error) error {
-	var b strings.Builder
-	if len(failures) == 0 {
-		b.WriteString("no provider is configured\n")
-	} else {
-		b.WriteString("no provider answers; listing models failed:\n")
-	}
-	for _, name := range slices.Sorted(maps.Keys(failures)) {
-		fmt.Fprintf(&b, "  %s: %v\n", name, failures[name])
-	}
-	fmt.Fprintf(&b, "\nWhat next:\n  - run dashy setup, or edit %s\n", filepath.Join(home, "config.toml"))
-	b.WriteString("  - check base_url, the API key (or the {{$VAR}} it references) and that the server is running\n")
-	b.WriteString("  - run dashy models to test the connection")
-	return errors.New(b.String())
 }
 
 func cancelledOr(ctx context.Context, err error) error {

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 )
 
 func (c *Controller) Input(input agent.Input) error {
@@ -125,7 +125,7 @@ func (c *Controller) reloadLocked() {
 		c.emit(Event{Kind: "error", Text: err.Error()})
 		return
 	}
-	c.emit(Event{Kind: "notice", Text: "config.toml reloaded; the system prompt was rebuilt."})
+	c.emit(Event{Kind: "notice", Text: "Settings and ZEL.md reloaded; the system prompt was rebuilt."})
 }
 
 func (c *Controller) Rename(title string) error {
@@ -236,7 +236,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	c.view(func() {
 		s := c.a.Settings()
-		info = Info{Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: s.DBPath,
+		info = Info{Name: s.Name, Description: s.Description, Color: s.Color, Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: s.DBPath,
 			Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: c.a.ConfigFiles(),
 			Messages: c.a.UserMessages(), Tasks: c.a.RunningTasks(), Context: c.a.ContextTokens()}
 		info.Usage, info.Requests = c.a.SessionUsage()
@@ -248,4 +248,15 @@ func (c *Controller) Info() (info Info, err error) {
 func (c *Controller) Withdraw(id uint64) (removed bool) {
 	c.view(func() { removed = c.a.Queue().Withdraw(id) })
 	return removed
+}
+
+// UpdateSettings persists UI preferences and providers while the session is idle.
+func (c *Controller) UpdateSettings(s agent.Settings) (err error) {
+	c.view(func() {
+		if err = c.requireIdle("Wait for the active turn before changing settings."); err != nil {
+			return
+		}
+		err = c.a.UpdateSettings(s)
+	})
+	return err
 }

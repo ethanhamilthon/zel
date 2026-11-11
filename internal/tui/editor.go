@@ -22,7 +22,7 @@ func (m model) editInput() (tea.Model, tea.Cmd) {
 	text := m.input.Value()
 	m.withdrawSteer()
 	m = m.closeMenu()
-	file, err := os.CreateTemp("", "dashy-input-*.md")
+	file, err := os.CreateTemp("", "zel-input-*.md")
 	if err != nil {
 		return m.reject(err)
 	}
@@ -37,9 +37,9 @@ func (m model) editInput() (tea.Model, tea.Cmd) {
 		return m.reject(err)
 	}
 	editor := cmp.Or(m.ctl.Settings().UI.Editor, os.Getenv("VISUAL"), os.Getenv("EDITOR"), "nvim")
-	command := exec.Command("sh", "-c", "exec "+editor+" \"$1\"", "dashy-editor", path)
+	command := exec.Command("sh", "-c", "exec "+editor+" \"$1\"", "zel-editor", path)
 	command.Dir = m.cwd
-	// Bypass cursorOutput: its Dashy caret overlay would hide Neovim's cursor
+	// Bypass cursorOutput: its Zel caret overlay would hide Neovim's cursor
 	// and modify the editor's own alternate-screen and cursor sequences.
 	command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	m.editorActive = true

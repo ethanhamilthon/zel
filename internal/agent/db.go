@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS items (
 ) WITHOUT ROWID;`
 
 var migrations = []string{
+	`CREATE TABLE preferences (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);`,
 	`ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT '';
 	 ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';
 	 ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT '';`,
@@ -71,7 +72,7 @@ func migrate(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// openDB opens the database at path, creating it private to the user. Several dashy
+// openDB opens the database at path, creating it private to the user. Several zel
 // processes share it: WAL lets readers run beside a writer, and writers wait for each other.
 func openDB(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

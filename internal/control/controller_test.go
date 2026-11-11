@@ -1,8 +1,6 @@
 package control
 
 import (
-	"dashy/internal/agent"
-	"dashy/internal/shell"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"zel/internal/agent"
+	"zel/internal/shell"
 )
 
 func TestTurnEmitsStartedThenExactlyOneDone(t *testing.T) {
@@ -127,7 +127,7 @@ func TestBusyRejectionsAndQuitDuringTurn(t *testing.T) {
 
 func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h := newHarness(t, &fakeModel{})
-	local := filepath.Join(h.dir, "dashy.toml")
+	local := filepath.Join(h.dir, "ZEL.md")
 	writeRaw := func(content string) {
 		_ = os.MkdirAll(filepath.Dir(local), 0700)
 		if err := os.WriteFile(local, []byte(content), 0600); err != nil {
@@ -135,7 +135,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 		}
 	}
 	write := func(text string) {
-		writeRaw("[system.main]\ntype = \"text\"\nvalue = \"" + text + "\"\n")
+		writeRaw(text)
 	}
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
@@ -146,7 +146,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h.send("a")
 	turns(1)
 	if r := h.model.requests()[0]; strings.Contains(r, "v1") {
-		t.Fatalf("a dashy.toml changed after startup was used without /reload: %s", r)
+		t.Fatalf("a ZEL.md changed after startup was used without /reload: %s", r)
 	}
 	h.ctl.Reload()
 	h.model.mu.Lock()
@@ -154,7 +154,13 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.await("request b", func([]Event) bool { return len(h.model.requests()) == 2 })
-	writeRaw("[agent]\nshell_timeout = 42\n[system.main]\ntype = \"text\"\nvalue = \"v2\"\n")
+	writeRaw("v2")
+	home, _ := agent.ZelHome(h.dir)
+	settings := h.ctl.Settings()
+	settings.ShellTimeout = 42
+	if err := agent.WriteConfig(home, settings); err != nil {
+		t.Fatal(err)
+	}
 	h.ctl.Reload()
 	if !h.ctl.Status().Busy {
 		t.Fatal("reload interrupted the running turn")
@@ -277,7 +283,7 @@ func newHarness(t *testing.T, model *fakeModel) *harness {
 func newHarnessWith(t *testing.T, model *fakeModel, pre func(*agent.Agent)) *harness {
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
-	t.Setenv("DASHY_HOME", home)
+	t.Setenv("ZEL_HOME", home)
 	server := httptest.NewServer(model)
 	t.Cleanup(server.Close)
 	s := agent.DefaultSettings()

@@ -23,7 +23,7 @@ func (a *Agent) acquire() error {
 	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if errors.Is(err, syscall.EWOULDBLOCK) {
 		file.Close()
-		return fmt.Errorf("session is in use by another dashy process")
+		return fmt.Errorf("session is in use by another zel process")
 	}
 	if err != nil {
 		file.Close()
@@ -74,8 +74,8 @@ func (a *Agent) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
 
 func (a *Agent) Close() {
 	if a.hooks != nil && a.db != nil {
-		a.fire("session_end", nil)
-		a.hooks.wg.Wait()
+		a.fire("session_close", nil)
+		a.fire("app_exit", nil)
 	}
 	a.release()
 	if a.db != nil {
@@ -130,7 +130,8 @@ func (a *Agent) changeSession(id string) error {
 			return err
 		}
 	}
-	a.fire("session_end", nil)
+	a.fire("session_close", nil)
+	a.takePasted() // Do not carry output from the previous session.
 	a.release()
 	*a = *next
 	a.fire("session_start", nil)
@@ -139,9 +140,9 @@ func (a *Agent) changeSession(id string) error {
 
 // shellEnv is exported to every bash tool call. API keys and settings are never exported.
 func (a *Agent) shellEnv() map[string]string {
-	env := map[string]string{"DASHY_SESSION_ID": a.SessionID()}
+	env := map[string]string{"ZEL_SESSION_ID": a.SessionID()}
 	if a.sock != nil {
-		env["DASHY_ENDPOINT"] = a.sock.path
+		env["ZEL_ENDPOINT"] = a.sock.path
 	}
 	return env
 }

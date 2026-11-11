@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +48,18 @@ func TestParseAll(t *testing.T) {
 	want := []string{"run", "echo", "hi"}
 	if !reflect.DeepEqual(positional, want) {
 		t.Errorf("positional = %v, want %v", positional, want)
+	}
+}
+
+func TestJSONWithoutProvidersReturnsSetupRequired(t *testing.T) {
+	t.Setenv("ZEL_HOME", t.TempDir())
+	t.Setenv("ZEL_CONFIG", "")
+	var out, diagnostics strings.Builder
+	err := Run(context.Background(), []string{"json"}, strings.NewReader("{\"id\":\"1\",\"type\":\"input\",\"text\":\"hello\"}\n"), &out, &diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"code":"setup_required"`) || strings.Contains(out.String(), "zel setup") {
+		t.Fatalf("output: %s", out.String())
 	}
 }

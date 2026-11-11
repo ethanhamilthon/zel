@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"dashy/internal/shell"
+	"zel/internal/shell"
 )
 
 type Message struct {
@@ -47,7 +47,7 @@ func SocketPath(runDir, id string) string {
 		return candidate
 	}
 	// When runDir is too long for a unix socket (long macOS temp paths), use /tmp with a hash.
-	return filepath.Join("/tmp", "dashy-"+shortName)
+	return filepath.Join("/tmp", "zel-"+shortName)
 }
 
 type sessionSocket struct {
@@ -115,7 +115,7 @@ func (s *sessionSocket) admit(message Message, err error) reply {
 		case !s.slots.reserve(1):
 			return reply{Error: fmt.Sprintf("view: at most %d new images per model request", MaxPendingImages)}
 		}
-		if !s.queue.Push(Input{Text: "<view>\nImage queued by dashy view.\n</view>", Images: []shell.Image{*message.Image}, Notice: true}) {
+		if !s.queue.Push(Input{Text: "<view>\nImage queued by zel view.\n</view>", Images: []shell.Image{*message.Image}, Notice: true}) {
 			s.slots.release(1)
 			return reply{Error: "input queue is full"}
 		}
@@ -146,7 +146,7 @@ func (s *sessionSocket) retire() {
 	<-s.done
 }
 
-// imageSlots counts dashy view images admitted since the last model request.
+// imageSlots counts zel view images admitted since the last model request.
 type imageSlots struct {
 	mu sync.Mutex
 	n  int
@@ -176,23 +176,23 @@ func (s *imageSlots) sent() {
 	s.n = 0
 }
 
-// validImage only checks the data URL type: dashy view already decoded the image.
+// validImage only checks the data URL type: zel view already decoded the image.
 func validImage(img shell.Image) bool {
 	return strings.HasPrefix(img.URL, "data:image/png;base64,") || strings.HasPrefix(img.URL, "data:image/jpeg;base64,")
 }
 
-// Endpoint resolves a session socket; without an ID it uses DASHY_ENDPOINT, which every dashy shell exports.
+// Endpoint resolves a session socket; without an ID it uses ZEL_ENDPOINT, which every zel shell exports.
 func Endpoint(cwd, id string) (string, error) {
 	if id == "" {
-		if endpoint := os.Getenv("DASHY_ENDPOINT"); endpoint != "" {
+		if endpoint := os.Getenv("ZEL_ENDPOINT"); endpoint != "" {
 			return endpoint, nil
 		}
-		return "", fmt.Errorf("outside a dashy shell, pass -s SESSION_ID")
+		return "", fmt.Errorf("outside a zel shell, pass -s SESSION_ID")
 	}
 	if filepath.Base(id) != id {
 		return "", fmt.Errorf("invalid session ID: %s", id)
 	}
-	home, err := DashyHome(cwd)
+	home, err := ZelHome(cwd)
 	if err != nil {
 		return "", err
 	}

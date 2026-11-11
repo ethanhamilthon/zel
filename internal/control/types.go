@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 )
 
 // Event is one ordered notification from the controller. Consumers receive
@@ -53,6 +53,7 @@ func fail(code, format string, args ...any) error {
 // Info describes the current session for /info and the JSON info request.
 type Info struct {
 	Session, Title, Project, DB string
+	Name, Description, Color    string
 	Provider, Model, Effort     string
 	Configs                     []string // config layers that exist, in merge order
 	Messages, Requests, Tasks   int      // user messages, model requests with usage, running tasks

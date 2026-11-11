@@ -1,6 +1,6 @@
 # JSON mode
 
-`dashy json [--config FILE]` drives the same controller as the TUI over
+`zel json [--config FILE]` drives the same controller as the TUI over
 newline-delimited JSON: one request per stdin line, one result or event per
 stdout line. Diagnostics go to stderr. End of stdin waits for the active turn,
 then quits and saves the session.
@@ -25,7 +25,7 @@ Every request has a client-chosen `id` and a `type`, and gets exactly one
 | `models` | | `{models: [{provider, model}], failures: {provider: text}}` |
 | `select_model` | `provider`, `model`, optional `effort` (defaults to `medium`) | - |
 | `config` | | effective configuration without secrets |
-| `info` | | `{session, title, project, db_path, provider, model, effort, configs, messages, requests, tasks, context_tokens, usage: {input_tokens, output_tokens, cached_tokens}}` (available during a turn; `configs` are the existing layers in merge order) |
+| `info` | | `{session, title, project, db_path, provider, model, effort, name, description, color, configs, messages, requests, tasks, context_tokens, usage: {input_tokens, output_tokens, cached_tokens}}` (available during a turn; `configs` are the existing layers in merge order) |
 | `tasks` | | `{tasks: [{id, command, status, started, exit_code}]}` |
 | `show_task` | `task` | `{output}`: tail of the task log |
 | `stop_task` | `task` | - |
@@ -38,7 +38,7 @@ Every request has a client-chosen `id` and a `type`, and gets exactly one
 ```
 
 Error codes: `busy` and `setup_required` are expected states (retry later or
-configure dashy); `invalid` is a bad request; `failed` is everything else.
+open Zel to configure providers); `invalid` is a bad request; `failed` is everything else.
 
 ## Events
 
@@ -54,9 +54,9 @@ configure dashy); `invalid` is a bad request; `failed` is everything else.
 - `done`: `status` (`ok`, `error`, `cancelled`), `text` (final answer),
   `error`, `unsent` (queued texts the model never saw), `title`,
   `context_tokens`.
-- `notice`, `error`: one-off messages in `text`. When no provider answers the
-  model listing at start, an `error` event carries a setup guide and dashy
-  exits with status 1.
+- `notice`, `error`: one-off messages in `text`. Model-list failures are returned
+  by the `models` request and do not terminate the session. Configure providers
+  through the interactive app; unconfigured input returns `setup_required`.
 
 `meta` holds `duration_ms`, `input_tokens`, `output_tokens`, `cached_tokens`,
 `context_tokens` when known.

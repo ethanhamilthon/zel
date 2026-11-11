@@ -16,7 +16,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if dir := os.Getenv("DASHY_TEST_OWNER"); dir != "" {
+	if dir := os.Getenv("ZEL_TEST_OWNER"); dir != "" {
 		cmd := Command(context.Background(), dir, nil, "touch ready; sleep 1; touch survived")
 		if err := cmd.Start(); err != nil {
 			os.Exit(2)
@@ -32,8 +32,8 @@ func TestFreshStateEnvironmentAndBASHENV(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("BASH_ENV"), []byte("echo rc-ran\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"DASHY_SESSION_ID": "s1"} }}
-	first := execute(r, context.Background(), "x=1; cd /; echo $DASHY_SESSION_ID ${PAGER}", 5*time.Second, 0)
+	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
+	first := execute(r, context.Background(), "x=1; cd /; echo $ZEL_SESSION_ID ${PAGER}", 5*time.Second, 0)
 	second := execute(r, context.Background(), "echo \"[$x]\" $PWD", 5*time.Second, 0)
 	if first.Output != "s1 cat\n" || strings.Contains(first.Output, "rc-ran") {
 		t.Fatalf("first: %q", first.Output)
@@ -94,16 +94,16 @@ func TestPipeHoldingDescendantIsKilled(t *testing.T) {
 }
 
 func TestBlockOnlyVariablesAreNotInherited(t *testing.T) {
-	t.Setenv("DASHY_MODE", "tui")
-	t.Setenv("DASHY_SOURCE", "startup")
-	t.Setenv("DASHY_ENDPOINT", "/run/inherited.sock")
-	const script = `echo "mode=$DASHY_MODE source=$DASHY_SOURCE endpoint=$DASHY_ENDPOINT"`
+	t.Setenv("ZEL_MODE", "tui")
+	t.Setenv("ZEL_SOURCE", "startup")
+	t.Setenv("ZEL_ENDPOINT", "/run/inherited.sock")
+	const script = `echo "mode=$ZEL_MODE source=$ZEL_SOURCE endpoint=$ZEL_ENDPOINT"`
 	dir := t.TempDir()
 	got, err := Command(context.Background(), dir, nil, script).Output()
 	if err != nil || string(got) != "mode= source= endpoint=\n" {
 		t.Fatalf("inherited: %q %v", got, err)
 	}
-	got, err = Command(context.Background(), dir, map[string]string{"DASHY_MODE": "print", "DASHY_SOURCE": "new", "DASHY_ENDPOINT": "/run/own.sock"}, script).Output()
+	got, err = Command(context.Background(), dir, map[string]string{"ZEL_MODE": "print", "ZEL_SOURCE": "new", "ZEL_ENDPOINT": "/run/own.sock"}, script).Output()
 	if err != nil || string(got) != "mode=print source=new endpoint=/run/own.sock\n" {
 		t.Fatalf("block env: %q %v", got, err)
 	}
@@ -112,7 +112,7 @@ func TestBlockOnlyVariablesAreNotInherited(t *testing.T) {
 func TestCommandDiesWithOwner(t *testing.T) {
 	dir := t.TempDir()
 	owner := exec.Command(os.Args[0], "-test.run=^$")
-	owner.Env = append(os.Environ(), "DASHY_TEST_OWNER="+dir)
+	owner.Env = append(os.Environ(), "ZEL_TEST_OWNER="+dir)
 	if err := owner.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +219,25 @@ func decodePreview(t *testing.T, img Image) (image.Image, string, []byte) {
 
 func run(t *testing.T, command string, timeout time.Duration, limit int) Result {
 	t.Helper()
-	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"DASHY_SESSION_ID": "s1"} }}
+	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
 	return execute(r, context.Background(), command, timeout, limit)
 }
 
 func execute(r *Runner, ctx context.Context, command string, timeout time.Duration, limit int) Result {
 	result, _ := r.Run(ctx, command, timeout, limit, nil)
 	return result
+}
+
+func TestOutputBudgetFourKiBAndLargeWrites(t *testing.T) {
+	for _, limit := range []int{1, 5, 4096} {
+		b := NewOutputBuffer(limit)
+		input := strings.Repeat("A", limit/2) + strings.Repeat("X", 100_000) + strings.Repeat("Z", limit-limit/2)
+		b.Write([]byte(input))
+		if !strings.HasPrefix(b.Text(), strings.Repeat("A", limit/2)) || !strings.HasSuffix(b.Text(), strings.Repeat("Z", limit-limit/2)) || strings.Contains(b.Text(), "XXXX") {
+			t.Fatalf("wrong head/tail at limit %d", limit)
+		}
+		if cap(b.tail) > limit*2+8 {
+			t.Fatalf("retained oversized backing buffer: %d", cap(b.tail))
+		}
+	}
 }

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"dashy/internal/shell"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"zel/internal/shell"
 )
 
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
@@ -115,7 +115,7 @@ func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
 	home := t.TempDir()
-	t.Setenv("DASHY_HOME", home)
+	t.Setenv("ZEL_HOME", home)
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL, APIKey: "sk-secret-123"}
@@ -505,7 +505,7 @@ func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Agent {
 func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(home, dir string)) *Agent {
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
-	t.Setenv("DASHY_HOME", home)
+	t.Setenv("ZEL_HOME", home)
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
 	s := DefaultSettings()

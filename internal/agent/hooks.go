@@ -1,85 +1,76 @@
 package agent
 
 import (
-	"cmp"
 	"context"
-	"os"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"zel/internal/shell"
 )
 
-// hookRunner runs [hooks.*] commands in the background and keeps the output of
-// paste_output hooks until the next turn.
+var HookEvents = []string{"app_start", "app_exit", "session_start", "session_close", "first_message", "user_message", "turn_start", "turn_end", "bash_start", "bash_end", "model_request_start", "model_request_end", "error"}
+
+// Hooks run in layer order. Only the turn goroutine consumes their output;
+// output never schedules a turn by itself.
 type hookRunner struct {
-	wg     sync.WaitGroup
 	mu     sync.Mutex
 	pasted []string
 }
 
-// fileVars are passed to hooks as paths of temporary files holding the value.
-var fileVars = []string{"DASHY_MESSAGE_FILE", "DASHY_COMMAND_FILE"}
-
-// fire starts the enabled hooks subscribed to event. The environment is captured now,
-// on the calling goroutine; the commands run in the background.
 func (a *Agent) fire(event string, vars map[string]string) {
-	settings := a.Settings()
-	var hooks []Hook
-	for _, h := range settings.Hooks {
-		if h.Enabled && (slices.Contains(h.Events, event) || slices.Contains(h.Events, "*")) {
-			hooks = append(hooks, h)
-		}
-	}
-	if len(hooks) == 0 || a.hooks == nil {
+	if a.hooks == nil {
 		return
 	}
-	env := map[string]string{"DASHY_EVENT": event, "DASHY_PROVIDER": settings.Provider, "DASHY_MODEL": settings.Model,
-		"DASHY_EFFORT": settings.Effort, "DASHY_SESSION_TITLE": cmp.Or(a.title, a.DefaultTitle()), "DASHY_MODE": a.opts.Mode}
-	var files []string
-	for k, v := range vars {
-		if slices.Contains(fileVars, k) {
-			f, err := os.CreateTemp("", "dashy-hook-*")
-			if err != nil {
-				continue
-			}
-			_, _ = f.WriteString(v)
-			f.Close()
-			v = f.Name()
-			files = append(files, v)
+	settings := a.Settings()
+	closing := event == "session_close" || event == "app_exit"
+	for _, h := range settings.Hooks {
+		if !slices.Contains(h.Events, event) {
+			continue
 		}
-		env[k] = v
-	}
-	var done sync.WaitGroup
-	for _, h := range hooks {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.Timeout)*time.Second)
+		env := map[string]string{
+			"ZEL_EVENT": event, "ZEL_PROVIDER": settings.Provider, "ZEL_MODEL": settings.Model,
+			"ZEL_EFFORT": settings.Effort, "ZEL_MODE": a.opts.Mode,
+			"ZEL_CONTEXT_TOKENS": strconv.FormatInt(a.ContextTokens(), 10),
+		}
+		for k, v := range vars {
+			env[k] = v
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(HookTimeout)*time.Second)
 		cmd := a.shCommand(ctx, h.Run, env)
-		a.hooks.wg.Add(1)
-		done.Add(1)
-		go func() {
-			defer a.hooks.wg.Done()
-			defer done.Done()
-			defer cancel()
-			out, err := cmd.Output()
-			if h.PasteOutput && err == nil && strings.TrimSpace(string(out)) != "" {
-				a.hooks.mu.Lock()
-				a.hooks.pasted = append(a.hooks.pasted, "<hook-output name=\""+h.Name+"\">\n"+strings.TrimRight(string(out), "\n")+"\n</hook-output>")
-				a.hooks.mu.Unlock()
-			}
-		}()
-	}
-	if len(files) > 0 {
-		go func() {
-			done.Wait()
-			for _, f := range files {
-				os.Remove(f)
-			}
-		}()
+		if h.Dir != "" {
+			cmd.Dir = h.Dir
+		}
+		// Kill descendants too; inherited pipes must not hold up shutdown.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		out, stderr := shell.NewOutputBuffer(settings.ShellOutput), shell.NewOutputBuffer(settings.ShellOutput)
+		cmd.Stdout, cmd.Stderr = out, stderr
+		err := cmd.Run()
+		cancel()
+		text := strings.TrimSpace(out.Text())
+		if text != "" {
+			a.LogEvent("hook", Redact(settings, h.Name+"\n"+text))
+		}
+		if text := strings.TrimSpace(stderr.Text()); text != "" {
+			a.LogEvent("error", Redact(settings, h.Name+" stderr:\n"+text))
+		}
+		if err != nil {
+			a.LogEvent("error", Redact(settings, fmt.Sprintf("Hook %s failed: %v", h.Name, err)))
+			continue
+		}
+		if !closing && text != "" {
+			a.hooks.mu.Lock()
+			a.hooks.pasted = append(a.hooks.pasted, "<hook-output event=\""+event+"\">\n"+strings.TrimRight(out.Text(), "\n")+"\n</hook-output>")
+			a.hooks.mu.Unlock()
+		}
 	}
 }
 
-// takePasted returns the hook output queued for the next turn.
 func (a *Agent) takePasted() []string {
 	if a.hooks == nil {
 		return nil
@@ -90,5 +81,4 @@ func (a *Agent) takePasted() []string {
 	a.hooks.pasted = nil
 	return pasted
 }
-
 func millis(d time.Duration) string { return strconv.FormatInt(d.Milliseconds(), 10) }

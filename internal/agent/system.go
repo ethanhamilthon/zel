@@ -12,7 +12,7 @@ import (
 const systemBlockTimeout = 30 * time.Second
 
 // instructions returns the session's system prompt. It is assembled once and stored
-// in the history, so a resumed session keeps its prompt until /reload or /new.
+// in the history, so a resumed session keeps its prompt until Reload or New session.
 func (a *Agent) instructions(ctx context.Context) (string, error) {
 	if a.promptFrozen {
 		return a.prompt, nil
@@ -31,41 +31,33 @@ func (a *Agent) instructions(ctx context.Context) (string, error) {
 	return prompt, nil
 }
 
-// assemblePrompt joins the [system.*] blocks in file order: text blocks as-is,
-// bash blocks as their stdout when they exit 0.
-func (a *Agent) assemblePrompt(ctx context.Context) string {
+// assemblePrompt joins project Markdown bodies in layer order.
+func (a *Agent) assemblePrompt(_ context.Context) string {
 	var parts []string
 	for _, b := range a.Settings().System {
-		text := b.Value
-		if b.Type == "bash" {
-			text = a.runSystemBlock(ctx, b.Value)
-		}
-		if strings.TrimSpace(text) != "" {
-			parts = append(parts, strings.TrimRight(text, "\n"))
+		if strings.TrimSpace(b.Value) != "" {
+			parts = append(parts, strings.TrimRight(b.Value, "\n"))
 		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func (a *Agent) runSystemBlock(ctx context.Context, script string) string {
-	ctx, cancel := context.WithTimeout(ctx, systemBlockTimeout)
-	defer cancel()
-	out, err := a.shCommand(ctx, script, map[string]string{"DASHY_MODE": a.opts.Mode}).Output()
-	if err != nil {
-		return ""
-	}
-	return string(out)
-}
-
-// shCommand runs script with sh -c in the session directory with DASHY_* variables.
+// shCommand runs script with sh -c in the session directory with ZEL_* variables.
 func (a *Agent) shCommand(ctx context.Context, script string, extra map[string]string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = a.Shell.Dir
-	cmd.Env = os.Environ()
+	// Do not leak another hook's event payload into this event.
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "ZEL_") && key != "ZEL_CONFIG" {
+			continue
+		}
+		cmd.Env = append(cmd.Env, entry)
+	}
 	for k, v := range a.shellEnv() {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.Env = append(cmd.Env, "DASHY_HOME="+a.home, "DASHY_CWD="+a.Shell.Dir)
+	cmd.Env = append(cmd.Env, "ZEL_HOME="+a.home, "ZEL_CWD="+a.Shell.Dir)
 	for k, v := range extra {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

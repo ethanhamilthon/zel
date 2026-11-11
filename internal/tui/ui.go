@@ -16,8 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"dashy/internal/agent"
-	"dashy/internal/control"
+	"zel/internal/agent"
+	"zel/internal/control"
 )
 
 type entry = agent.Record
@@ -117,13 +117,19 @@ func newModel(a *agent.Agent, cwd string) model {
 	ctl := control.New(a, func(e control.Event) { events.Push(e) })
 	linkBase = cwd
 	m := model{ctl: ctl, events: events, input: input, viewport: pager{Width: 80, Height: 24}, width: 80, height: 24, cwd: cwd}
-	if home, err := agent.DashyHome(cwd); err == nil {
+	if home, err := agent.ZelHome(cwd); err == nil {
 		m.attachments = filepath.Join(home, "attachments")
 	}
 	if session, err := ctl.Session(); err == nil {
 		m.entries, m.contextTokens = session.Records, session.Context
 	}
 	m.refresh(true)
+	if len(ctl.Settings().Providers) == 0 {
+		m.menu = &menuState{}
+		m.openProviderForm("", true)
+	} else if ctl.Settings().Model == "" {
+		m.menu = &menuState{page: menuModel}
+	}
 	return m
 }
 
@@ -254,6 +260,16 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.refresh(true)
 		return m, nil
+	case fileEditorFinished:
+		m.editorActive = false
+		if v.err != nil {
+			return m.reject(v.err)
+		}
+		if m.menu != nil && m.menu.page == menuFiles {
+			m.readDirectory(m.menu.directory)
+		}
+		m.refresh(true)
+		return m, nil
 	case editorFinished:
 		m.editorActive = false
 		if v.err != nil {
@@ -312,8 +328,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case control.Event:
 		return m.handleControl(v)
 	case menuShortcut:
+		if m.menu != nil && m.menu.page == menuForm {
+			return m, nil
+		}
 		return m.openMenuPage(menuPage(v))
 	case tea.KeyMsg:
+		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" {
+			return m.formKey(v)
+		}
 		// Terminals paste only text: an image-only clipboard arrives as an
 		// empty bracketed paste (foot's Ctrl+Shift+V, Hyprland's Cmd+V).
 		if v.Paste && len(v.Runes) == 0 {
@@ -427,6 +449,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
 	}
 	if m.menu != nil {
+		if m.menu.page == menuForm {
+			var cmd tea.Cmd
+			m.menu.form.input, cmd = m.menu.form.input.Update(msg)
+			return m, cmd
+		}
 		if searchableMenu(m.menu.page) {
 			cmd := m.updateMenuSearch(msg)
 			return m, cmd
@@ -469,7 +496,7 @@ func (m model) View() string {
 		lines = m.sel.highlight(lines, m.viewport.Width)
 		row, column = 0, 0
 	}
-	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;DashyCaret;%d;%d\x07", row, column)
+	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
 }
 
 func (m model) sendInput(input agent.Input) (tea.Model, tea.Cmd) {

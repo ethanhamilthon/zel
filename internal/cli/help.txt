@@ -1,67 +1,74 @@
-dashy - minimal AI coding agent
+zel - minimal AI coding agent
 
 USAGE
-  dashy [--config FILE]
-  dashy setup
-  dashy json [--config FILE]
-  dashy models [--json]
-  dashy tasks run [-s ID] COMMAND...
-  dashy tasks list|status|stop [-s ID] [TASK]
-  dashy view [-s ID] PATH...
-  dashy events [-s ID]
-  dashy version
-  dashy --help | -h | help
+  zel [--config FILE]
+  zel json [--config FILE]
+  zel models [--json]
+  zel tasks run [-s ID] COMMAND...
+  zel tasks list|status|stop [-s ID] [TASK]
+  zel view [-s ID] PATH...
+  zel events [-s ID]
+  zel version
+  zel --help | -h | help
 
-FLAGS & COMMANDS
-  --config FILE   Merge FILE on top of all other config layers; it must exist.
-  --json          With models: print {models: [{provider, model}], failures} as JSON.
-  -s ID           Target a running session for tasks/view; defaults to DASHY_ENDPOINT.
-  --help, -h      Show this help reference.
-  setup           Create $DASHY_HOME/config.toml: provider, API key, model and effort.
-  json            Drive a session with newline-delimited JSON on stdin/stdout; see docs/JSON.md.
-  models          Print PROVIDER<TAB>MODEL for configured providers. Errors go to stderr.
-  tasks run       Start a background command in a running TUI session. Output goes to a
-                  private log. The session receives a <task-result> when it ends.
-  events          Print the notices and errors a session showed, oldest first.
-  tasks list      List background tasks of the target session.
-  tasks status    Show one task's state and output log.
-  tasks stop      Stop a running task and its process group.
-  view            Queue PNG/JPEG images in the target session without blocking its turn.
-  version         Print the version.
+GETTING STARTED
+  Run zel in a terminal. First-run onboarding adds your provider, then lets you
+  choose a model and reasoning effort. Manage providers and preferences through
+  Ctrl+K > Providers / Settings. There is no setup command or TOML config.
+  Preferences and API keys are stored locally in ~/.zel/zel.db, not encrypted.
 
-CONFIGURATION
-  Layers, each merged on top of the previous: $DASHY_HOME/config.toml, every dashy.toml
-  from / down to the project directory, then --config FILE. Later layers override set
-  keys; [ui.events], [ui.theme] and [provider.NAME] merge by key; [system.NAME] and
-  [hooks.NAME] replace an entry of the same name. Nothing can be unset.
-  "{{$VAR}}" in string values reads $VAR from the environment; db_path expands "~".
-  [agent]            db_path, provider, model, effort, reasoning_summary, shell_output,
-                     shell_timeout. The Models menu switches this session and writes defaults into
-                     the layer each key came from; saved sessions keep their model.
-                     Reasoning effort defaults to medium when omitted or empty.
-  [ui.events]        turn_stats: the duration and step count of an answer.
-                     All on by default; the chat itself shows messages and errors only,
-                     the Tracing menu shows the system prompt, tools, thoughts and events.
-  [ui.theme]         Colors: input_bg, select_bg, foreground, muted, dim, code, accent,
-                     heading, assistant, info, warn, error.
-  [provider.NAME]    base_url and optional api_key.
-  [system.NAME]      System prompt blocks in file order: type "text" appends value; type
-                     "bash" runs value with sh -c and appends stdout when it exits 0.
-  [hooks.NAME]       events (or "*"), run, timeout (default 10s), enabled, paste_output.
-                     Hooks run with sh -c and DASHY_EVENT and related DASHY_* variables;
-                     paste_output queues non-empty stdout for the next turn.
-  The system prompt is stored in session history; /reload and /new re-read all layers.
-  Commands run with the user's permissions and network access; it is not a sandbox.
-  The TUI and json mode exit with a setup guide when no provider is configured, or when
-  the model listing of every provider fails (checked in the background at start).
+COMMANDS
+  --config FILE   Load this ZEL.md-format instruction file after all other layers.
+  json            Newline-delimited JSON controller; see docs/JSON.md.
+  models          List PROVIDER<TAB>MODEL; --json prints {models, failures}.
+  tasks run       Start a background command in a running session. Its result
+                  arrives as a <task-result>; task logs stay on disk.
+  tasks list      List the target session's background tasks.
+  tasks status    Show task state and output log.
+  tasks stop      Stop a task and its process group.
+  view            Queue PNG/JPEG images without blocking the active turn.
+  events          Print the session event log, oldest first.
+  -s ID           Target a running session; defaults to ZEL_ENDPOINT.
 
-ENVIRONMENT VARIABLES
-  DASHY_HOME        State directory (default ~/.dashy), including config.toml, dashy.db, locks/,
-                    run/ sockets, attachments/, and private tasks/ output logs.
-  DASHY_CONFIG      Absolute path of the --config file; set by the flag, inherited by tools.
-  DASHY_SESSION_ID  Active session ID, exported to the bash tool, system blocks and hooks.
-  DASHY_ENDPOINT    This session's Unix socket for tasks/view; never inherited from a parent.
-  DASHY_MODE        Client mode for system blocks and hooks: 'tui' or 'json'.
+PROJECT INSTRUCTIONS
+  Load $ZEL_HOME/ZEL.md, then ZEL.md from / down to the working directory, then
+  --config FILE. Missing implicit files are skipped; the explicit file must exist.
+  YAML front matter accepts name, description, color, and hooks. Markdown after
+  the front matter is the system prompt. Bodies and hooks accumulate; later
+  metadata overrides earlier values. A hook runs in its defining file's directory.
+  Color selects one of 20 calm accents; default terracotta. Errors remain red.
+  A session keeps its saved prompt until Reload or New session.
 
-TERMINAL STATUS
-  The TUI emits OSC 7501 reports.
+HOOKS
+  app_start, app_exit, session_start, session_close, first_message, user_message,
+  turn_start, turn_end, bash_start, bash_end, model_request_start,
+  model_request_end, error. Each event maps to a shell command or command list.
+  Hooks receive ZEL_EVENT and relevant ZEL_* event data (see README.md).
+  A hook has a 10-second timeout. Successful nonempty stdout enters model context
+  at a safe request boundary; it never starts a new turn. Closing output, stderr,
+  and failures go to Tracing. Hooks and Bash share a head/tail output budget:
+  4096 bytes keeps the first 2048 + marker + last 2048; zero is unlimited.
+
+ENVIRONMENT
+  ZEL_HOME        State directory, default ~/.zel: zel.db, ZEL.md, locks/, run/,
+                  attachments/, tasks/, and events/.
+  ZEL_CONFIG      Explicit instruction file; set by --config, inherited by tools.
+  ZEL_SESSION_ID  Active session ID, exported to Bash and hooks.
+  ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
+  ZEL_MODE        tui or json for hooks.
+  VISUAL, EDITOR  External editor fallback, after the UI preference; default nvim.
+
+INTERFACE
+  Ctrl+K Menu, Ctrl+M Models, Ctrl+R Resume, Ctrl+I Info, Ctrl+T Tracing,
+  Ctrl+E external draft editor. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
+  Onboarding: Tab / Shift+Tab switch steps, Left / Right move the cursor,
+  Enter advances. Navigation hints appear at the bottom of the screen.
+  Files includes hidden files, . and ..; Enter opens directories or edits files.
+  Tracing search supports :user text, :bash text, and every other entry type.
+  Chat shows only user messages, answers, and the working indicator.
+
+SECURITY
+  Commands and hooks execute with your user permissions and network access;
+  this is not a sandbox. API keys support {{$VARIABLE}} environment references.
+  Zel uses fresh data and does not migrate or read Dashy configuration.
+  The TUI emits OSC 7501 terminal status reports.

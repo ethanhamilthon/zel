@@ -10,7 +10,7 @@ import (
 // showTurnStats controls metadata on answer headers.
 var showTurnStats = true
 
-// themeTokens maps [ui.theme] keys to the colors they set.
+// Internal tokens share a single project accent; neutral and error colors stay fixed.
 var themeTokens = map[string]*lipgloss.Color{
 	"input_bg": &inputBackground, "select_bg": &selectBackground, "foreground": &foreground,
 	"muted": &muted, "dim": &darkGray, "code": &codeGray, "accent": &inputBlue, "heading": &cyan,
@@ -25,13 +25,17 @@ var defaultTheme = func() map[string]lipgloss.Color {
 	return out
 }()
 
-// applyTheme sets the colors from [ui.theme]; unset tokens keep their defaults.
+// applyTheme applies the project accent to every accent-bearing UI element.
 func applyTheme(theme map[string]string) {
 	for name, color := range themeTokens {
 		*color = defaultTheme[name]
-		if value := strings.TrimSpace(theme[name]); value != "" {
-			*color = lipgloss.Color(value)
-		}
 	}
-	markdownStyle = fmt.Sprintf(markdownTemplate, assistantColor, cyan, warnColor, muted, infoColor, errorColor, inputBlue, inputBlue)
+	accent := strings.TrimSpace(theme["accent"])
+	if accent == "" {
+		accent = "#d97757"
+	}
+	for _, color := range []*lipgloss.Color{&inputBlue, &cyan, &assistantColor, &infoColor, &warnColor} {
+		*color = lipgloss.Color(accent)
+	}
+	markdownStyle = fmt.Sprintf(markdownTemplate, assistantColor, cyan, warnColor, inputBlue, inputBlue, inputBlue, inputBlue, inputBlue)
 }

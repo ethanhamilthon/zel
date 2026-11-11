@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"dashy/internal/shell"
+	"zel/internal/shell"
 )
 
 type Input struct {

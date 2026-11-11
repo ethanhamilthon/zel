@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"dashy/internal/agent"
-	"dashy/internal/control"
-	"dashy/internal/shell"
+	"zel/internal/agent"
+	"zel/internal/control"
+	"zel/internal/shell"
 )
 
 // JSON mode is newline-delimited JSON over stdin/stdout; see docs/JSON.md.
@@ -162,7 +162,7 @@ func eventLine(e control.Event) map[string]any {
 func jsonCommand(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer) error {
 	fs := flagSet("json", func(*flag.FlagSet) {})
 	if err := parseWithConfig(fs, args); err != nil || fs.NArg() > 0 {
-		return errors.New("usage: dashy json [--config FILE]")
+		return errors.New("usage: zel json [--config FILE]")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -173,7 +173,7 @@ func jsonCommand(ctx context.Context, args []string, in io.Reader, out, diagnost
 		return err
 	}
 	defer a.Close()
-	home, err := agent.DashyHome(cwd)
+	home, err := agent.ZelHome(cwd)
 	if err != nil {
 		return err
 	}
@@ -183,12 +183,6 @@ func jsonCommand(ctx context.Context, args []string, in io.Reader, out, diagnost
 	go func() { box.run(writing, out); close(written) }()
 	defer func() { stopWriting(); <-written }()
 
-	failed := make(chan error, 1)
-	watching, stopWatching := context.WithCancel(ctx)
-	defer stopWatching()
-	if err := watchProviders(watching, a.Settings(), func(err error) { failed <- err }); err != nil {
-		return err
-	}
 	ctl := control.New(a, func(e control.Event) { box.push(eventLine(e)) })
 	defer ctl.Close()
 	s := &jsonServer{ctl: ctl, box: box, attachments: filepath.Join(home, "attachments"), cwd: cwd}
@@ -212,12 +206,9 @@ func jsonCommand(ctx context.Context, args []string, in io.Reader, out, diagnost
 			return cancelled
 		case <-ctl.Closed():
 			return nil
-		case err := <-failed:
-			box.push(map[string]any{"type": "event", "event": "error", "text": err.Error()})
-			return err
 		case err := <-readErr:
 			if err != nil {
-				fmt.Fprintf(diagnostics, "dashy json: %v\n", err)
+				fmt.Fprintf(diagnostics, "zel json: %v\n", err)
 			}
 			// End of input finishes the work in flight, then quits.
 			for ctl.Status().Busy {
@@ -344,6 +335,7 @@ func (s *jsonServer) dispatch(req request) (any, error) {
 			usage["cached_tokens"] = info.Usage.Cached
 		}
 		return map[string]any{"session": info.Session, "title": info.Title, "project": info.Project, "db_path": info.DB,
+			"name": info.Name, "description": info.Description, "color": info.Color,
 			"provider": info.Provider, "model": info.Model, "effort": info.Effort, "configs": info.Configs,
 			"messages": info.Messages, "requests": info.Requests, "tasks": info.Tasks,
 			"context_tokens": info.Context, "usage": usage}, nil
@@ -409,7 +401,7 @@ func configView(s agent.Settings) map[string]any {
 		"reasoning_summary": s.ReasoningSummary, "shell_output": s.ShellOutput, "providers": providers}
 }
 
-// modelList is the JSON shape of a model listing, shared by dashy models --json and the models request.
+// modelList is the JSON shape of a model listing, shared by zel models --json and the models request.
 func modelList(choices []agent.ModelChoice) []map[string]string {
 	list := make([]map[string]string, 0, len(choices))
 	for _, c := range choices {

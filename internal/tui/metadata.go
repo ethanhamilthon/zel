@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"dashy/internal/agent"
-	"dashy/internal/control"
+	"zel/internal/agent"
+	"zel/internal/control"
 )
 
 const markdownTemplate = `{"document":{"margin":0},"heading":{"bold":true,"block_suffix":"\n"},"h1":{"prefix":"# ","color":"%s"},"h2":{"prefix":"## ","color":"%s"},"h3":{"prefix":"### ","color":"%s"},"h4":{"color":"%s"},"h5":{"color":"%s"},"h6":{"color":"%s"},"strong":{"bold":true},"emph":{"italic":true},"code":{"color":"%s"},"code_block":{"margin":0},"list":{"level_indent":2},"item":{"block_prefix":"- "},"enumeration":{"block_prefix":". "},"block_quote":{"indent":1,"indent_token":"│ "},"link":{"underline":true,"color":"%s","format":"\u2063{{.text}}\u2064"},"link_text":{"bold":true},"table":{"center_separator":"┼","column_separator":"│","row_separator":"─"}}`
@@ -80,7 +80,7 @@ func infoRows(info control.Info) []menuRow {
 		}
 		cache = fmt.Sprintf("%.0f%% cache hit", percent)
 	}
-	text := "Session:\n" + info.Session + "\n" + info.Title + "\n" + info.Project +
+	text := "Project:\n" + info.Name + "\n" + info.Description + "\nColor: " + info.Color + "\n\nSession:\n" + info.Session + "\n" + info.Title + "\n" + info.Project +
 		"\n\nModel:\n" + info.Provider + "\n" + info.Model + " · " + info.Effort +
 		"\n\nConfigs:\n" + strings.Join(configs, "\n") +
 		"\n\nContext:\n" + fmt.Sprintf("%s in · %s out · %s context · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), formatContext(info.Context), cache)

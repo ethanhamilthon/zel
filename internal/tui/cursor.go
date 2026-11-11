@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-var caretPosition = regexp.MustCompile(`\x1b\]1337;DashyCaret;([0-9]+);([0-9]+)\x07`)
+var caretPosition = regexp.MustCompile(`\x1b\]1337;ZelCaret;([0-9]+);([0-9]+)\x07`)
 
 // cursorOutput overlays a native caret after Bubble Tea finishes each write.
 // Save/restore keeps the renderer's own cursor position independent of the caret.

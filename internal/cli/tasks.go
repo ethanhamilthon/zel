@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"dashy/internal/agent"
+	"zel/internal/agent"
 )
 
-const tasksUsage = "usage: dashy tasks run [-s ID] COMMAND... | list [-s ID] | status [-s ID] TASK | stop [-s ID] TASK"
+const tasksUsage = "usage: zel tasks run [-s ID] COMMAND... | list [-s ID] | status [-s ID] TASK | stop [-s ID] TASK"
 
 func parseAll(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
@@ -68,12 +68,12 @@ func tasksCommand(args []string, out io.Writer) error {
 		return err
 	case (args[0] == "list" && len(rest) == 0) || (args[0] == "status" && len(rest) == 1):
 		if session == "" {
-			session = os.Getenv("DASHY_SESSION_ID")
+			session = os.Getenv("ZEL_SESSION_ID")
 		}
 		if session == "" {
-			return errors.New("outside a dashy shell, pass -s SESSION_ID")
+			return errors.New("outside a zel shell, pass -s SESSION_ID")
 		}
-		home, err := agent.DashyHome(cwd)
+		home, err := agent.ZelHome(cwd)
 		if err != nil {
 			return err
 		}
@@ -121,17 +121,17 @@ func eventsCommand(args []string, out io.Writer) error {
 	var session string
 	fs := flagSet("events", func(fs *flag.FlagSet) { fs.StringVar(&session, "s", "", "session ID") })
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return errors.New("usage: dashy events [-s ID]")
+		return errors.New("usage: zel events [-s ID]")
 	}
-	session = cmp.Or(session, os.Getenv("DASHY_SESSION_ID"))
+	session = cmp.Or(session, os.Getenv("ZEL_SESSION_ID"))
 	if session == "" {
-		return errors.New("outside a dashy shell, pass -s SESSION_ID")
+		return errors.New("outside a zel shell, pass -s SESSION_ID")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	home, err := agent.DashyHome(cwd)
+	home, err := agent.ZelHome(cwd)
 	if err != nil {
 		return err
 	}

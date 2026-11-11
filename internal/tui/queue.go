@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"dashy/internal/control"
+	"zel/internal/control"
 )
 
 // eventQueue hands controller events to one consumer. Push never blocks, because the controller

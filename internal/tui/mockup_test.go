@@ -3,8 +3,6 @@ package tui
 import (
 	"bytes"
 	"context"
-	"dashy/internal/agent"
-	"dashy/internal/control"
 	"fmt"
 	"html"
 	"io"
@@ -23,6 +21,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"zel/internal/agent"
+	"zel/internal/control"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,17 +32,17 @@ import (
 )
 
 // TestMockupFrames renders real TUI states into docs/mockup/index.html:
-// DASHY_MOCKUP=$PWD/docs/mockup go test ./internal/tui -run TestMockupFrames
+// ZEL_MOCKUP=$PWD/docs/mockup go test ./internal/tui -run TestMockupFrames
 func TestMockupFrames(t *testing.T) {
-	dir := os.Getenv("DASHY_MOCKUP")
+	dir := os.Getenv("ZEL_MOCKUP")
 	if dir == "" {
-		t.Skip("DASHY_MOCKUP not set")
+		t.Skip("ZEL_MOCKUP not set")
 	}
 	previous := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(previous)
 	var frames []mockFrame
-	const cwd = "~/Projects/dashy"
+	const cwd = "~/Projects/zel"
 	save := func(name string, m model) {
 		m.refresh(true)
 		for m.renderPending {
@@ -105,7 +105,8 @@ func TestMockupFrames(t *testing.T) {
 		n(agent.Event{Kind: "assistant", ID: "a1", Meta: ms(14200*time.Millisecond, 2), Text: "## internal/control\n\n`Controller` sits between the **TUI** and the agent:\n\n- runs **one turn at a time**; input that arrives meanwhile becomes *steering*\n- keeps the display journal and session title\n- turns agent errors into `control.Error` with a code\n\n```go\nc := control.New(a, emit)\nc.Input(agent.Input{Text: \"hi\"})\n```\n\n| method | purpose |\n|---|---|\n| `Input` | start or steer a turn |\n| `Stop` | cancel the active turn |\n\nSee [controller.go](internal/control/controller.go)."})
 	}
 
-	save("01-onboarding", sized(bareModel(t, cwd)))
+	onboarding, _ := freshModel(t)
+	save("01-onboarding", sized(onboarding))
 
 	// realistic renames the fixture provider; /models gets a catalog, turns reach the fixture server.
 	realistic := func(f *fixture) {
@@ -168,6 +169,9 @@ func TestMockupFrames(t *testing.T) {
 	down := func(n int) []tea.KeyType { return slices.Repeat([]tea.KeyType{tea.KeyDown}, n) }
 	save("06-menu", menu(chat().m))
 	save("10-info", menu(chat().m, append(down(6), tea.KeyEnter)...))
+	save("10-providers", menu(chat().m, append(down(11), tea.KeyEnter)...))
+	save("10-settings", menu(chat().m, append(down(12), tea.KeyEnter)...))
+	save("10-files", menu(chat().m, append(down(13), tea.KeyEnter)...))
 	f = chat()
 	for _, p := range []string{"README.md", "go.mod", "main.go", "Makefile", "docs/PLAN.md", "internal/control/controller.go", "internal/tui/ui.go", "internal/agent/agent.go"} {
 		path := filepath.Join(f.project, p)
@@ -209,7 +213,7 @@ func TestMockupFrames(t *testing.T) {
 		}
 	}
 	time.Sleep(300 * time.Millisecond)
-	f.m.add("notice", "Settings reloaded from ~/.dashy")
+	f.m.add("notice", "Settings reloaded from ~/.zel")
 	f.m.add("error", "provider p: 429 Too Many Requests; retrying in 4s")
 	f.m.add("notice", "Background task t2 finished: exit 2")
 	save("10-resume", menu(f.m, tea.KeyEnter))
@@ -291,7 +295,7 @@ func newFixture(t *testing.T, providers bool) *fixture {
 	t.Helper()
 	f := &fixture{project: t.TempDir(), reached: make(chan struct{}, 64)}
 	home := t.TempDir()
-	t.Setenv("DASHY_HOME", home)
+	t.Setenv("ZEL_HOME", home)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.HasSuffix(r.URL.Path, "/models") {
@@ -473,7 +477,7 @@ func agentEvent(e agent.Event) control.Event { return control.Event{Kind: "agent
 
 func freshAgent(t *testing.T) *agent.Agent {
 	t.Helper()
-	t.Setenv("DASHY_HOME", t.TempDir())
+	t.Setenv("ZEL_HOME", t.TempDir())
 	a, err := agent.New(t.TempDir(), agent.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -494,6 +498,7 @@ func bareModel(t *testing.T, cwd string) model {
 	t.Helper()
 	m, _ := freshModel(t)
 	m.cwd = cwd
+	m.menu = nil // Most unit tests exercise chat, not first-run onboarding.
 	return m
 }
 
@@ -501,10 +506,10 @@ func renderEntry(e entry, width, limit int) string { return renderEntryMode(e, w
 
 func (m *model) timeline() string { return strings.Join(m.timelineRows(0), "\n") }
 
-// setConfig rewrites the global config.toml and reloads it.
+// setConfig updates database preferences and reloads it.
 func setConfig(t *testing.T, ctl *control.Controller, change func(*agent.Settings)) {
 	t.Helper()
-	home, err := agent.DashyHome("")
+	home, err := agent.ZelHome("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +531,7 @@ type mockInfo struct{ group, title, note string }
 var mockGroups = []string{"Start", "Turn", "Composer", "Model & sessions", "Tasks & help", "Tracing", "Flash messages"}
 
 var mockFrames = map[string]mockInfo{
-	"01-onboarding":       {"Start", "Onboarding", "No provider yet: dashy setup and config.toml."},
+	"01-onboarding":       {"Start", "Onboarding", "First provider onboarding inside Zel."},
 	"02-empty":            {"Start", "Empty session", "The composer is empty."},
 	"03-chat":             {"Start", "Conversation", "User messages and markdown answers with stats; the trace stays out of the chat."},
 	"13-working":          {"Turn", "Working", "The working indicator sits above the input: elapsed time and steps."},
@@ -535,6 +540,9 @@ var mockFrames = map[string]mockInfo{
 	"06-menu":             {"Composer", "Menu", "Ctrl+K opens a centered menu; Esc goes back."},
 	"08-file-mention":     {"Composer", "File mention", "@ lists files one directory at a time."},
 	"09-multiline-input":  {"Composer", "Long input", "The composer grows with its text."},
+	"10-providers":        {"Settings", "Menu: Providers", "Add, edit, and remove providers stored in SQLite."},
+	"10-settings":         {"Settings", "Menu: Settings", "Application preferences stored in SQLite."},
+	"10-files":            {"Files", "Menu: Files", "Browse directories, hidden entries, and edit files."},
 	"10-info":             {"Model & sessions", "Menu: Info", "Live session, model, configuration layers and context usage."},
 	"10-model":            {"Model & sessions", "Menu: Model", "Models across providers."},
 	"10-model-effort":     {"Model & sessions", "Menu: Effort", "Reasoning effort for the chosen model."},
@@ -795,7 +803,7 @@ const mockupPage = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>dashy TUI mockup</title>
+<title>zel TUI mockup</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root { --bg: #161616; --fg: #d4d4d4; --canvas: #0b0d10; --dot: #1f242b; }
@@ -809,7 +817,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--canvas
 h1 { font-size: 40px; margin: 0 0 8px; color: #fff; }
 .lead { margin: 0 0 56px; color: #8b949e; font-size: 18px; max-width: 900px; }
 .group { margin-bottom: 96px; }
-.group h2 { font-size: 26px; color: #79d9ff; margin: 0 0 20px; letter-spacing: .02em; }
+.group h2 { font-size: 26px; color: #d97757; margin: 0 0 20px; letter-spacing: .02em; }
 .frames { display: flex; gap: 48px; align-items: flex-start; }
 .frame { margin: 0; width: max-content; }
 .chrome { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; background: #2a2d33;
@@ -832,7 +840,7 @@ figcaption b { color: #e6edf3; margin-right: 6px; }
 </head>
 <body>
 <div id="viewport"><div id="world">
-<h1>dashy TUI — current states</h1>
+<h1>zel TUI — current states</h1>
 <p class="lead">Real frames rendered from the TUI at 100×34 by <code>internal/tui/mockup_test.go</code>.
 Drag to pan, scroll to move, Ctrl/⌘ + scroll or pinch to zoom, <kbd>0</kbd> fits everything, <kbd>1</kbd> is 100%.</p>
 {{FRAMES}}
