@@ -2066,3 +2066,29 @@ func TestSlashMenu(t *testing.T) {
 		t.Fatal("setting not enabled")
 	}
 }
+
+func TestWorkingIndicatorDuringResponse(t *testing.T) {
+	m, release := busyModel(t)
+	defer release()
+	m.entries = []entry{{Kind: "assistant", Text: "Previous answer"}}
+	m.turnIndex = len(m.entries)
+	if m.workingBlock() == "" {
+		t.Fatal("previous turn hid the working indicator")
+	}
+	for _, tc := range []struct {
+		event   core.TurnEvent
+		visible bool
+	}{
+		{core.TurnEvent{Kind: "delta", ID: "answer", Text: " ", Provisional: true}, true},
+		{core.TurnEvent{Kind: "delta", ID: "answer", Text: "Hello", Provisional: true}, false},
+		{core.TurnEvent{Kind: "assistant", ID: "answer", Text: "Hello", Final: true}, false},
+		{core.TurnEvent{Kind: "code", ID: "tool", Text: "ls", Provisional: true}, true},
+		{core.TurnEvent{Kind: "reasoning", ID: "thought", Text: "Thinking", Provisional: true}, true},
+		{core.TurnEvent{Kind: "delta", ID: "next", Text: "Done", Provisional: true}, false},
+	} {
+		m.entries = core.ApplyEvent(m.entries, tc.event)
+		if got := m.workingBlock() != ""; got != tc.visible {
+			t.Fatalf("after %s %s: indicator visible = %v, want %v", tc.event.Kind, tc.event.ID, got, tc.visible)
+		}
+	}
+}

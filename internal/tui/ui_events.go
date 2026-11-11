@@ -77,6 +77,13 @@ func (m model) workingBlock() string {
 	if !status.Busy {
 		return ""
 	}
+	// Visible assistant output replaces the indicator until work resumes.
+	if !status.Cancelling && len(m.entries) > m.turnIndex {
+		last := m.entries[len(m.entries)-1]
+		if last.Kind == "assistant" && strings.TrimSpace(last.Text) != "" {
+			return ""
+		}
+	}
 	parts := []string{formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
 		parts = append(parts, "cancelling")
