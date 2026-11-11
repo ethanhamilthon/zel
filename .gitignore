@@ -1,0 +1,5 @@
+/dashy
+/dist/
+.dashydev
+.orch/
+*.test

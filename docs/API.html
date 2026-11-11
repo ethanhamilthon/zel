@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dashy API</title>
+<style>
+:root { --bg:#fff; --fg:#1d1f23; --muted:#6b7280; --line:#e5e7eb; --code:#f4f5f7; --accent:#3b63d9; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141518; --fg:#d5ddeb; --muted:#8794a8; --line:#2a2d33; --code:#1d1f24; --accent:#8aadff; } }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, "Segoe UI", Inter, sans-serif; }
+nav { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:10px 24px; display:flex; gap:18px; flex-wrap:wrap; z-index:1 }
+nav a { color:var(--muted); text-decoration:none; font-size:14px } nav a:hover { color:var(--accent) }
+main { max-width:920px; margin:0 auto; padding:24px }
+h1 { font-size:26px; margin:8px 0 4px } h2 { font-size:20px; margin:48px 0 8px; padding-top:8px; border-top:1px solid var(--line) }
+h3 { font-size:13px; margin:24px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em }
+.lead { color:var(--muted); margin-top:0 }
+code, pre { font:13px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace }
+code { background:var(--code); padding:1px 5px; border-radius:4px; white-space:pre-wrap; word-break:break-word }
+pre { background:var(--code); padding:14px 16px; border-radius:8px; overflow-x:auto } pre code { background:none; padding:0 }
+table { width:100%; border-collapse:collapse; margin:8px 0 } th, td { text-align:left; vertical-align:top; padding:7px 10px; border-bottom:1px solid var(--line) }
+td:first-child code { white-space:nowrap; word-break:normal }
+th { font-size:13px; color:var(--muted); font-weight:600 }
+.order { display:flex; flex-wrap:wrap; gap:6px; align-items:center } .order span { background:var(--code); padding:3px 9px; border-radius:6px; font:13px ui-monospace, monospace }
+</style></head><body>
+<nav><a href="#cli">CLI</a><a href="#prompt">Prompt</a><a href="#llm">LLM request</a><a href="#slash">Menu</a><a href="#config">Config</a></nav>
+<main>
+<h1>dashy API</h1>
+<p class="lead">Commands, prompts, what goes to the model, TUI commands and config.</p>
+
+<h2 id="cli">CLI</h2>
+<table><thead><tr><th>command</th><th>what it does</th></tr></thead><tbody><tr><td><code>dashy [--config FILE]</code></td><td>Interactive TUI in the current directory. Needs a terminal. Exits with a setup guide when no provider is configured or, checked in the background, none answers the model listing (same for <code>dashy json</code>).</td></tr><tr><td><code>dashy setup</code></td><td>Asks for one provider, API key, model and effort; writes <code>$DASHY_HOME/config.toml</code>.</td></tr><tr><td><code>dashy json [--config FILE]</code></td><td>Same session over newline-delimited JSON on stdin/stdout (see below).</td></tr><tr><td><code>dashy models [--json]</code></td><td>Prints <code>PROVIDER&lt;TAB&gt;MODEL</code> for every configured provider; failures go to stderr, exit 1. <code>--json</code> prints <code>{models: [{provider, model}], failures: {provider: text}}</code> instead.</td></tr><tr><td><code>dashy tasks run [-s ID] COMMAND...</code></td><td>Starts a background task in a running session; the session gets a <code>&lt;task-result&gt;</code> when it ends.</td></tr><tr><td><code>dashy tasks list|status|stop [-s ID] [TASK]</code></td><td>List tasks, show one task's state and log, stop a task and its process group.</td></tr><tr><td><code>dashy view [-s ID] PATH...</code></td><td>Queues PNG/JPEG images for the next request without blocking the turn (max 4 pending, 32 MiB each).</td></tr><tr><td><code>dashy events [-s ID]</code></td><td>Notices and errors the session showed, oldest first.</td></tr><tr><td><code>dashy version</code></td><td>Prints the version.</td></tr><tr><td><code>dashy --help | -h | help</code></td><td>Full reference.</td></tr></tbody></table>
+<p><code>-s ID</code> targets a session; by default helpers use <code>DASHY_ENDPOINT</code>, which the bash tool exports. <code>tasks</code>, <code>view</code>, <code>events</code>, <code>read</code>, <code>grep</code>, <code>write</code>, <code>patch</code> are helpers: they never open a session.</p>
+<h3>Environment</h3>
+<table><thead><tr><th>variable</th><th>meaning</th></tr></thead><tbody><tr><td><code>DASHY_HOME</code></td><td>State directory, default <code>~/.dashy</code>: config.toml, dashy.db, locks/, run/ sockets, attachments/, tasks/ logs.</td></tr><tr><td><code>DASHY_CONFIG</code></td><td>Absolute path of the <code>--config</code> file; set by the flag, inherited by tools.</td></tr><tr><td><code>DASHY_SESSION_ID</code></td><td>Active session; exported to the bash tool, system blocks and hooks.</td></tr><tr><td><code>DASHY_ENDPOINT</code></td><td>This session's Unix socket for helpers; never inherited from a parent session.</td></tr><tr><td><code>DASHY_MODE</code></td><td><code>tui</code> or <code>json</code>, for system blocks and hooks.</td></tr></tbody></table>
+<h3>JSON mode</h3>
+<p>One request per stdin line, each with a client <code>id</code> and <code>type</code>; every request gets exactly one <code>{"type":"result","id":…,"ok":…}</code>. Events stream as <code>{"type":"event","event":KIND}</code>: <code>session</code>, <code>started</code>, <code>agent</code>, <code>done</code>, <code>notice</code>, <code>error</code>. Error codes: <code>busy</code>, <code>setup_required</code>, <code>invalid</code>, <code>failed</code>. End of stdin waits for the turn, then saves and quits. Details in <code>docs/JSON.md</code>.</p>
+<table><thead><tr><th>type</th><th>fields</th><th>result data</th></tr></thead><tbody><tr><td><code>input</code></td><td>text, images, files</td><td>-</td></tr><tr><td><code>stop</code></td><td></td><td>-</td></tr><tr><td><code>recall</code></td><td></td><td>{text}</td></tr><tr><td><code>quit</code></td><td></td><td>{closed}</td></tr><tr><td><code>new</code></td><td></td><td>- then a session event (idle only)</td></tr><tr><td><code>resume</code></td><td>session</td><td>- then a session event (idle only)</td></tr><tr><td><code>sessions</code></td><td></td><td>{sessions: [{id, title, updated}]}</td></tr><tr><td><code>rename</code></td><td>text</td><td>-</td></tr><tr><td><code>reload</code></td><td></td><td>-</td></tr><tr><td><code>history</code></td><td></td><td>{id, title, context_tokens, records}</td></tr><tr><td><code>models</code></td><td></td><td>{models, failures}</td></tr><tr><td><code>select_model</code></td><td>provider, model, effort</td><td>-</td></tr><tr><td><code>config</code></td><td></td><td>effective config without secrets</td></tr><tr><td><code>info</code></td><td></td><td>{session, title, project, db_path, provider, model, effort, configs, messages, requests, tasks, context_tokens, usage} (available during a turn)</td></tr><tr><td><code>tasks</code></td><td></td><td>{tasks: [...]}</td></tr><tr><td><code>show_task</code></td><td>task</td><td>{output}</td></tr><tr><td><code>stop_task</code></td><td>task</td><td>-</td></tr><tr><td><code>status</code></td><td></td><td>{busy, cancelling, started, queued, tasks}</td></tr></tbody></table>
+
+<h2 id="prompt">Prompt</h2>
+<p>The system prompt (<code>instructions</code>) is only the <code>[system.*]</code> blocks, joined in file order with a blank line. <code>text</code> blocks are added as they are; <code>bash</code> blocks run with <code>sh -c</code> in the project (30s limit) and add stdout when they exit 0. Empty results are skipped. <b>With no blocks configured, the prompt is empty.</b></p>
+<h3>Blocks written by dashy setup</h3>
+<table><thead><tr><th>block</th><th>type</th><th>value</th></tr></thead><tbody><tr><td><code>system.main</code></td><td>text</td><td><code>You are Dashy, a coding agent. Keep answers short and precise.</code></td></tr><tr><td><code>system.agents</code></td><td>bash</td><td><code>cat AGENTS.md 2&gt;/dev/null || true</code> (the project's AGENTS.md)</td></tr></tbody></table>
+<h3>bash tool description (built in, always sent)</h3>
+<pre><code>You are Dashy, a coding agent. Use the bash tool to help the user. Use `dashy --help` to work with yourself.
+
+Read and search files with standard tools: `cat -n`, `sed -n &#x27;A,Bp&#x27;`, `rg` (or `grep -rn`), `ls`, `find`.
+
+To see an image, use `dashy view PATH`.
+For long commands (builds, test suites, servers), use background tasks instead of `&amp;`:
+- dashy tasks run COMMAND...  starts it; the result arrives as a &lt;task-result&gt; message when it ends
+- dashy tasks list | status TASK | stop TASK</code></pre>
+
+<h2 id="llm">LLM request</h2>
+<p>OpenAI Responses API (or Chat Completions with <code>api = &quot;chat&quot;</code> in the provider, sent to <code>POST {base_url}/chat/completions</code>), streamed over SSE. One request per model step:</p>
+<pre><code>POST {base_url}/responses
+Authorization: Bearer {api_key}        # only when api_key is set
+Content-Type: application/json
+
+{
+  &quot;model&quot;: &quot;[agent].model&quot;,
+  &quot;instructions&quot;: &quot;joined [system.*] blocks&quot;,
+  &quot;input&quot;: [ ...session history... ],
+  &quot;store&quot;: false,
+  &quot;stream&quot;: true,
+  &quot;tools&quot;: [{
+    &quot;type&quot;: &quot;function&quot;, &quot;name&quot;: &quot;bash&quot;, &quot;strict&quot;: true,
+    &quot;description&quot;: &quot;&lt;bash tool description, below&gt;&quot;,
+    &quot;parameters&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;command&quot;: {&quot;type&quot;: &quot;string&quot;},
+        &quot;timeout&quot;: {&quot;type&quot;: [&quot;integer&quot;, &quot;null&quot;],
+                    &quot;description&quot;: &quot;seconds, default 120, maximum 600&quot;}
+      },
+      &quot;required&quot;: [&quot;command&quot;, &quot;timeout&quot;],
+      &quot;additionalProperties&quot;: false
+    }
+  }],
+  &quot;reasoning&quot;: {&quot;effort&quot;: &quot;[agent].effort&quot;, &quot;summary&quot;: &quot;auto&quot;}
+}</code></pre>
+<ul>
+<li><code>reasoning.effort</code> is omitted when effort is empty (<code>default</code>); <code>summary</code> is omitted when <code>reasoning_summary = false</code>; no <code>reasoning</code> key when both are off.</li>
+<li>The prompt is built once per session and stored in its history; a resumed session keeps it until Reload or New session in the menu.</li>
+<li>The loop: request → run every <code>function_call</code> in order → next request, until a response has no calls and no steering is waiting.</li>
+<li>Retries: 3 attempts, backoff 1s, 2s, 4s… capped at 8s (honours <code>Retry-After</code>), only for 408/409/429/5xx, network errors and streams without <code>response.completed</code>, and only if nothing was shown yet.</li>
+<li>Stream limits: 8 MiB per event, 64 MiB and 100000 events per response. Provider errors are redacted: API keys never reach the screen.</li>
+<li>Models list: <code>GET {base_url}/models</code>, paginated.</li>
+</ul>
+<h3>What ends up in input</h3>
+<table><thead><tr><th>history item</th><th>shape</th></tr></thead><tbody><tr><td>user message</td><td><code>{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;text&quot;}</code></td></tr><tr><td>user message with images</td><td><code>{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:[{&quot;type&quot;:&quot;input_text&quot;,&quot;text&quot;:&quot;text\nOriginal image (for crops): \&quot;/path\&quot;&quot;},{&quot;type&quot;:&quot;input_image&quot;,&quot;image_url&quot;:&quot;data:...&quot;,&quot;detail&quot;:&quot;auto&quot;}]}</code></td></tr><tr><td>model output</td><td>Items from <code>response.completed</code> as they came: <code>message</code>, <code>reasoning</code>, <code>function_call</code>.</td></tr><tr><td>tool result</td><td><code>{&quot;type&quot;:&quot;function_call_output&quot;,&quot;call_id&quot;:&quot;...&quot;,&quot;output&quot;:&quot;{\&quot;output\&quot;:\&quot;...\&quot;,\&quot;exit_code\&quot;:0}&quot;}</code> plus <code>"error":true</code> on failure; output is capped at <code>shell_output</code> bytes, head and tail kept.</td></tr><tr><td>background task end</td><td><code>&lt;task-result id=&quot;t1&quot; status=&quot;done&quot; exit_code=&quot;0&quot; duration=&quot;10s&quot;&gt;
+$ COMMAND
+…log tail…
+[full output: PATH]
+&lt;/task-result&gt;</code> as a user message.</td></tr><tr><td>dashy view</td><td><code>&lt;view&gt;
+Image queued by dashy view.
+&lt;/view&gt;</code> with the image attached.</td></tr><tr><td>paste_output hook</td><td><code>&lt;hook-output name=&quot;NAME&quot;&gt;
+stdout
+&lt;/hook-output&gt;</code> before the next user message.</td></tr><tr><td>crash recovery</td><td>A call without output gets <code>Tool execution was interrupted; its effects and result are unknown. It was not rerun.</code></td></tr><tr><td>call skipped by steering</td><td><code>Skipped: the user sent a new message before this call started. …</code></td></tr></tbody></table>
+
+<h2 id="slash">Menu</h2>
+<p>Ctrl+K opens and closes the menu; arrows or the mouse select, Enter opens, Esc goes back a page.</p>
+<table><thead><tr><th>item</th><th>what it does</th></tr></thead><tbody><tr><td>Resume</td><td>Opens a saved session of this project.</td></tr><tr><td>New session</td><td>Starts a new chat; re-reads all config layers and rebuilds the system prompt.</td></tr><tr><td>Model</td><td>Pick a model, then a reasoning effort. Changes the model of this session and saves it as the default: provider, model and effort are written in place into the config layer each one came from (global if none). Sessions that already have messages keep their model.</td></tr><tr><td>Tasks</td><td>Pick a background task, then show its output or stop it.</td></tr><tr><td>Tracing</td><td>Everything the session did: system prompt, messages, bash calls and their output, reasoning, tasks and client events, searchable and scrollable.</td></tr><tr><td>Rename</td><td>Renames the session (empty restores the default title).</td></tr><tr><td>Info</td><td>Prints session ID, project, config files, model and token/cache totals into the history (not sent to the model).</td></tr><tr><td>Reload</td><td>Re-reads the config for the next request; a running turn is not interrupted.</td></tr><tr><td>Help</td><td>Keyboard shortcuts.</td></tr><tr><td>Quit</td><td>Saves the chat and exits.</td></tr></tbody></table>
+<p>Sending while dashy works steers the turn: a running bash call moves to the background as a task and the model reads the message next. While it works, an indicator above the input shows the elapsed time and the step count; the running command is in the Tracing menu. Click a link, or a URL or an existing file path in backticks, to open it.</p>
+<h3>Keys</h3>
+<table><thead><tr><th>key</th><th>action</th></tr></thead><tbody><tr><td>Enter</td><td>Run the selected completion or send</td></tr><tr><td>Shift+Enter, Alt+Enter, Ctrl+J</td><td>Newline</td></tr><tr><td>Tab, Up/Down</td><td>Complete, select a completion</td></tr><tr><td>Up on empty input</td><td>Recall a message the model has not read yet</td></tr><tr><td>@path</td><td>File completion; sent as <code>@path</code> in the text</td></tr><tr><td>Ctrl+V (Cmd+V forwarded)</td><td>Paste clipboard image</td></tr><tr><td>PgUp/PgDn, wheel</td><td>Scroll the timeline</td></tr><tr><td>Esc, Ctrl+C</td><td>Cancel the turn</td></tr><tr><td>Ctrl+C idle, Ctrl+D on empty input</td><td>Quit</td></tr></tbody></table>
+
+<h2 id="config">Config</h2>
+<h3>Layers</h3>
+<div class="order"><span>defaults</span>→<span>$DASHY_HOME/config.toml</span>→<span>/dashy.toml</span>→<span>…parent dirs…</span>→<span>PROJECT/dashy.toml</span>→<span>--config FILE</span>→<span>model saved with the session</span></div>
+<ul>
+<li>Missing files are skipped, except <code>--config</code>, which must exist. Bad TOML or an unknown key is an error.</li>
+<li>Scalars: a later layer overrides only keys it sets. <code>[ui.events]</code>, <code>[ui.theme]</code> and <code>[provider.NAME]</code> merge by key. <code>[system.NAME]</code> and <code>[hooks.NAME]</code> replace an entry with the same name and keep its position; new ones are appended.</li>
+<li>Nothing can be unset; a hook can be turned off with <code>enabled = false</code>.</li>
+<li><code>{{$VAR}}</code> in any string reads the environment. Validation runs once on the merged result.</li>
+</ul>
+<h3>[agent]</h3>
+<table><thead><tr><th>key</th><th>type</th><th>default</th><th>meaning</th></tr></thead><tbody><tr><td><code>db_path</code></td><td>string</td><td><code>$DASHY_HOME/dashy.db</code></td><td>SQLite for sessions and tasks; <code>~</code> expands.</td></tr><tr><td><code>provider</code></td><td>string</td><td>""</td><td>Name of a <code>[provider.NAME]</code>.</td></tr><tr><td><code>model</code></td><td>string</td><td>""</td><td>Model id sent as <code>model</code>.</td></tr><tr><td><code>effort</code></td><td>string</td><td>""</td><td><code>none minimal low medium high xhigh max</code>; empty = provider default.</td></tr><tr><td><code>reasoning_summary</code></td><td>bool</td><td><code>true</code></td><td>Ask for <code>reasoning.summary = auto</code>.</td></tr><tr><td><code>shell_output</code></td><td>int</td><td><code>8192</code></td><td>Max bytes of one bash result for the model; 0 = no cap.</td></tr><tr><td><code>shell_timeout</code></td><td>int</td><td><code>120</code></td><td>Default bash timeout, 1..600 seconds.</td></tr></tbody></table>
+<h3>[ui.events] · true by default</h3>
+<table><thead><tr><th>key</th><th>shows</th></tr></thead><tbody><tr><td><code>turn_stats</code></td><td>duration and step count on an answer</td></tr></tbody></table>
+<p>The chat shows user messages, answers and errors only. Everything else a turn does — the system prompt, the bash calls and their output, the reasoning, the background tasks and the client events — is in <code>Menu/Tracing</code>.</p>
+<h3>[ui.theme] · setup defaults</h3>
+<table><thead><tr><th>key</th><th>color</th></tr></thead><tbody><tr><td><code>input_bg</code></td><td><code>#202020</code></td></tr><tr><td><code>select_bg</code></td><td><code>#303030</code></td></tr><tr><td><code>foreground</code></td><td><code>#d5ddeb</code></td></tr><tr><td><code>muted</code></td><td><code>#8794a8</code></td></tr><tr><td><code>dim</code></td><td><code>#606060</code></td></tr><tr><td><code>code</code></td><td><code>#a0a0a0</code></td></tr><tr><td><code>accent</code></td><td><code>#8aadff</code></td></tr><tr><td><code>heading</code></td><td><code>#79d9ff</code></td></tr><tr><td><code>assistant</code></td><td><code>#9bdef5</code></td></tr><tr><td><code>info</code></td><td><code>#d7c38b</code></td></tr><tr><td><code>warn</code></td><td><code>#e5c07b</code></td></tr><tr><td><code>error</code></td><td><code>#f09eac</code></td></tr></tbody></table>
+<p><code>background</code> is also read and sent to the terminal as its background color.</p>
+<h3>[provider.NAME]</h3>
+<table><thead><tr><th>key</th><th>meaning</th></tr></thead><tbody><tr><td><code>base_url</code></td><td>HTTP(S) base, e.g. <code>https://api.openai.com/v1</code>; required</td></tr><tr><td><code>api</code></td><td><code>responses</code> (default) or <code>chat</code> for the Chat Completions API</td></tr><tr><td><code>api_key</code></td><td>Optional; sent as a Bearer token; never exported to tools</td></tr></tbody></table>
+<h3>[system.NAME]</h3>
+<table><thead><tr><th>key</th><th>meaning</th></tr></thead><tbody><tr><td><code>type</code></td><td><code>text</code> or <code>bash</code></td></tr><tr><td><code>value</code></td><td>Text, or the script whose stdout is used</td></tr></tbody></table>
+<h3>[hooks.NAME]</h3>
+<table><thead><tr><th>key</th><th>default</th><th>meaning</th></tr></thead><tbody><tr><td><code>events</code></td><td></td><td>List of events, or <code>"*"</code></td></tr><tr><td><code>run</code></td><td></td><td>Script for <code>sh -c</code>, in the background</td></tr><tr><td><code>timeout</code></td><td>10</td><td>Seconds, 1..600</td></tr><tr><td><code>enabled</code></td><td>true</td><td></td></tr><tr><td><code>paste_output</code></td><td>false</td><td>Non-empty stdout goes to the model before the next message</td></tr></tbody></table>
+<p>Events: <code>session_start</code> <code>session_end</code> <code>turn_start</code> <code>turn_end</code> <code>steer_accepted</code> <code>session_title_change</code> <code>shell_start</code> <code>shell_end</code> <code>model_request_start</code> <code>model_request_end</code> <code>error</code></p>
+<table><thead><tr><th>variable</th><th>set for</th></tr></thead><tbody><tr><td><code>DASHY_EVENT DASHY_PROVIDER DASHY_MODEL DASHY_EFFORT DASHY_SESSION_TITLE DASHY_MODE</code></td><td>every hook</td></tr><tr><td><code>DASHY_SESSION_ID DASHY_ENDPOINT DASHY_HOME DASHY_CWD</code></td><td>every hook and system block</td></tr><tr><td><code>DASHY_TURN_SOURCE DASHY_MESSAGE_FILE</code></td><td>turn_start (user | notice; the message as a temp file path)</td></tr><tr><td><code>DASHY_TURN_STATUS DASHY_TURN_DURATION_MS</code></td><td>turn_end (ok | error | cancelled)</td></tr><tr><td><code>DASHY_MESSAGE_FILE</code></td><td>steer_accepted</td></tr><tr><td><code>DASHY_COMMAND_FILE DASHY_EXIT_CODE DASHY_DURATION_MS</code></td><td>shell_start, shell_end</td></tr><tr><td><code>DASHY_DURATION_MS DASHY_ERROR</code></td><td>model_request_end</td></tr><tr><td><code>DASHY_ERROR</code></td><td>error</td></tr></tbody></table>
+<h3>Starter config from dashy setup</h3>
+<pre><code># dashy configuration; every dashy.toml from / down to the project, then --config, is merged on top.
+# &quot;{{$VAR}}&quot; in string values reads $VAR from the environment.
+
+[agent]
+# db_path = &quot;~/.dashy/dashy.db&quot; # SQLite database for sessions and tasks; default $DASHY_HOME/dashy.db
+provider = &quot;NAME&quot;
+model = &quot;MODEL&quot;
+effort = &quot;EFFORT&quot;               # none | minimal | low | medium | high | xhigh | max
+reasoning_summary = true
+shell_output = 8192             # max bytes per bash call returned to the model
+shell_timeout = 120             # default bash timeout in seconds (max 600)
+
+[ui.events]
+turn_stats = true
+
+[ui.theme]
+input_bg = &quot;#202020&quot;
+select_bg = &quot;#303030&quot;
+foreground = &quot;#d5ddeb&quot;
+muted = &quot;#8794a8&quot;
+dim = &quot;#606060&quot;
+code = &quot;#a0a0a0&quot;
+accent = &quot;#8aadff&quot;
+heading = &quot;#79d9ff&quot;
+assistant = &quot;#9bdef5&quot;
+info = &quot;#d7c38b&quot;
+warn = &quot;#e5c07b&quot;
+error = &quot;#f09eac&quot;
+
+[provider.NAME]
+base_url = &quot;BASEURL&quot;
+api = &quot;responses&quot;      # responses | chat
+api_key = &quot;API_KEY&quot;    # optional
+# System prompt blocks, in this order: &quot;text&quot; appends value, &quot;bash&quot; appends stdout.
+[system.main]
+type = &quot;text&quot;
+value = &quot;You are Dashy, a coding agent. Keep answers short and precise.&quot;
+
+[system.agents]
+type = &quot;bash&quot;
+value = &quot;cat AGENTS.md 2&gt;/dev/null || true&quot;</code></pre>
+</main></body></html>

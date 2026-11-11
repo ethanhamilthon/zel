@@ -1,0 +1,67 @@
+dashy - minimal AI coding agent
+
+USAGE
+  dashy [--config FILE]
+  dashy setup
+  dashy json [--config FILE]
+  dashy models [--json]
+  dashy tasks run [-s ID] COMMAND...
+  dashy tasks list|status|stop [-s ID] [TASK]
+  dashy view [-s ID] PATH...
+  dashy events [-s ID]
+  dashy version
+  dashy --help | -h | help
+
+FLAGS & COMMANDS
+  --config FILE   Merge FILE on top of all other config layers; it must exist.
+  --json          With models: print {models: [{provider, model}], failures} as JSON.
+  -s ID           Target a running session for tasks/view; defaults to DASHY_ENDPOINT.
+  --help, -h      Show this help reference.
+  setup           Create $DASHY_HOME/config.toml: provider, API key, model and effort.
+  json            Drive a session with newline-delimited JSON on stdin/stdout; see docs/JSON.md.
+  models          Print PROVIDER<TAB>MODEL for configured providers. Errors go to stderr.
+  tasks run       Start a background command in a running TUI session. Output goes to a
+                  private log. The session receives a <task-result> when it ends.
+  events          Print the notices and errors a session showed, oldest first.
+  tasks list      List background tasks of the target session.
+  tasks status    Show one task's state and output log.
+  tasks stop      Stop a running task and its process group.
+  view            Queue PNG/JPEG images in the target session without blocking its turn.
+  version         Print the version.
+
+CONFIGURATION
+  Layers, each merged on top of the previous: $DASHY_HOME/config.toml, every dashy.toml
+  from / down to the project directory, then --config FILE. Later layers override set
+  keys; [ui.events], [ui.theme] and [provider.NAME] merge by key; [system.NAME] and
+  [hooks.NAME] replace an entry of the same name. Nothing can be unset.
+  "{{$VAR}}" in string values reads $VAR from the environment; db_path expands "~".
+  [agent]            db_path, provider, model, effort, reasoning_summary, shell_output,
+                     shell_timeout. The Models menu switches this session and writes defaults into
+                     the layer each key came from; saved sessions keep their model.
+                     Reasoning effort defaults to medium when omitted or empty.
+  [ui.events]        turn_stats: the duration and step count of an answer.
+                     All on by default; the chat itself shows messages and errors only,
+                     the Tracing menu shows the system prompt, tools, thoughts and events.
+  [ui.theme]         Colors: input_bg, select_bg, foreground, muted, dim, code, accent,
+                     heading, assistant, info, warn, error.
+  [provider.NAME]    base_url and optional api_key.
+  [system.NAME]      System prompt blocks in file order: type "text" appends value; type
+                     "bash" runs value with sh -c and appends stdout when it exits 0.
+  [hooks.NAME]       events (or "*"), run, timeout (default 10s), enabled, paste_output.
+                     Hooks run with sh -c and DASHY_EVENT and related DASHY_* variables;
+                     paste_output queues non-empty stdout for the next turn.
+  The system prompt is stored in session history; /reload and /new re-read all layers.
+  Commands run with the user's permissions and network access; it is not a sandbox.
+  The TUI and json mode exit with a setup guide when no provider is configured, or when
+  the model listing of every provider fails (checked in the background at start).
+
+ENVIRONMENT VARIABLES
+  DASHY_HOME        State directory (default ~/.dashy), including config.toml, dashy.db, locks/,
+                    run/ sockets, attachments/, and private tasks/ output logs.
+  DASHY_CONFIG      Absolute path of the --config file; set by the flag, inherited by tools.
+  DASHY_SESSION_ID  Active session ID, exported to the bash tool, system blocks and hooks.
+  DASHY_ENDPOINT    This session's Unix socket for tasks/view; never inherited from a parent.
+  DASHY_MODE        Client mode for system blocks and hooks: 'tui' or 'json'.
+
+TERMINAL STATUS
+  The TUI emits OSC 7501 reports.

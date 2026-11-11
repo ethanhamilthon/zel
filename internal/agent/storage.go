@@ -1,0 +1,221 @@
+package agent
+
+import (
+	"context"
+	"crypto/rand"
+	"dashy/internal/shell"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func (a *Agent) openProject(dir string) error {
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	a.Shell.Dir, a.project = absolute, absolute
+	return a.createSession()
+}
+
+func (a *Agent) openSession(id string) error {
+	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("invalid session ID: %s", id)
+	}
+	var sel selection
+	err := a.db.QueryRow(`SELECT title, provider, model, effort FROM sessions WHERE id = ? AND project = ?`, id, a.project).
+		Scan(&a.title, &sel.Provider, &sel.Model, &sel.Effort)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("session not found in this project: %s", id)
+	}
+	if err != nil {
+		return err
+	}
+	a.id, a.stored = id, true
+	a.fixSelection(sel)
+	if err := a.acquire(); err != nil {
+		return err
+	}
+	if err := a.readSession(); err != nil {
+		a.release()
+		return err
+	}
+	if _, err := a.instructions(context.Background()); err != nil {
+		a.release()
+		return err
+	}
+	return nil
+}
+
+func (a *Agent) createSession() error {
+	var id [8]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	a.id = time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(id[:])
+	a.itemMeta = nil
+	a.fixSelection(selection{})
+	return a.acquire()
+}
+
+func (a *Agent) readSession() error {
+	rows, err := a.db.Query(`SELECT data, meta FROM items WHERE session = ? ORDER BY seq`, a.id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	a.History, a.itemMeta = nil, nil
+	for rows.Next() {
+		var item []byte
+		var meta string
+		if err := rows.Scan(&item, &meta); err != nil {
+			return err
+		}
+		a.History = append(a.History, json.RawMessage(item))
+		if prompt, ok := instructionSnapshot(item); ok {
+			a.prompt, a.promptFrozen = prompt, true
+		}
+		var m Metadata
+		if meta != "" && json.Unmarshal([]byte(meta), &m) == nil {
+			a.setItemMeta(len(a.History)-1, m)
+		}
+	}
+	a.saved = len(a.History)
+	return rows.Err()
+}
+
+func (a *Agent) Save() error {
+	// Read before the transaction: update holds cfg.mu while it writes the database.
+	// A saved session pins the model it runs with, so a later default does not change it.
+	a.cfg.mu.Lock()
+	if a.cfg.sel.Model == "" && a.cfg.s.Model != "" {
+		a.cfg.sel = selection{a.cfg.s.Provider, a.cfg.s.Model, a.cfg.s.Effort}
+	}
+	sel := a.cfg.sel
+	a.cfg.mu.Unlock()
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO sessions (id, project, title, first, updated, provider, model, effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET title = excluded.title, first = excluded.first, updated = excluded.updated,
+		provider = excluded.provider, model = excluded.model, effort = excluded.effort`,
+		a.id, a.project, a.title, a.DefaultTitle(), time.Now().UnixNano(), sel.Provider, sel.Model, sel.Effort); err != nil {
+		return err
+	}
+	start := min(a.saved, len(a.History))
+	if _, err := tx.Exec(`DELETE FROM items WHERE session = ? AND seq >= ?`, a.id, start); err != nil {
+		return err
+	}
+	for i := start; i < len(a.History); i++ {
+		meta := ""
+		if m := a.itemMeta[i]; m != nil {
+			data, _ := json.Marshal(m)
+			meta = string(data)
+		}
+		if _, err := tx.Exec(`INSERT INTO items (session, seq, data, meta) VALUES (?, ?, ?, ?)`, a.id, i, string(a.History[i]), meta); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	a.saved, a.stored = len(a.History), true
+	return nil
+}
+
+type SessionSummary struct {
+	ID      string
+	Title   string
+	Project string
+	Updated time.Time
+}
+
+func (a *Agent) Sessions() ([]SessionSummary, error) {
+	rows, err := a.db.Query(`SELECT id, CASE title WHEN '' THEN first ELSE title END, project, updated
+		FROM sessions WHERE project = ? ORDER BY updated DESC, id DESC`, a.project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []SessionSummary
+	for rows.Next() {
+		var s SessionSummary
+		var updated int64
+		if err := rows.Scan(&s.ID, &s.Title, &s.Project, &updated); err != nil {
+			return nil, err
+		}
+		s.Updated = time.Unix(0, updated)
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+func firstUserLine(history []json.RawMessage) string {
+	for _, item := range history {
+		for _, r := range RecordsForItem(item) {
+			if line := FirstLine(r.Text); r.Kind == "user" && line != "" {
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+func (a *Agent) CustomTitle() string { return a.title }
+
+func (a *Agent) Rename(name string) error {
+	a.title = strings.Join(strings.Fields(name), " ")
+	a.fire("session_title_change", nil)
+	if !a.HasSavedSession() {
+		return nil
+	}
+	return a.Save()
+}
+
+func FirstLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func (a *Agent) DefaultTitle() string {
+	a.histMu.RLock()
+	defer a.histMu.RUnlock()
+	return firstUserLine(a.History)
+}
+
+func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
+	var calls []string
+	outputs := map[string]bool{}
+	for _, item := range history {
+		v, err := parseCall(item)
+		if err != nil || v.CallID == "" {
+			continue
+		}
+		if v.Type == "function_call" {
+			calls = append(calls, v.CallID)
+		}
+		if v.Type == "function_call_output" {
+			outputs[v.CallID] = true
+		}
+	}
+	var result []json.RawMessage
+	for _, id := range calls {
+		if outputs[id] {
+			continue
+		}
+		outputs[id] = true
+		result = append(result, callOutput(id, shell.Result{Output: "Tool execution was interrupted; its effects and result are unknown. It was not rerun.", Error: true}))
+	}
+	return result
+}
