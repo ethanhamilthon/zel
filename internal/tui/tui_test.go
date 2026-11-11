@@ -1409,6 +1409,8 @@ func TestTerminalShortcutBytes(t *testing.T) {
 		sequence string
 		key      tea.KeyType
 	}{
+		{"\x19", tea.KeyCtrlY}, {"\x1b[121;5u", tea.KeyCtrlY},
+		{"\x1b[1085;5u", tea.KeyCtrlY}, {"\x1b[1085::121;5u", tea.KeyCtrlY},
 		{"\x04", tea.KeyCtrlD}, {"\x1b[100;5u", tea.KeyCtrlD},
 		{"\x1b[68;5u", tea.KeyCtrlD}, {"\x1b[1074;5u", tea.KeyCtrlD},
 		{"\x1b[1042;5u", tea.KeyCtrlD}, {"\x1b[1074::100;5u", tea.KeyCtrlD},
@@ -1925,5 +1927,87 @@ func TestScrollUpMovesThroughComposerBeforeChat(t *testing.T) {
 				t.Fatal("cursor never reached the top of the composer")
 			})
 		}
+	}
+}
+
+func TestCopyLastAnswer(t *testing.T) {
+	original := clipboardWrite
+	t.Cleanup(func() { clipboardWrite = original })
+	var copied string
+	clipboardWrite = func(text string) error { copied = text; return nil }
+	const answer = "First paragraph\n\nSecond paragraph with **markdown** and a long line."
+	for _, route := range []string{"shortcut", "menu", "form"} {
+		m := bareModel(t, t.TempDir())
+		m.entries = []entry{
+			{Kind: "assistant", Text: "older answer"},
+			{Kind: "assistant", Text: answer},
+			{Kind: "tool", Text: "not an answer"},
+			{Kind: "user", Text: "next question"},
+			{Kind: "assistant", Text: "  "},
+		}
+		m.input.SetValue("keep draft")
+		copied = ""
+		var updated tea.Model
+		var cmd tea.Cmd
+		if route == "menu" {
+			m.openMenu()
+			m.menu.query = "Copy answer"
+			updated, cmd = m.menuActivate()
+		} else {
+			if route == "form" {
+				m.openMenu()
+				m.openProviderForm("", false)
+			}
+			updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+		}
+		if cmd == nil {
+			t.Fatalf("%s did not copy", route)
+		}
+		result, ok := cmd().(answerCopied)
+		if !ok || result.err != nil || copied != answer {
+			t.Fatalf("%s copied %q: %+v", route, copied, result)
+		}
+		if updated.(model).input.Value() != "keep draft" {
+			t.Fatal("copy changed the draft")
+		}
+	}
+	m := bareModel(t, t.TempDir())
+	if _, cmd := m.copyAnswer(); cmd != nil {
+		t.Fatal("empty conversation must not overwrite the clipboard")
+	}
+	clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
+	m.entries = []entry{{Kind: "assistant", Text: answer}}
+	_, cmd := m.copyAnswer()
+	if result := cmd().(answerCopied); result.err == nil {
+		t.Fatal("copy error was lost")
+	}
+}
+
+func TestDownScrollsBackToComposer(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 48, 12
+	m.entries = []entry{{Kind: "assistant", Text: strings.Repeat("answer row\n", 40)}}
+	m.input.SetValue("first\nsecond\nthird")
+	m.setCursorOffset(0)
+	m.refresh(true)
+	m.viewport.GotoTop()
+	before := m.viewport.YOffset
+	cursor := m.composerCursorOffset()
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.viewport.YOffset != before+1 || m.composerCursorOffset() != cursor {
+		t.Fatal("Down must scroll the chat before moving the composer cursor")
+	}
+	for range m.viewport.maxYOffset() + 1 {
+		if m.viewport.AtBottom() {
+			break
+		}
+		m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !m.viewport.AtBottom() || m.input.Value() != "first\nsecond\nthird" {
+		t.Fatal("Down failed to reach the composer or changed the draft")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.composerCursorOffset() <= cursor {
+		t.Fatal("Down must move the cursor once the composer is visible")
 	}
 }

@@ -53,6 +53,7 @@ var mainRows = []menuRow{
 	{"Info", "Session, config, tokens"}, {"Reload", "Re-read the config"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Save and exit"}, {"Editor", "Edit input · Ctrl+E"},
 	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse and edit"},
+	{"Copy answer", "Last answer as plain text · Ctrl+Y"},
 }
 
 type menuListCache struct {

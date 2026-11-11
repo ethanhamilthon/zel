@@ -19,7 +19,7 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, re
 	"Edit a queued message to withdraw it; Enter queues the edited draft again\n" +
 	"Up on empty input: recall a message the model has not read yet\n" +
 	"Select and copy with terminal shortcuts; use its gesture to open links\n" +
-	"PgUp/PgDn: scroll timeline\n" +
+	"PgUp/PgDn: scroll timeline · Ctrl+Y: copy last answer\n" +
 	"The chat shows only user messages and answers; the Tracing menu has the rest\n" +
 	"Tracing entry: Left/Right switch entries · Up/Down scroll · Esc returns to the list\n" +
 	"Esc: dismiss UI · Ctrl+D: cancel current turn · Ctrl+Q: save and quit"

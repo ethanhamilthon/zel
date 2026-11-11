@@ -222,6 +222,8 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			m.openProviders()
 		case 12:
 			open(menuSettings)
+		case 14:
+			return m.closeMenu().copyAnswer()
 		case 13:
 			open(menuFiles)
 			return m, m.readDirectory(m.cwd)
