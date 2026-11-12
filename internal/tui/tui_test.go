@@ -2116,3 +2116,19 @@ func TestTurnStepsReconcilesAnswerTotals(t *testing.T) {
 		t.Fatalf("older total reduced steps: %d", got)
 	}
 }
+
+func TestHomePathsInFileBrowser(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root, err := fileCompletionRoot(t.TempDir(), "~/projects/")
+	if err != nil || root != filepath.Join(home, "projects") {
+		t.Fatalf("home-relative completion root = %q, %v", root, err)
+	}
+
+	m := model{menu: &menuState{page: menuFiles, directory: filepath.Join(home, "projects", "zel")}, width: 100}
+	title, _ := m.menuHead()
+	if title != "Menu/Files ~/projects/zel" {
+		t.Fatalf("file browser title = %q", title)
+	}
+}

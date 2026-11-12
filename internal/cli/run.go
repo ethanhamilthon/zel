@@ -162,14 +162,18 @@ func flagSet(name string, define func(*flag.FlagSet)) *flag.FlagSet {
 // parseWithConfig parses fs with a --config flag and exports the file as ZEL_CONFIG,
 // so the agent, its bash tool and helper commands all read the same layers.
 func parseWithConfig(fs *flag.FlagSet, args []string) error {
-	config := fs.String("config", "", "config file merged on top of the others")
+	configPath := fs.String("config", "", "config file merged on top of the others")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *config == "" {
+	if *configPath == "" {
 		return nil
 	}
-	path, err := filepath.Abs(*config)
+	resolved, err := core.ResolvePath(*configPath)
+	if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(resolved)
 	if err != nil {
 		return err
 	}

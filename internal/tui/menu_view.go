@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"zel/internal/core"
 )
 
 func (m model) menuView() string {
@@ -85,7 +86,7 @@ func (m model) menuHead() (title, shortcut string) {
 		title = "zel " + strings.TrimPrefix(Version, "v") + "/" + name
 	}
 	if m.menu.page == menuFiles {
-		title = "Menu/Files " + m.menu.directory
+		title = "Menu/Files " + core.DisplayPath(m.menu.directory)
 	}
 	if m.menu.page == menuText {
 		title = m.menu.title

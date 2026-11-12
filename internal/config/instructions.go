@@ -20,13 +20,30 @@ func expand(s string) string {
 	return envReference.ReplaceAllStringFunc(s, func(m string) string { return os.Getenv(m[3 : len(m)-2]) })
 }
 func FlagConfig(dir string) string {
-	path := os.Getenv("ZEL_CONFIG")
-	if path != "" && !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
-	}
+	path, _ := flagConfigPath(dir)
 	return path
 }
+
+func flagConfigPath(dir string) (string, error) {
+	path := os.Getenv("ZEL_CONFIG")
+	if path == "" {
+		return "", nil
+	}
+	var err error
+	path, err = ResolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	return filepath.Clean(path), nil
+}
 func ConfigPaths(home, dir string) []string {
+	return configPaths(home, dir, FlagConfig(dir))
+}
+
+func configPaths(home, dir, flagged string) []string {
 	var local []string
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
 		local = append(local, filepath.Join(d, "ZEL.md"))
@@ -36,7 +53,7 @@ func ConfigPaths(home, dir string) []string {
 	}
 	slices.Reverse(local)
 	paths := append([]string{filepath.Join(home, "ZEL.md")}, local...)
-	if flagged := FlagConfig(dir); flagged != "" {
+	if flagged != "" {
 		paths = append(paths, flagged)
 	}
 	seen := map[string]bool{}
@@ -60,9 +77,13 @@ func Load(home, dir string, preferences []byte) (Settings, error) {
 			return s, fmt.Errorf("preferences: %w", err)
 		}
 	}
-	for _, path := range ConfigPaths(home, dir) {
+	flagged, err := flagConfigPath(dir)
+	if err != nil {
+		return s, err
+	}
+	for _, path := range configPaths(home, dir, flagged) {
 		err := mergeConfig(&s, path)
-		if errors.Is(err, os.ErrNotExist) && path != FlagConfig(dir) {
+		if errors.Is(err, os.ErrNotExist) && path != flagged {
 			continue
 		}
 		if err != nil {

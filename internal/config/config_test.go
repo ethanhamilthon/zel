@@ -61,3 +61,50 @@ func TestInitProjectCleansUpOnReadFailure(t *testing.T) {
 		t.Fatalf("partial file retained: %v", err)
 	}
 }
+
+func TestPortableHomePaths(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "actual-home")
+	if err := os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	for _, test := range []struct {
+		input, want string
+	}{
+		{"~", home},
+		{"~/projects/zel", filepath.Join(home, "projects", "zel")},
+		{"~someone/project", "~someone/project"},
+		{"relative/path", "relative/path"},
+	} {
+		got, err := ResolvePath(test.input)
+		if err != nil || got != test.want {
+			t.Errorf("ResolvePath(%q) = %q, %v; want %q", test.input, got, err, test.want)
+		}
+	}
+
+	for _, test := range []struct {
+		input, want string
+	}{
+		{home, "~"},
+		{filepath.Join(home, "projects", "zel"), "~/projects/zel"},
+		{filepath.Join(home+"-other", "project"), filepath.Join(home+"-other", "project")},
+		{"relative/path", "relative/path"},
+	} {
+		if got := DisplayPath(test.input); got != test.want {
+			t.Errorf("DisplayPath(%q) = %q; want %q", test.input, got, test.want)
+		}
+	}
+
+	cwd := filepath.Join(t.TempDir(), "project")
+	t.Setenv("ZEL_HOME", "~/.zel-state")
+	got, err := ZelHome(cwd)
+	if err != nil || got != filepath.Join(home, ".zel-state") {
+		t.Fatalf("ZelHome with a home-relative override = %q, %v", got, err)
+	}
+	t.Setenv("ZEL_CONFIG", "~/.config/zel.md")
+	got = FlagConfig(cwd)
+	if got != filepath.Join(home, ".config", "zel.md") {
+		t.Fatalf("FlagConfig with a home-relative override = %q", got)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"zel/internal/core"
 )
 
 const (
@@ -170,17 +171,16 @@ func fileQueryParts(query string) (string, string) {
 	return filepath.Split(query)
 }
 
-func fileCompletionRoot(cwd, query string) string {
+func fileCompletionRoot(cwd, query string) (string, error) {
 	dir, _ := fileQueryParts(query)
-	if strings.HasPrefix(dir, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(dir, "~/"))
-		}
+	resolved, err := core.ResolvePath(dir)
+	if err != nil {
+		return "", err
 	}
-	if filepath.IsAbs(dir) {
-		return filepath.Clean(dir)
+	if filepath.IsAbs(resolved) {
+		return filepath.Clean(resolved), nil
 	}
-	return filepath.Join(cwd, dir)
+	return filepath.Join(cwd, resolved), nil
 }
 
 func filterFileCompletions(indexed []string, query string) []string {
@@ -235,7 +235,11 @@ func (m *model) checkFileCompletion() tea.Cmd {
 	m.fileDebounceGen++
 	m.fileSelected, m.hideCompletion = 0, false
 	m.fileTokenStart, m.fileTokenEnd = token.start, token.end
-	root := fileCompletionRoot(m.cwd, token.query)
+	root, err := fileCompletionRoot(m.cwd, token.query)
+	if err != nil {
+		m.fileCompletions, m.fileLoading = nil, false
+		return nil
+	}
 	if m.fileIndexCwd == root {
 		m.fileCompletions = filterFileCompletions(m.fileIndexCache, token.query)
 		if time.Since(m.fileIndexCacheTime) < fileIndexCacheTTL {
@@ -265,7 +269,11 @@ func (m *model) handleFileDebounce(msg fileDebounceMsg) (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	m.fileTokenStart, m.fileTokenEnd = token.start, token.end
-	root := fileCompletionRoot(m.cwd, token.query)
+	root, err := fileCompletionRoot(m.cwd, token.query)
+	if err != nil {
+		m.fileCompletions, m.fileLoading = nil, false
+		return *m, nil
+	}
 	if m.fileIndexCwd == root && time.Since(m.fileIndexCacheTime) < fileIndexCacheTTL {
 		m.fileCompletions, m.fileSelected, m.fileLoading = filterFileCompletions(m.fileIndexCache, token.query), 0, false
 		m.refresh(true)
