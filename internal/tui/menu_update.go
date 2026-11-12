@@ -77,16 +77,13 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				m.moveTrace(delta)
 			}
-		case "up":
+		case "up", "down":
 			step := max(1, m.menuBodyRoom()/2)
 			if m.traceEntryView() {
 				step = 1
 			}
-			m.scrollText(-step)
-		case "down":
-			step := max(1, m.menuBodyRoom()/2)
-			if m.traceEntryView() {
-				step = 1
+			if v.String() == "up" {
+				step = -step
 			}
 			m.scrollText(step)
 		case "pgup":

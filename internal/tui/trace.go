@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,15 +17,7 @@ import (
 func traceLabel(e core.TraceEntry) string { return traceKindLabel(e.Kind) }
 
 func traceKindLabel(kind string) string {
-	switch kind {
-	case "assistant":
-		return "agent"
-	case "code":
-		return "bash"
-	case "reasoning":
-		return "thinking"
-	}
-	return kind
+	return cmp.Or(map[string]string{"assistant": "agent", "code": "bash", "reasoning": "thinking"}[kind], kind)
 }
 
 func traceKindMatches(kind, filter string) bool {
@@ -41,25 +34,14 @@ func traceContext(e core.TraceEntry) string {
 	return strings.Join(parts, " ")
 }
 
+var traceColors = map[string]lipgloss.Color{
+	"system": darkGray, "user": inputBlue, "assistant": lipgloss.Color("#ffffff"), "agent": lipgloss.Color("#ffffff"),
+	"bash": codeGray, "notice": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
+	"output": lipgloss.Color("#404040"), "error": errorColor,
+}
+
 func traceColor(kind string) lipgloss.Color {
-	switch kind {
-	case "system":
-		return darkGray
-	case "user":
-		return inputBlue
-	case "assistant", "agent":
-		return lipgloss.Color("#ffffff")
-	case "bash":
-		return codeGray
-	case "notice", "task":
-		return lipgloss.Color("#808080")
-	case "output":
-		return lipgloss.Color("#404040")
-	case "error":
-		return errorColor
-	default:
-		return muted
-	}
+	return cmp.Or(traceColors[kind], muted)
 }
 
 // traceDetail is the second column: when it happened and its first line, or the
@@ -68,12 +50,12 @@ func traceDetail(e core.TraceEntry) string {
 	first, rest, _ := strings.Cut(strings.TrimSpace(ansi.Strip(e.Text)), "\n")
 	first = strings.Join(strings.Fields(first), " ")
 	if rest != "" {
-		first = fmt.Sprintf("%s · %d lines", first, len(strings.Split(e.Text, "\n")))
+		first = fmt.Sprintf("%s · %d lines", first, strings.Count(e.Text, "\n")+1)
 	}
-	if e.At.IsZero() {
-		return first
+	if !e.At.IsZero() {
+		first += " · " + e.At.Format("15:04:05")
 	}
-	return first + " · " + e.At.Format("15:04:05")
+	return first
 }
 
 // traceText is the body of one traced entry, keeping the raw text.

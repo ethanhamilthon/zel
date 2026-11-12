@@ -4,7 +4,7 @@ USAGE
   zel [--config FILE]
   zel -p PROMPT [--model MODEL] [--provider NAME] [--effort LEVEL] [--config FILE]
   zel session -s ID
-  zel session rename ID NAME
+  zel session rename [-s ID] NAME...
   zel models [--json]
   zel tasks run [-s ID] COMMAND...
   zel tasks list|status|stop [-s ID] [TASK]
@@ -65,6 +65,7 @@ ENVIRONMENT
                   attachments/, tasks/, and events/.
   ZEL_CONFIG      Explicit instruction file; set by --config, inherited by tools.
   ZEL_SESSION_ID  Active session ID, exported to Bash and hooks.
+  ZEL_PARENT      Root session ID of the whole tree, exported to Bash and hooks.
   ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
   ZEL_MODE        tui or headless for hooks.
   VISUAL, EDITOR  External editor fallback, after the UI preference; default nvim.

@@ -105,9 +105,7 @@ func newComposer() textarea.Model {
 	input := textarea.New()
 	input.Prompt = ""
 	input.ShowLineNumbers = false
-	input.CharLimit = 0
-	input.MaxHeight = 0
-	input.MaxWidth = 0
+	input.CharLimit, input.MaxHeight, input.MaxWidth = 0, 0, 0
 	input.SetHeight(1)
 	input.Focus()
 	input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")

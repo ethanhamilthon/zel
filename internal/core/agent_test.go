@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"zel/internal/shell"
@@ -1060,3 +1061,62 @@ func TestResumeMissingSessionKeepsCurrentSession(t *testing.T) {
 }
 
 const retryAttempts = 3
+
+func TestActiveSubagentsPruning(t *testing.T) {
+	home := t.TempDir()
+	subDir := filepath.Join(home, "subagents")
+	locksDir := filepath.Join(home, "locks")
+	if err := os.MkdirAll(subDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(locksDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	parentID := "root-123"
+
+	// 1. Dead subagent with missing lock file -> pruned
+	data, _ := json.Marshal(SubagentRun{ID: "dead-1", Parent: parentID, Started: time.Now()})
+	if err := os.WriteFile(filepath.Join(subDir, "dead-1.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Dead subagent with unlocked lock file -> pruned
+	data, _ = json.Marshal(SubagentRun{ID: "dead-2", Parent: parentID, Started: time.Now()})
+	if err := os.WriteFile(filepath.Join(subDir, "dead-2.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locksDir, "dead-2.lock"), []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Live subagent with exclusively locked lock file -> retained
+	data, _ = json.Marshal(SubagentRun{ID: "live-1", Parent: parentID, Started: time.Now()})
+	if err := os.WriteFile(filepath.Join(subDir, "live-1.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lockFile, err := os.OpenFile(filepath.Join(locksDir, "live-1.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+
+	list := ActiveSubagentsForParent(home, parentID)
+	if len(list) != 1 || list[0].ID != "live-1" {
+		t.Fatalf("expected [live-1], got %+v", list)
+	}
+
+	// Check dead files were removed
+	if _, err := os.Stat(filepath.Join(subDir, "dead-1.json")); !os.IsNotExist(err) {
+		t.Fatal("dead-1.json was not pruned")
+	}
+	if _, err := os.Stat(filepath.Join(subDir, "dead-2.json")); !os.IsNotExist(err) {
+		t.Fatal("dead-2.json was not pruned")
+	}
+	if _, err := os.Stat(filepath.Join(subDir, "live-1.json")); err != nil {
+		t.Fatal("live-1.json was pruned unexpectedly")
+	}
+}

@@ -363,13 +363,22 @@ func sessionSubcommand(args []string, out io.Writer) error {
 }
 
 func renameSessionCommand(args []string) error {
-	if len(args) < 2 {
-		return errors.New("usage: zel session rename <id> <name>")
+	var id string
+	fs := flagSet("session rename", func(fs *flag.FlagSet) { fs.StringVar(&id, "s", "", "session ID") })
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	id := strings.TrimSpace(args[0])
-	name := strings.TrimSpace(strings.Join(args[1:], " "))
+	rest := fs.Args()
+	var name string
+	if id = strings.TrimSpace(id); id != "" {
+		name = strings.TrimSpace(strings.Join(rest, " "))
+	} else if envID := strings.TrimSpace(os.Getenv("ZEL_SESSION_ID")); envID != "" {
+		id, name = envID, strings.TrimSpace(strings.Join(rest, " "))
+	} else if len(rest) >= 2 {
+		id, name = strings.TrimSpace(rest[0]), strings.TrimSpace(strings.Join(rest[1:], " "))
+	}
 	if id == "" || name == "" {
-		return errors.New("usage: zel session rename <id> <name>")
+		return errors.New("usage: zel session rename [-s ID] NAME...")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

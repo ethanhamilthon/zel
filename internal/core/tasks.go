@@ -269,83 +269,59 @@ func (a *Runtime) StopTask(id string) error {
 	return a.tasks.stop(id)
 }
 
-func (t *tasks) SetSteps(id string, steps int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.steps == nil {
-		t.steps = map[string]int{}
-	}
-	t.steps[id] = steps
-}
-
-func (t *tasks) Steps(id string) int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.steps[id]
-}
-
 func (a *Runtime) SetTaskSteps(id string, steps int) {
 	if a.tasks != nil {
-		a.tasks.SetSteps(id, steps)
+		a.tasks.mu.Lock()
+		a.tasks.steps[id] = steps
+		a.tasks.mu.Unlock()
 	}
 }
 
 func (a *Runtime) TaskSteps(id string) int {
 	if a.tasks != nil {
-		return a.tasks.Steps(id)
+		a.tasks.mu.Lock()
+		defer a.tasks.mu.Unlock()
+		return a.tasks.steps[id]
 	}
 	return 0
 }
 
 func (a *Runtime) StartSubagent(command string) *SubagentHandle {
-	return StartSubagent(a.home, a.id, a.ParentSession(), command)
+	return StartSubagent(a.home, a.id, ParentSession(), command)
 }
 
 func (a *Runtime) ActiveSubagents() []SubagentRun {
-	list := ActiveSubagentsForParent(a.home, a.id)
+	rootID := a.rootID()
+	var list []SubagentRun
 	seen := map[string]bool{}
-	for _, s := range list {
-		seen[s.ID] = true
-		seen[s.Command] = true
+	add := func(r SubagentRun) {
+		if !seen[r.ID] && !seen[r.Command] {
+			seen[r.ID], seen[r.Command] = true, true
+			list = append(list, r)
+		}
 	}
-
+	for _, s := range ActiveSubagentsForParent(a.home, rootID) {
+		add(s)
+	}
 	if a.tasks != nil {
 		tasks, _ := a.Tasks()
-		for _, task := range tasks {
-			if task.Status == "running" && strings.Contains(task.Command, "zel -p") {
-				if seen[task.ID] || seen[task.Command] {
-					continue
-				}
-				list = append(list, SubagentRun{
-					ID:      task.ID,
-					Parent:  a.id,
-					Started: task.Started,
-					Steps:   a.TaskSteps(task.ID),
-					Command: task.Command,
-				})
-				seen[task.ID] = true
-				seen[task.Command] = true
+		for _, t := range tasks {
+			if t.Status == "running" && strings.Contains(t.Command, "zel -p") {
+				add(SubagentRun{ID: t.ID, Parent: rootID, Started: t.Started, Steps: a.TaskSteps(t.ID), Command: t.Command})
 			}
 		}
 	}
-
 	a.histMu.RLock()
-	fore := a.currentToolSubagent
-	a.histMu.RUnlock()
-	if fore != nil && !seen[fore.ID] && !seen[fore.Command] {
-		list = append(list, *fore)
+	if a.currentToolSubagent != nil {
+		add(*a.currentToolSubagent)
 	}
-
+	a.histMu.RUnlock()
 	slices.SortFunc(list, func(a, b SubagentRun) int {
-		if !a.Started.Equal(b.Started) {
-			if a.Started.Before(b.Started) {
-				return -1
-			}
-			return 1
+		if c := a.Started.Compare(b.Started); c != 0 {
+			return c
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
-
 	return list
 }
 

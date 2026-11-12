@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/url"
@@ -37,12 +38,8 @@ func (m *model) startForm(f *formState) {
 
 func (m *model) openProviderForm(name string, onboarding bool) {
 	p := m.ctl.Settings().Providers[name]
-	if p.BaseURL == "" {
-		p.BaseURL = "https://api.openai.com/v1"
-	}
-	if p.API == "" {
-		p.API = core.APIResponses
-	}
+	p.BaseURL = cmp.Or(p.BaseURL, "https://api.openai.com/v1")
+	p.API = cmp.Or(p.API, core.APIResponses)
 	m.startForm(&formState{kind: "provider", original: name, onboarding: onboarding, fields: []string{"Name", "Base URL", "API key", "API type (responses / chat)"}, values: []string{name, p.BaseURL, p.APIKey, p.API}})
 }
 func (m *model) openProviders() {

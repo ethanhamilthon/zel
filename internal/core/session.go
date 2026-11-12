@@ -140,27 +140,25 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
-// ParentSession returns the ID of the parent zel session if running under
-// another zel instance (e.g. via 'zel -p' from the bash tool), or empty if root.
+// ParentSession returns the root session ID of the whole tree if running under
+// another zel instance (via ZEL_PARENT), or empty if root.
 func ParentSession() string {
 	return strings.TrimSpace(os.Getenv("ZEL_PARENT"))
 }
 
-// ParentSession returns the ID of the parent zel session if running under
-// another zel instance, or empty if root.
-func (a *Runtime) ParentSession() string {
-	return ParentSession()
+func (a *Runtime) rootID() string {
+	if root := ParentSession(); root != "" {
+		return root
+	}
+	return a.id
 }
 
 // shellEnv is exported to every bash tool call. API keys and settings are never exported.
+// ZEL_PARENT holds the root session ID of the whole tree.
 func (a *Runtime) shellEnv() map[string]string {
-	parent := ParentSession()
-	if parent == "" {
-		parent = a.SessionID()
-	}
 	env := map[string]string{
 		"ZEL_SESSION_ID": a.SessionID(),
-		"ZEL_PARENT":     parent,
+		"ZEL_PARENT":     a.rootID(),
 	}
 	if a.sock != nil {
 		env["ZEL_ENDPOINT"] = a.sock.path
@@ -170,7 +168,7 @@ func (a *Runtime) shellEnv() map[string]string {
 
 // RenameSession updates the title of a persisted session without opening it.
 func RenameSession(cwd, id, title string) error {
-	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID: %s", id)
 	}
 	clean := strings.Join(strings.Fields(title), " ")

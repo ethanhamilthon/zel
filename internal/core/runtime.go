@@ -289,7 +289,7 @@ func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, e
 		a.histMu.Lock()
 		a.currentToolSubagent = &SubagentRun{
 			ID:      callID,
-			Parent:  a.SessionID(),
+			Parent:  a.rootID(),
 			Started: shellStarted,
 			Command: args.Command,
 		}

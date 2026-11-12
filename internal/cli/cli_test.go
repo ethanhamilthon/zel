@@ -201,6 +201,7 @@ func TestInitCommand(t *testing.T) {
 }
 
 func TestSessionRenameCommand(t *testing.T) {
+	t.Setenv("ZEL_SESSION_ID", "")
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	cwd := t.TempDir()
@@ -263,7 +264,7 @@ func TestSessionRenameCommand(t *testing.T) {
 		t.Fatalf("expected summary title %q, got %+v", "my custom title", summaries)
 	}
 
-	// Rename with multiple unquoted arguments
+	// Rename with multiple unquoted arguments (positional)
 	if err := Run(context.Background(), []string{"session", "rename", "s1", "another", "new", "title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
 		t.Fatalf("multi-arg rename failed: %v", err)
 	}
@@ -273,6 +274,25 @@ func TestSessionRenameCommand(t *testing.T) {
 	}
 	if loaded.Title != "another new title" {
 		t.Fatalf("expected title %q, got %q", "another new title", loaded.Title)
+	}
+
+	// Rename with -s flag
+	if err := Run(context.Background(), []string{"session", "rename", "-s", "s1", "flag", "title", "here"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatalf("-s flag rename failed: %v", err)
+	}
+	loaded, err = db.Session("s1", cwd)
+	if err != nil || loaded.Title != "flag title here" {
+		t.Fatalf("expected title %q, got %q (err: %v)", "flag title here", loaded.Title, err)
+	}
+
+	// Rename defaulting to ZEL_SESSION_ID; ensure multi-word name is not mistaken for an ID
+	t.Setenv("ZEL_SESSION_ID", "s1")
+	if err := Run(context.Background(), []string{"session", "rename", "env", "multi", "word", "title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatalf("ZEL_SESSION_ID rename failed: %v", err)
+	}
+	loaded, err = db.Session("s1", cwd)
+	if err != nil || loaded.Title != "env multi word title" {
+		t.Fatalf("expected title %q, got %q (err: %v)", "env multi word title", loaded.Title, err)
 	}
 
 	// Help text includes session rename

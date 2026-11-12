@@ -105,25 +105,27 @@ func editText(text *string, v tea.KeyMsg) bool {
 	case tea.KeySpace:
 		*text += " "
 	case tea.KeyRunes:
-		*text += strings.NewReplacer("\n", " ", "\r", " ").Replace(string(v.Runes))
+		*text += spaceReplacer.Replace(string(v.Runes))
 	default:
 		return false
 	}
 	return true
 }
 
+var spaceReplacer = strings.NewReplacer("\n", " ", "\r", " ")
+
 // updateMenuSearch also routes asynchronous textarea paste results to the menu,
 // keeping them out of the main composer.
 func (m *model) updateMenuSearch(msg tea.Msg) tea.Cmd {
 	input := m.menuInput(max(1, m.menuWidth()-2))
 	if key, ok := msg.(tea.KeyMsg); ok && key.Paste {
-		key.Runes = []rune(strings.NewReplacer("\n", " ", "\r", " ").Replace(string(key.Runes)))
+		key.Runes = []rune(spaceReplacer.Replace(string(key.Runes)))
 		msg = key
 	}
 	previous := input.Value()
 	next, cmd := input.Update(msg)
 	*input = next
-	value := strings.NewReplacer("\n", " ", "\r", " ").Replace(input.Value())
+	value := spaceReplacer.Replace(input.Value())
 	if value != input.Value() {
 		input.SetValue(value)
 	}

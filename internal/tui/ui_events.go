@@ -125,15 +125,11 @@ func (m model) subagentBlock() string {
 	if len(subagents) == 0 {
 		return ""
 	}
-	var rows []string
-	for _, child := range subagents {
-		rows = append(rows, m.formatSubagentRow(child))
+	rows := make([]string, len(subagents))
+	for i, child := range subagents {
+		rows[i] = m.formatSubagentRow(child)
 	}
 	return strings.Join(rows, "\n\n") + "\n\n"
-}
-
-func (m model) subagentsBlock() string {
-	return m.subagentBlock()
 }
 
 // formatSubagentRow renders a single subagent indicator row:

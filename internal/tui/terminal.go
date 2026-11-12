@@ -9,6 +9,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var (
+	termCtrlKeys  = map[byte]tea.KeyType{'a': tea.KeyCtrlA, 'v': tea.KeyCtrlV, 'y': tea.KeyCtrlY, 'd': tea.KeyCtrlD, 'x': tea.KeyCtrlX, 'e': tea.KeyCtrlE, 'n': tea.KeyCtrlN, 'f': tea.KeyCtrlF, 'q': tea.KeyCtrlQ, 'k': tea.KeyCtrlK}
+	termMenuPages = map[byte]menuPage{'m': menuModel, 'r': menuResume, 'i': menuInfo, 't': menuTracing}
+)
+
 // Bubble Tea v1.3.10 exposes unknown CSI sequences only through Stringer;
 // it has no native Kitty keyboard protocol API. Keep compatibility here.
 func normalizeTerminalKey(msg tea.Msg) tea.Msg {
@@ -17,42 +22,16 @@ func normalizeTerminalKey(msg tea.Msg) tea.Msg {
 			return tea.KeyMsg{Type: tea.KeyCtrlA}
 		}
 		if action, super, release, ok := clipboardSequence(sequence.String()); ok {
-			switch {
-			case release:
+			if release || (super && action != 'a' && action != 'v') {
 				return nil
-			case action == 'a':
-				return tea.KeyMsg{Type: tea.KeyCtrlA}
-			case action == 'v':
-				return tea.KeyMsg{Type: tea.KeyCtrlV}
-			case super:
-				return nil
-			case action == 'y':
-				return tea.KeyMsg{Type: tea.KeyCtrlY}
-			case action == 'd':
-				return tea.KeyMsg{Type: tea.KeyCtrlD}
-			case action == 'x':
-				return tea.KeyMsg{Type: tea.KeyCtrlX}
-			case action == 'm':
-				return menuShortcut(menuModel)
-			case action == 'r':
-				return menuShortcut(menuResume)
-			case action == 'i':
-				return menuShortcut(menuInfo)
-			case action == 't':
-				return menuShortcut(menuTracing)
-			case action == 'e':
-				return tea.KeyMsg{Type: tea.KeyCtrlE}
-			case action == 'n':
-				return tea.KeyMsg{Type: tea.KeyCtrlN}
-			case action == 'f':
-				return tea.KeyMsg{Type: tea.KeyCtrlF}
-			case action == 'q':
-				return tea.KeyMsg{Type: tea.KeyCtrlQ}
-			case action == 'k':
-				return tea.KeyMsg{Type: tea.KeyCtrlK}
-			default:
-				return tea.KeyMsg{Type: tea.KeyCtrlC}
 			}
+			if kt, ok := termCtrlKeys[action]; ok {
+				return tea.KeyMsg{Type: kt}
+			}
+			if page, ok := termMenuPages[action]; ok {
+				return menuShortcut(page)
+			}
+			return tea.KeyMsg{Type: tea.KeyCtrlC}
 		}
 		if key, ok := kittyKey(sequence.String()); ok {
 			return key

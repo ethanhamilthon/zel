@@ -45,11 +45,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Editor", s.UI.Editor}, {"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}}
 	case menuFiles:
 		for _, f := range mu.files {
-			detail := "file"
-			if f.dir {
-				detail = "directory"
-			}
-			rows = append(rows, menuRow{f.name, detail})
+			rows = append(rows, menuRow{f.name, map[bool]string{false: "file", true: "directory"}[f.dir]})
 		}
 		if len(rows) == 0 {
 			rows = []menuRow{{"Unable to read directory", mu.status}}

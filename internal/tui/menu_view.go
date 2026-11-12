@@ -29,7 +29,13 @@ func (m model) menuView() string {
 		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
-	if m.menu.page == menuFiles || m.menu.page == menuProviders {
+	hint := ""
+	if m.menu.page == menuFiles {
+		hint = "Ctrl+A: New file or directory"
+	} else if m.menu.page == menuProviders {
+		hint = "Ctrl+A: Add provider"
+	}
+	if hint != "" {
 		bodyRows := max(0, m.height-1)
 		if len(lines) > bodyRows {
 			lines = lines[:bodyRows]
@@ -37,15 +43,7 @@ func (m model) menuView() string {
 		for len(lines) < bodyRows {
 			lines = append(lines, "")
 		}
-		hint := "Ctrl+A: Add provider"
-		if m.menu.page == menuFiles {
-			hint = "Ctrl+A: New file or directory"
-		}
 		lines = append(lines, pad+lipgloss.NewStyle().Foreground(muted).Render(hint))
-	} else {
-		for len(lines) < m.height {
-			lines = append(lines, "")
-		}
 	}
 	if m.height <= 0 {
 		return ""

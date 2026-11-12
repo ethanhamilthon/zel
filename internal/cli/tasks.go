@@ -67,10 +67,7 @@ func tasksCommand(args []string, out io.Writer) error {
 		}
 		return err
 	case (args[0] == "list" && len(rest) == 0) || (args[0] == "status" && len(rest) == 1):
-		if session == "" {
-			session = os.Getenv("ZEL_SESSION_ID")
-		}
-		if session == "" {
+		if session = cmp.Or(session, os.Getenv("ZEL_SESSION_ID")); session == "" {
 			return errors.New("outside a zel shell, pass -s SESSION_ID")
 		}
 		home, err := core.ZelHome(cwd)
@@ -109,11 +106,7 @@ func taskState(task core.Task) string {
 }
 
 func taskTime(task core.Task) string {
-	end := task.Ended
-	if end.IsZero() {
-		end = time.Now()
-	}
-	return end.Sub(task.Started).Round(time.Second).String()
+	return cmp.Or(task.Ended, time.Now()).Sub(task.Started).Round(time.Second).String()
 }
 
 // eventsCommand prints the notices and errors a session showed in its UI.

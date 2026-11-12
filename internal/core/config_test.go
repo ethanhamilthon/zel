@@ -139,9 +139,6 @@ func TestBashToolEnvParentSession(t *testing.T) {
 	if got := ParentSession(); got != "" {
 		t.Fatalf("unset ParentSession: got %q, want empty", got)
 	}
-	if got := a.ParentSession(); got != "" {
-		t.Fatalf("unset a.ParentSession: got %q, want empty", got)
-	}
 	res, _ := a.Shell.Run(context.Background(), "echo $ZEL_PARENT", time.Second, 100, nil)
 	if got, want := strings.TrimSpace(res.Output), a.SessionID(); got != want {
 		t.Fatalf("executed script with unset ZEL_PARENT: got %q, want %q", got, want)
@@ -155,9 +152,6 @@ func TestBashToolEnvParentSession(t *testing.T) {
 	}
 	if got := ParentSession(); got != inherited {
 		t.Fatalf("inherited ParentSession: got %q, want %q", got, inherited)
-	}
-	if got := a.ParentSession(); got != inherited {
-		t.Fatalf("inherited a.ParentSession: got %q, want %q", got, inherited)
 	}
 	res, _ = a.Shell.Run(context.Background(), "echo $ZEL_PARENT", time.Second, 100, nil)
 	if got, want := strings.TrimSpace(res.Output), inherited; got != want {

@@ -199,9 +199,7 @@ func (c *Controller) TaskOutput(id string) (string, error) {
 }
 
 func (c *Controller) ActiveSubagents() (list []SubagentRun) {
-	c.view(func() {
-		list = c.a.ActiveSubagents()
-	})
+	c.view(func() { list = c.a.ActiveSubagents() })
 	return list
 }
 

@@ -11,6 +11,7 @@ import (
 )
 
 // SubagentRun describes an active child agent run (zel -p).
+// Parent holds the root session ID of the whole tree.
 type SubagentRun struct {
 	ID      string    `json:"id"`
 	Parent  string    `json:"parent"`
@@ -31,7 +32,8 @@ var (
 	subagentMap = map[string]*SubagentRun{}
 )
 
-// StartSubagent registers an active child agent run. If parent is empty, it returns a no-op handle.
+// StartSubagent registers an active child agent run under the root session parent.
+// If parent is empty, it returns a no-op handle.
 func StartSubagent(home, id, parent, command string) *SubagentHandle {
 	if parent == "" {
 		return &SubagentHandle{}
@@ -45,23 +47,20 @@ func StartSubagent(home, id, parent, command string) *SubagentHandle {
 	return h
 }
 
-// AddStep increments the step count of the running subagent.
-func (h *SubagentHandle) AddStep() {
-	if h != nil && h.run != nil {
-		h.mu.Lock()
-		h.run.Steps++
-		h.persist()
-		h.mu.Unlock()
-	}
-}
-
 // SetSteps updates the step count of the running subagent.
 func (h *SubagentHandle) SetSteps(n int) {
 	if h != nil && h.run != nil {
 		h.mu.Lock()
+		defer h.mu.Unlock()
 		h.run.Steps = n
 		h.persist()
-		h.mu.Unlock()
+	}
+}
+
+// AddStep increments the step count of the running subagent.
+func (h *SubagentHandle) AddStep() {
+	if h != nil && h.run != nil {
+		h.SetSteps(h.run.Steps + 1)
 	}
 }
 
@@ -92,7 +91,7 @@ func (h *SubagentHandle) persist() {
 	}
 }
 
-// ActiveSubagentsForParent lists all running subagents registered for a parent session.
+// ActiveSubagentsForParent lists all running subagents registered for a root session ID.
 func ActiveSubagentsForParent(home, parentID string) []SubagentRun {
 	var list []SubagentRun
 	seen := map[string]bool{}
@@ -133,7 +132,7 @@ func ActiveSubagentsForParent(home, parentID string) []SubagentRun {
 func isDeadLock(path string) bool {
 	f, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if err != nil {
-		return false
+		return os.IsNotExist(err)
 	}
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {

@@ -147,9 +147,8 @@ func (m *model) timelineRows(budget time.Duration) []string {
 	var screen screenRows
 	if len(m.cache) > len(m.entries) {
 		m.cache = m.cache[:len(m.entries)]
-	}
-	for len(m.cache) < len(m.entries) {
-		m.cache = append(m.cache, renderedEntry{})
+	} else if diff := len(m.entries) - len(m.cache); diff > 0 {
+		m.cache = append(m.cache, make([]renderedEntry, diff)...)
 	}
 	started, rendered := time.Now(), 0
 	m.renderPending = false
@@ -206,19 +205,14 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		start = max(0, m.fileSelected%count-rows+1)
 		for i := start; i < min(count, start+rows); i++ {
 			selected := i == m.fileSelected%count
-			marker := "  "
+			marker, fg := "  ", muted
 			if selected {
-				marker = " <"
+				marker, fg = " <", foreground
 				if m.width < ansi.StringWidth(marker) {
 					marker = "<"
 				}
 			}
-			labelWidth := max(0, m.width-ansi.StringWidth(marker))
-			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), labelWidth, "…")
-			fg := muted
-			if selected {
-				fg = foreground
-			}
+			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
 			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
 			screen.add(row + "\n")
 		}

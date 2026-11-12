@@ -26,8 +26,12 @@ func (a *Runtime) openProject(dir string) error {
 	return a.createSession()
 }
 
+func validSessionID(id string) bool {
+	return id != "" && filepath.Base(id) == id && !strings.ContainsAny(id, `/\\`)
+}
+
 func (a *Runtime) openSession(id string) error {
-	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID: %s", id)
 	}
 	v, err := a.db.Session(id, a.project)
@@ -170,7 +174,7 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 // ReadSession reads a persisted snapshot without acquiring session ownership or
 // running hooks. It works while another process is running the session.
 func ReadSession(cwd, id string) ([]Record, error) {
-	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+	if !validSessionID(id) {
 		return nil, fmt.Errorf("invalid session ID: %s", id)
 	}
 	home, err := ZelHome(cwd)
