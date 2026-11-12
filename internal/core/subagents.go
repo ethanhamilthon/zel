@@ -48,29 +48,33 @@ func StartSubagent(home, id, parent, command string) *SubagentHandle {
 }
 
 // SetSteps updates the step count of the running subagent.
-func (h *SubagentHandle) SetSteps(n int) {
-	if h != nil && h.run != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.run.Steps = n
-		h.persist()
-	}
-}
+func (h *SubagentHandle) SetSteps(n int) { h.update(func() { h.run.Steps = n }) }
 
 // AddStep increments the step count of the running subagent.
-func (h *SubagentHandle) AddStep() {
-	if h != nil && h.run != nil {
-		h.SetSteps(h.run.Steps + 1)
+func (h *SubagentHandle) AddStep() { h.update(func() { h.run.Steps++ }) }
+
+func (h *SubagentHandle) update(fn func()) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run != nil {
+		fn()
+		h.persist()
 	}
 }
 
 // Finish unregisters the running subagent and removes its persisted state.
 func (h *SubagentHandle) Finish() {
-	if h == nil || h.run == nil {
+	if h == nil {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.run == nil {
+		return
+	}
 	subagentMu.Lock()
 	delete(subagentMap, h.run.ID)
 	subagentMu.Unlock()
@@ -86,14 +90,12 @@ func (h *SubagentHandle) persist() {
 	}
 	dir := filepath.Join(h.home, "subagents")
 	_ = os.MkdirAll(dir, 0700)
-	if data, err := json.Marshal(h.run); err == nil {
-		_ = os.WriteFile(filepath.Join(dir, h.run.ID+".json"), data, 0600)
-	}
+	data, _ := json.Marshal(h.run)
+	_ = os.WriteFile(filepath.Join(dir, h.run.ID+".json"), data, 0600)
 }
 
 // ActiveSubagentsForParent lists all running subagents registered for a root session ID.
-func ActiveSubagentsForParent(home, parentID string) []SubagentRun {
-	var list []SubagentRun
+func ActiveSubagentsForParent(home, parentID string) (list []SubagentRun) {
 	seen := map[string]bool{}
 	subagentMu.Lock()
 	for _, run := range subagentMap {
@@ -103,39 +105,44 @@ func ActiveSubagentsForParent(home, parentID string) []SubagentRun {
 		}
 	}
 	subagentMu.Unlock()
-
-	if home != "" {
-		dir := filepath.Join(home, "subagents")
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, entry := range entries {
-				id := strings.TrimSuffix(entry.Name(), ".json")
-				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || seen[id] {
-					continue
-				}
-				if isDeadLock(filepath.Join(home, "locks", id+".lock")) {
-					_ = os.Remove(filepath.Join(dir, entry.Name()))
-					continue
-				}
-				if data, err := os.ReadFile(filepath.Join(dir, entry.Name())); err == nil {
-					var run SubagentRun
-					if json.Unmarshal(data, &run) == nil && run.Parent == parentID {
-						list = append(list, run)
-						seen[run.ID] = true
-					}
-				}
+	if home == "" {
+		return list
+	}
+	dir := filepath.Join(home, "subagents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return list
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		id := strings.TrimSuffix(name, ".json")
+		if entry.IsDir() || !strings.HasSuffix(name, ".json") || seen[id] {
+			continue
+		}
+		info, err := entry.Info()
+		file := filepath.Join(dir, name)
+		if err != nil || isDeadLock(filepath.Join(home, "locks", id+".lock"), info.ModTime()) {
+			if err == nil && time.Since(info.ModTime()) > 5*time.Second {
+				_ = os.Remove(file)
 			}
+			continue
+		}
+		var run SubagentRun
+		if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &run) == nil && run.Parent == parentID {
+			list = append(list, run)
+			seen[run.ID] = true
 		}
 	}
 	return list
 }
 
-func isDeadLock(path string) bool {
+func isDeadLock(path string, mtime time.Time) bool {
 	f, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if err != nil {
-		return os.IsNotExist(err)
+		return os.IsNotExist(err) && time.Since(mtime) > 5*time.Second
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		return true
 	}

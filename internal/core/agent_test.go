@@ -1074,18 +1074,21 @@ func TestActiveSubagentsPruning(t *testing.T) {
 	}
 
 	parentID := "root-123"
+	oldTime := time.Now().Add(-10 * time.Second)
 
-	// 1. Dead subagent with missing lock file -> pruned
-	data, _ := json.Marshal(SubagentRun{ID: "dead-1", Parent: parentID, Started: time.Now()})
+	// 1. Dead subagent with missing lock file and old mtime -> pruned
+	data, _ := json.Marshal(SubagentRun{ID: "dead-1", Parent: parentID, Started: oldTime})
 	if err := os.WriteFile(filepath.Join(subDir, "dead-1.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Chtimes(filepath.Join(subDir, "dead-1.json"), oldTime, oldTime)
 
-	// 2. Dead subagent with unlocked lock file -> pruned
-	data, _ = json.Marshal(SubagentRun{ID: "dead-2", Parent: parentID, Started: time.Now()})
+	// 2. Dead subagent with unlocked lock file and old mtime -> pruned
+	data, _ = json.Marshal(SubagentRun{ID: "dead-2", Parent: parentID, Started: oldTime})
 	if err := os.WriteFile(filepath.Join(subDir, "dead-2.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Chtimes(filepath.Join(subDir, "dead-2.json"), oldTime, oldTime)
 	if err := os.WriteFile(filepath.Join(locksDir, "dead-2.lock"), []byte(""), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1104,9 +1107,15 @@ func TestActiveSubagentsPruning(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 4. Just-started subagent with missing lock file and fresh mtime -> retained (not pruned)
+	data, _ = json.Marshal(SubagentRun{ID: "starting-1", Parent: parentID, Started: time.Now()})
+	if err := os.WriteFile(filepath.Join(subDir, "starting-1.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
 	list := ActiveSubagentsForParent(home, parentID)
-	if len(list) != 1 || list[0].ID != "live-1" {
-		t.Fatalf("expected [live-1], got %+v", list)
+	if len(list) != 2 {
+		t.Fatalf("expected 2 active subagents, got %+v", list)
 	}
 
 	// Check dead files were removed
@@ -1118,5 +1127,28 @@ func TestActiveSubagentsPruning(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(subDir, "live-1.json")); err != nil {
 		t.Fatal("live-1.json was pruned unexpectedly")
+	}
+	if _, err := os.Stat(filepath.Join(subDir, "starting-1.json")); err != nil {
+		t.Fatal("starting-1.json was pruned unexpectedly")
+	}
+}
+
+func TestSubagentHandleConcurrentAddStepFinish(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		h := StartSubagent(t.TempDir(), fmt.Sprintf("sub-%d", i), "parent", "cmd")
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				h.AddStep()
+				h.SetSteps(j)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			h.Finish()
+		}()
+		wg.Wait()
 	}
 }

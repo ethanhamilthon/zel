@@ -5,6 +5,7 @@ USAGE
   zel -p PROMPT [--model MODEL] [--provider NAME] [--effort LEVEL] [--config FILE]
   zel session -s ID
   zel session rename [-s ID] NAME...
+  zel session rename ID NAME...
   zel models [--json]
   zel tasks run [-s ID] COMMAND...
   zel tasks list|status|stop [-s ID] [TASK]
@@ -30,7 +31,8 @@ COMMANDS
   --provider NAME Override the provider for this headless session only.
   --effort LEVEL  Override reasoning effort for this headless session only.
   session -s ID   Read a saved session, including while it is running.
-  session rename  Rename a saved session.
+  session rename  Rename a saved session. Positional ID NAME... works when
+                  no -s and no ZEL_SESSION_ID.
   models          List PROVIDER<TAB>MODEL; --json prints {models, failures}.
   tasks run       Start a background command in a running session. Its result
                   arrives as a <task-result>; task logs stay on disk.
