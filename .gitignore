@@ -3,3 +3,5 @@
 .zeldev
 .orch/
 *.test
+TODO.md
+.prompts/
