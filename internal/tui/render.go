@@ -183,29 +183,42 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		}
 	}
 	screen.add(m.workingBlock())
-	// Composer spacing is independent of timeline and working-indicator rows.
+	// Remove only trailing boundary whitespace, preserving all message-internal rows.
 	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
 		screen = screen[:len(screen)-1]
 	}
-	if len(screen) == 0 {
-		screen = screenRows{""}
-	} else {
-		screen = append(screen, "")
+	inputPrefix := ""
+	if len(screen) > 0 {
+		// screenRows joins chunks at their boundary; the leading newline keeps
+		// one actual empty row between content and the composer rail.
+		inputPrefix = "\n\n"
 	}
-	m.inputTop = len(screen) - 1
-	screen.add(m.inputBlock())
+	m.inputTop = len(screen)
+	if inputPrefix != "" {
+		m.inputTop++
+	}
+	screen.add(inputPrefix + m.inputBlock())
 	screen.add("\n\n")
 	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
 	if count := len(m.fileCompletions); m.hasFileCompletions() {
 		start = max(0, m.fileSelected%count-rows+1)
 		for i := start; i < min(count, start+rows); i++ {
-			label := "  " + sanitizeLabel(m.fileCompletions[i])
+			selected := i == m.fileSelected%count
+			marker := "  "
+			if selected {
+				marker = " <"
+				if m.width < ansi.StringWidth(marker) {
+					marker = "<"
+				}
+			}
+			labelWidth := max(0, m.width-ansi.StringWidth(marker))
+			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), labelWidth, "…")
 			fg := muted
-			if i == m.fileSelected%count {
-				label = " <" + sanitizeLabel(m.fileCompletions[i])
+			if selected {
 				fg = foreground
 			}
-			screen.add(paint(ansi.Truncate(label, m.width, "…"), m.width, lipgloss.NoColor{}, fg) + "\n")
+			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
+			screen.add(row + "\n")
 		}
 		if remaining := count - min(count, start+rows); remaining > 0 {
 			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")

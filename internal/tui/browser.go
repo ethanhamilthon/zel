@@ -59,7 +59,7 @@ func directoryFiles(path string) ([]fileItem, error) {
 		}
 		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
 	})
-	return append([]fileItem{{".", true}, {"..", true}}, files...), nil
+	return append([]fileItem{{"..", true}}, files...), nil
 }
 
 func (m *model) applyDirectory(v directoryResult) {

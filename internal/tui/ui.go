@@ -171,13 +171,8 @@ func (m *model) refresh(follow bool) {
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)
 	m.viewport.Height = max(1, m.height)
+	// Timeline rows already begin at the first content row; never reserve a header margin.
 	m.viewport.TopMargin = 0
-	for _, e := range m.entries {
-		if (e.Kind == "assistant" || e.Kind == "user") && strings.TrimSpace(e.Text) != "" {
-			m.viewport.TopMargin = 1
-			break
-		}
-	}
 	m.viewport.SetLines(m.timelineRows(renderBudget))
 	m.frameAt, m.dirty = time.Now(), false
 	if follow {

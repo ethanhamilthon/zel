@@ -13,10 +13,15 @@ import (
 // it has no native Kitty keyboard protocol API. Keep compatibility here.
 func normalizeTerminalKey(msg tea.Msg) tea.Msg {
 	if sequence, ok := msg.(fmt.Stringer); ok {
+		if sequence.String() == fmt.Sprintf("?%+v?", []byte{1}) {
+			return tea.KeyMsg{Type: tea.KeyCtrlA}
+		}
 		if action, super, release, ok := clipboardSequence(sequence.String()); ok {
 			switch {
 			case release:
 				return nil
+			case action == 'a':
+				return tea.KeyMsg{Type: tea.KeyCtrlA}
 			case action == 'v':
 				return tea.KeyMsg{Type: tea.KeyCtrlV}
 			case super:
@@ -145,11 +150,16 @@ func clipboardSequence(sequence string) (action byte, super, release, ok bool) {
 			action = 'q'
 		case "107", "75", "1083", "1051":
 			action = 'k'
+		case "97", "65", "1092", "1060", "ф", "Ф":
+			action = 'a'
 		default:
 			continue
 		}
 		super = (value-1)&(8|32) != 0 && (value-1)&4 == 0
 		release = len(modifiers) > 1 && modifiers[1] != "1"
+		if action == 'a' && ((value-1)&4 == 0 || (value-1)&(8|32) != 0) {
+			return 0, false, false, false
+		}
 		return action, super, release, true
 	}
 	return 0, false, false, false

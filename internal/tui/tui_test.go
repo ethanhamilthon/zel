@@ -331,6 +331,28 @@ func TestClipboardShortcutDecodesFromTerminalBytes(t *testing.T) {
 	}
 }
 
+func TestCtrlADecodesFromTerminalBytes(t *testing.T) {
+	for _, sequence := range []string{"\x01", "\x1b[97;5u", "\x1b[1092;5u", "\x1b[1060;5u"} {
+		seen := false
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		program := tea.NewProgram(bareModel(t, t.TempDir()), tea.WithContext(ctx), tea.WithInput(strings.NewReader(sequence)), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if key, ok := normalizeTerminalKey(msg).(tea.KeyMsg); ok && key.Type == tea.KeyCtrlA {
+				seen = true
+				return tea.QuitMsg{}
+			}
+			return msg
+		}))
+		_, err := program.Run()
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !seen {
+			t.Errorf("Ctrl+A terminal sequence not recognized: %q", sequence)
+		}
+	}
+}
+
 func TestMenuShortcutDecodesFromTerminalBytes(t *testing.T) {
 	for _, sequence := range []string{"\x0b", "\x1b[107;5u", "\x1b[1083;5u", "\x1b[1083::107;5u"} {
 		seen := false
@@ -1191,6 +1213,20 @@ func TestOnboardingStepsPersistProviderAndSelectModel(t *testing.T) {
 	}
 }
 
+func TestProvidersCtrlAStartsAddFlowWithoutSelectingListItem(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.ctl.Settings().Providers["existing"] = core.Provider{BaseURL: "http://127.0.0.1:1/v1"}
+	m.menu = &menuState{page: menuProviders, provider: "existing", selected: 0}
+	next, _ := m.menuKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	m = next.(model)
+	if m.menu == nil || m.menu.page != menuForm || m.menu.form == nil || m.menu.form.step != 0 {
+		t.Fatalf("Ctrl+A should open the add-provider form, not activate the selected provider: %#v", m.menu)
+	}
+	if m.menu.form.values[0] != "" {
+		t.Fatalf("Ctrl+A opened an edit flow for %q instead of a new provider", m.menu.form.values[0])
+	}
+}
+
 func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	f := newFixture(t, true)
 	m := f.m
@@ -1273,8 +1309,8 @@ func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
 	for _, f := range m.menu.files {
 		names = append(names, f.name)
 	}
-	if strings.Join(names, ",") != ".,..,folder,.hidden,a.txt" {
-		t.Fatalf("files: %v", names)
+	if strings.Join(names, ",") != "..,folder,.hidden,a.txt" {
+		t.Fatalf("files (current-directory entry should be omitted): %v", names)
 	}
 	m.menu.query = "folder"
 	next, cmd := m.menuActivate()
@@ -1283,9 +1319,12 @@ func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
 	if m.menu.directory != filepath.Join(dir, "folder") || m.menu.query != "" {
 		t.Fatal("filtered directory navigation failed")
 	}
-	m.menu.selected = 1
+	m.menu.selected = 0
 	next, cmd = m.menuActivate()
 	m = next.(model)
+	if cmd == nil {
+		t.Fatal("parent directory activation returned no request")
+	}
 	m.applyDirectory(cmd().(directoryResult))
 	if m.menu.directory != dir {
 		t.Fatal("parent navigation failed")
@@ -1462,9 +1501,9 @@ func TestAutocompleteSelectionUsesArrow(t *testing.T) {
 	m.fileCompletions = []string{"@first", "@second"}
 	m.fileSelected = 1
 	m.refresh(true)
-	plain := ansi.Strip(strings.Join(m.timelineRows(0), "\n"))
-	if !strings.Contains(plain, "  @first") || !strings.Contains(plain, " <@second") {
-		t.Fatalf("completion selection did not use aligned arrow: %q", plain)
+	rows := strings.Split(ansi.Strip(strings.Join(m.timelineRows(0), "\n")), "\n")
+	if len(rows) < 2 || strings.TrimSpace(rows[len(rows)-2]) != "@second <" || strings.TrimSpace(rows[len(rows)-3]) != "@first" {
+		t.Fatalf("completion selection should place the menu-style arrow after the selected label: %q", rows)
 	}
 }
 
@@ -1493,8 +1532,8 @@ func TestFilesSearchInputAndCacheRefresh(t *testing.T) {
 	if m.menu.directory != filepath.Join(dir, "target") || m.menu.query != "" {
 		t.Fatal("filtered action opened wrong directory")
 	}
-	if rows := m.menuRows(); len(rows) != 2 || rows[0].label != "." {
-		t.Fatalf("stale directory cache: %v", rows)
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != ".." {
+		t.Fatalf("current-directory entry should be omitted: %v", rows)
 	}
 }
 
@@ -1545,7 +1584,7 @@ func TestInputBlankLines(t *testing.T) {
 	m.refresh(true)
 	rows := strings.Split(ansi.Strip(m.View()), "\n")
 	top := m.inputTop + m.viewport.topMargin() - m.viewport.YOffset
-	if top < 1 || strings.TrimSpace(rows[top-1]) == "" || strings.TrimSpace(rows[top+m.input.Height()]) != "" {
+	if top < 1 || strings.TrimSpace(rows[top-1]) != "" || strings.TrimSpace(rows[top+m.input.Height()]) != "" {
 		t.Fatalf("history has extra composer spacing: %q", rows)
 	}
 	m.openMenu()
@@ -1943,29 +1982,29 @@ func TestEscapeNeverCancelsActiveWork(t *testing.T) {
 	close(gate)
 }
 
-func TestComposerHasNoExtraBlankRowAboveIt(t *testing.T) {
-	f := newFixture(t, true)
-	gate := make(chan struct{})
-	f.hold.Store(&gate)
-	f.m.width, f.m.height = 100, 34
-	f.m.refresh(true)
-	check := func(state string) {
+func TestComposerSpacingDependsOnTimelineContent(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 100, 34
+	assertComposer := func(wantBlankBefore bool, state string) {
 		t.Helper()
-		f.m.refresh(true)
-		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
-		top := f.m.inputTop + f.m.viewport.topMargin() - f.m.viewport.YOffset
-		if top > 0 && strings.TrimSpace(rows[top-1]) == "" {
-			t.Fatalf("%s: composer has blank row above it: top=%d rows=%q", state, top, rows)
+		m.cache = nil
+		m.refresh(true)
+		rows := strings.Split(ansi.Strip(m.View()), "\n")
+		top := m.inputTop + m.viewport.topMargin() - m.viewport.YOffset
+		if top < 0 || top >= len(rows) {
+			t.Fatalf("%s: composer row out of bounds: %d/%d", state, top, len(rows))
+		}
+		blank := top > 0 && strings.TrimSpace(rows[top-1]) == ""
+		if blank != wantBlankBefore {
+			t.Fatalf("%s: blank row before composer = %v, want %v (top=%d rows=%q)", state, blank, wantBlankBefore, top, rows)
 		}
 	}
-	check("empty")
-	f.m.input.SetValue("hello")
-	f.m = key(f.m, tea.KeyMsg{Type: tea.KeyEnter})
-	awaitRequest(t, f.m)
-	check("busy")
-	close(gate)
-	f.settle(t)
-	check("completed")
+	assertComposer(false, "empty session")
+	m.entries = []entry{{Kind: "user", Text: "first message"}}
+	assertComposer(true, "first message")
+	m.entries = nil
+	m.input.SetValue("draft")
+	assertComposer(false, "draft in empty session")
 }
 
 func TestDirectoryResultsIgnoreStaleResponses(t *testing.T) {
@@ -1979,7 +2018,7 @@ func TestDirectoryResultsIgnoreStaleResponses(t *testing.T) {
 		t.Fatal("stale response applied")
 	}
 	m.applyDirectory(current().(directoryResult))
-	if m.menu.status != "" || len(m.menu.files) < 2 {
+	if m.menu.status != "" || len(m.menu.files) < 1 {
 		t.Fatal("current response ignored")
 	}
 	old = m.readDirectory(dir)
@@ -2094,9 +2133,8 @@ func TestChatTopMarginSurvivesMessagesAndScrolling(t *testing.T) {
 	check := func(state string) {
 		t.Helper()
 		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
-		wantMargin := len(f.m.entries) > 0
-		if len(rows) != f.m.height || (strings.TrimSpace(rows[0]) == "") != wantMargin {
-			t.Fatalf("%s: unexpected screen top spacing: %q", state, rows)
+		if len(rows) != f.m.height || f.m.viewport.topMargin() != 0 {
+			t.Fatalf("%s: unexpected viewport top margin: margin=%d rows=%q", state, f.m.viewport.topMargin(), rows)
 		}
 	}
 	f.m.refresh(true)

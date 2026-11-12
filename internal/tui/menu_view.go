@@ -29,18 +29,33 @@ func (m model) menuView() string {
 		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
-	if m.menu.page == menuFiles {
-		for len(lines) < max(0, m.height-1) {
+	if m.menu.page == menuFiles || m.menu.page == menuProviders {
+		bodyRows := max(0, m.height-1)
+		if len(lines) > bodyRows {
+			lines = lines[:bodyRows]
+		}
+		for len(lines) < bodyRows {
 			lines = append(lines, "")
 		}
-		lines = append(lines, pad+lipgloss.NewStyle().Foreground(muted).Render("Ctrl+A: New file or directory"))
+		hint := "Ctrl+A: Add provider"
+		if m.menu.page == menuFiles {
+			hint = "Ctrl+A: New file or directory"
+		}
+		lines = append(lines, pad+lipgloss.NewStyle().Foreground(muted).Render(hint))
 	} else {
 		for len(lines) < m.height {
 			lines = append(lines, "")
 		}
 	}
+	if m.height <= 0 {
+		return ""
+	}
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	lines = lines[:m.height]
 	row, column := 0, 0
-	for i, line := range lines[:m.height] {
+	for i, line := range lines {
 		if at := strings.Index(line, composerCursorMarker); at >= 0 {
 			row, column = i+1, ansi.StringWidth(line[:at])+1
 		}
@@ -61,7 +76,7 @@ func (m model) menuBodyStart() int {
 
 func (m model) menuBodyRoom() int {
 	bottom := 0
-	if m.menu.page == menuFiles {
+	if m.menu.page == menuFiles || m.menu.page == menuProviders {
 		bottom = 1
 	}
 	room := max(1, m.height-bottom-m.menuBodyStart())
@@ -95,7 +110,7 @@ func (m model) menuTop() int {
 		}
 	}
 	height := m.height
-	if m.menu.page == menuFiles {
+	if m.menu.page == menuFiles || m.menu.page == menuProviders {
 		height--
 	}
 	return max(0, (height-header-body)/2)

@@ -102,8 +102,12 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch v.String() {
 	case "ctrl+a":
-		if mu.page == menuFiles {
+		switch mu.page {
+		case menuFiles:
 			mu.page, mu.name, mu.status, mu.selected = menuCreate, "", "", 0
+			return m, nil
+		case menuProviders:
+			m.openProviderForm("", false)
 			return m, nil
 		}
 	case "esc":
@@ -253,12 +257,11 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.quit()
 		}
 	case menuProviders:
-		if index == 0 {
-			m.openProviderForm("", false)
-		} else if index-1 < len(mu.providerNames) {
-			mu.provider = mu.providerNames[index-1]
-			open(menuProvider)
+		if index < 0 || index >= len(mu.providerNames) {
+			return m, nil
 		}
+		mu.provider = mu.providerNames[index]
+		open(menuProvider)
 	case menuProvider:
 		if index == 0 {
 			m.openProviderForm(mu.provider, false)

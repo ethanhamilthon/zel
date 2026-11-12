@@ -33,7 +33,6 @@ func (m model) buildMenuRows() []menuRow {
 	case menuMain:
 		rows = slices.Clone(mainRows)
 	case menuProviders:
-		rows = []menuRow{{"Add provider", ""}}
 		for _, name := range mu.providerNames {
 			rows = append(rows, menuRow{name, m.ctl.Settings().Providers[name].BaseURL})
 		}
