@@ -1152,3 +1152,32 @@ func TestSubagentHandleConcurrentAddStepFinish(t *testing.T) {
 		wg.Wait()
 	}
 }
+
+func TestSubagentCommittedStepsAndModel(t *testing.T) {
+	home := t.TempDir()
+	h := StartSubagent(home, "progress-child", "progress-parent", "prompt")
+	defer h.Finish()
+	h.SetModel("gpt-6-luna", "xhigh")
+	for i := 0; i < 15; i++ {
+		h.TrackEvent(TurnEvent{Kind: "code", ID: "call-1", Provisional: true, Final: i == 14})
+	}
+	h.TrackEvent(TurnEvent{Kind: "code", ID: "call-1", Final: true})
+	list := ActiveSubagentsForParent(home, "progress-parent")
+	if len(list) != 1 || list[0].Steps != 1 {
+		t.Fatalf("previews inflated committed steps: %+v", list)
+	}
+	h.TrackEvent(TurnEvent{Kind: "reasoning_delta", Provisional: true})
+	h.TrackEvent(TurnEvent{Kind: "reasoning", Final: true})
+	h.TrackEvent(TurnEvent{Kind: "assistant", Final: true})
+	data, err := os.ReadFile(filepath.Join(home, "subagents", "progress-child.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run SubagentRun
+	if err := json.Unmarshal(data, &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.Steps != 2 || run.Model != "gpt-6-luna" || run.Effort != "xhigh" {
+		t.Fatalf("incorrect persisted progress: %+v", run)
+	}
+}

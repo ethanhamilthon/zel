@@ -287,13 +287,16 @@ func (a *Runtime) TaskSteps(id string) int {
 }
 
 func (a *Runtime) StartSubagent(command string) *SubagentHandle {
-	return StartSubagent(a.home, a.id, ParentSession(), command)
+	h := StartSubagent(a.home, a.id, ParentSession(), command)
+	s := a.Settings()
+	h.SetModel(s.Model, s.Effort)
+	return h
 }
 
 // ActiveSubagents lists the running zel -p children of this session tree. A child
 // is seen twice: as the shell command that launched it (tool call or background
 // task) and as its own registered run. The two views are paired by start order so
-// each child shows once, with the registered run's step count when it has one.
+// each child shows once. A registered run's step count is authoritative, even at zero.
 func (a *Runtime) ActiveSubagents() []SubagentRun {
 	rootID := a.rootID()
 	byStart := func(a, b SubagentRun) int {
@@ -323,8 +326,6 @@ func (a *Runtime) ActiveSubagents() []SubagentRun {
 	for i, l := range launched {
 		if i >= len(registered) {
 			list = append(list, l)
-		} else if registered[i].Steps == 0 && l.Steps > 0 {
-			list[i].Steps = l.Steps
 		}
 	}
 	slices.SortFunc(list, byStart)

@@ -2573,11 +2573,13 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 		Parent:  "parent-1",
 		Started: started,
 		Steps:   3,
+		Model:   "gpt-6-luna",
+		Effort:  "xhigh",
 		Command: "zel -p 'summarize'",
 	}
 	row := m.formatSubagentRow(child)
 	stripped := ansi.Strip(row)
-	if !strings.Contains(stripped, "10s · 3 steps") {
+	if !strings.Contains(stripped, "gpt-6-luna/xhigh · 10s · 3 steps") {
 		t.Fatalf("row missing time or steps: %q", stripped)
 	}
 	if !strings.HasPrefix(stripped, "◆ ") && !strings.HasPrefix(stripped, "◇ ") && !strings.HasPrefix(stripped, "   ") {
@@ -2608,21 +2610,29 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 		t.Fatalf("expected truncated text on narrow width, got %q", narrow)
 	}
 
-	// Test blink frames: frame 0 has icon, frame 4 has padding
+	// The icon and row width stay fixed throughout the fade.
 	m.width = 80
-	child.Started = time.Now() // frame 0
-	f0 := ansi.Strip(m.formatSubagentRow(child))
-	if !strings.HasPrefix(f0, "◆ ") {
-		t.Fatalf("frame 0 should have visible icon, got %q", f0)
+	for _, elapsed := range []time.Duration{0, 320 * time.Millisecond, 1200 * time.Millisecond, 2 * time.Second} {
+		child.Started = time.Now().Add(-elapsed)
+		row := ansi.Strip(m.formatSubagentRow(child))
+		if !strings.HasPrefix(row, "◆ gpt-6-luna/xhigh · ") {
+			t.Fatalf("icon or model disappeared at %s: %q", elapsed, row)
+		}
 	}
-	child.Started = time.Now().Add(-320 * time.Millisecond) // frame 4 (320ms / 80ms = 4)
-	f4 := ansi.Strip(m.formatSubagentRow(child))
-	if !strings.HasPrefix(f4, "   ") {
-		t.Fatalf("frame 4 should be blink off with padding, got %q", f4)
+	if subagentColor(0) != inputBlue || subagentColor(1200*time.Millisecond) != inputBackground {
+		t.Fatal("fade must run from accent to background")
+	}
+	if subagentColor(320*time.Millisecond) == subagentColor(400*time.Millisecond) {
+		t.Fatal("adjacent fade frames should have different colors")
+	}
+	child.Model, child.Effort = "small-model", ""
+	if row := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(row, "small-model · ") {
+		t.Fatalf("model without effort: %q", row)
 	}
 }
 
 func TestSubagentIndicatorLifecycleAndUpdates(t *testing.T) {
+	t.Setenv("ZEL_PARENT", "")
 	m := bareModel(t, "/project")
 	sessionID := m.ctl.Status().Session
 

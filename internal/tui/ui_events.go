@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/lucasb-eyer/go-colorful"
 
 	"zel/internal/core"
 )
@@ -116,8 +118,14 @@ func (m model) turnSteps() int {
 	return steps
 }
 
-// subagentFrames is the blinking agent animation, alternating between visible and hidden.
-var subagentFrames = []string{"◆", "◆", "◆", "◆", "  ", "  "}
+// subagentColor fades the fixed-width icon to the terminal background and back.
+func subagentColor(elapsed time.Duration) lipgloss.Color {
+	accent, _ := colorful.Hex(string(inputBlue))
+	background, _ := colorful.Hex(string(inputBackground))
+	phase := float64(max(0, elapsed)%(2400*time.Millisecond)) / float64(2400*time.Millisecond)
+	brightness := (1 + math.Cos(2*math.Pi*phase)) / 2
+	return lipgloss.Color(background.BlendRgb(accent, brightness).Hex())
+}
 
 // subagentBlock renders the indicator rows for running subagents (zel -p children).
 func (m model) subagentBlock() string {
@@ -133,14 +141,22 @@ func (m model) subagentBlock() string {
 }
 
 // formatSubagentRow renders a single subagent indicator row:
-// [agent icon with blink animation] working-time · N steps
+// [fading agent icon] model/effort · working-time · N steps
 func (m model) formatSubagentRow(child SubagentRun) string {
-	parts := []string{formatDuration(time.Since(child.Started)), formatSteps(child.Steps)}
-	frameIndex := int(max(0, time.Since(child.Started))/workingFrame) % len(subagentFrames)
-	icon := subagentFrames[frameIndex]
+	elapsed := time.Since(child.Started)
+	var parts []string
+	if child.Model != "" {
+		label := child.Model
+		if child.Effort != "" {
+			label += "/" + child.Effort
+		}
+		parts = append(parts, label)
+	}
+	parts = append(parts, formatDuration(elapsed), formatSteps(child.Steps))
+	icon := "◆"
 	pad := max(1, m.width-ansi.StringWidth(icon)-1)
 	text := ansi.Truncate(strings.Join(parts, " · "), pad, "…")
-	return lipgloss.NewStyle().Foreground(inputBlue).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
+	return lipgloss.NewStyle().Foreground(subagentColor(elapsed)).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
 }
 
 func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {

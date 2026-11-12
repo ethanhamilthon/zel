@@ -17,6 +17,8 @@ type SubagentRun struct {
 	Parent  string    `json:"parent"`
 	Started time.Time `json:"started"`
 	Steps   int       `json:"steps"`
+	Model   string    `json:"model,omitempty"`
+	Effort  string    `json:"effort,omitempty"`
 	Command string    `json:"command"`
 }
 
@@ -47,6 +49,18 @@ func StartSubagent(home, id, parent, command string) *SubagentHandle {
 	return h
 }
 
+// TrackEvent counts committed tool calls and reasoning blocks, not streaming previews.
+func (h *SubagentHandle) TrackEvent(e TurnEvent) {
+	if e.Final && !e.Provisional && (e.Kind == "code" || e.Kind == "reasoning") {
+		h.AddStep()
+	}
+}
+
+// SetModel records the child's effective model and reasoning effort.
+func (h *SubagentHandle) SetModel(model, effort string) {
+	h.update(func() { h.run.Model, h.run.Effort = model, effort })
+}
+
 // SetSteps updates the step count of the running subagent.
 func (h *SubagentHandle) SetSteps(n int) { h.update(func() { h.run.Steps = n }) }
 
@@ -60,7 +74,9 @@ func (h *SubagentHandle) update(fn func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.run != nil {
+		subagentMu.Lock()
 		fn()
+		subagentMu.Unlock()
 		h.persist()
 	}
 }
