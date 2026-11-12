@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -138,9 +139,28 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
+// ParentSession returns the ID of the parent zel session if running under
+// another zel instance (e.g. via 'zel -p' from the bash tool), or empty if root.
+func ParentSession() string {
+	return strings.TrimSpace(os.Getenv("ZEL_PARENT"))
+}
+
+// ParentSession returns the ID of the parent zel session if running under
+// another zel instance, or empty if root.
+func (a *Runtime) ParentSession() string {
+	return ParentSession()
+}
+
 // shellEnv is exported to every bash tool call. API keys and settings are never exported.
 func (a *Runtime) shellEnv() map[string]string {
-	env := map[string]string{"ZEL_SESSION_ID": a.SessionID()}
+	parent := ParentSession()
+	if parent == "" {
+		parent = a.SessionID()
+	}
+	env := map[string]string{
+		"ZEL_SESSION_ID": a.SessionID(),
+		"ZEL_PARENT":     parent,
+	}
 	if a.sock != nil {
 		env["ZEL_ENDPOINT"] = a.sock.path
 	}

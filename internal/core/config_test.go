@@ -129,6 +129,42 @@ func TestSessionLockIsExclusive(t *testing.T) {
 	}
 }
 
+func TestBashToolEnvParentSession(t *testing.T) {
+	t.Setenv("ZEL_PARENT", "")
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	env := a.Shell.Env()
+	if got, want := env["ZEL_PARENT"], a.SessionID(); got != want {
+		t.Fatalf("unset ZEL_PARENT: got %q, want %q", got, want)
+	}
+	if got := ParentSession(); got != "" {
+		t.Fatalf("unset ParentSession: got %q, want empty", got)
+	}
+	if got := a.ParentSession(); got != "" {
+		t.Fatalf("unset a.ParentSession: got %q, want empty", got)
+	}
+	res, _ := a.Shell.Run(context.Background(), "echo $ZEL_PARENT", time.Second, 100, nil)
+	if got, want := strings.TrimSpace(res.Output), a.SessionID(); got != want {
+		t.Fatalf("executed script with unset ZEL_PARENT: got %q, want %q", got, want)
+	}
+
+	const inherited = "root-parent-123"
+	t.Setenv("ZEL_PARENT", inherited)
+	env = a.Shell.Env()
+	if got, want := env["ZEL_PARENT"], inherited; got != want {
+		t.Fatalf("inherited ZEL_PARENT: got %q, want %q", got, want)
+	}
+	if got := ParentSession(); got != inherited {
+		t.Fatalf("inherited ParentSession: got %q, want %q", got, inherited)
+	}
+	if got := a.ParentSession(); got != inherited {
+		t.Fatalf("inherited a.ParentSession: got %q, want %q", got, inherited)
+	}
+	res, _ = a.Shell.Run(context.Background(), "echo $ZEL_PARENT", time.Second, 100, nil)
+	if got, want := strings.TrimSpace(res.Output), inherited; got != want {
+		t.Fatalf("executed script with inherited ZEL_PARENT: got %q, want %q", got, want)
+	}
+}
+
 func TestValidImage(t *testing.T) {
 	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString(tinyPNG())
 	cases := map[string]bool{
