@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"zel/internal/core"
@@ -135,24 +136,28 @@ func (m model) menuIndices(rows []menuRow) []int {
 func (m model) buildMenuIndices(rows []menuRow) []int {
 	var indices []int
 	query := m.menu.query
-	kind := ""
-	if m.menu.page == menuTracing && strings.HasPrefix(query, ":") {
-		fields := strings.Fields(query)
-		kind, query = strings.ToLower(strings.TrimPrefix(fields[0], ":")), strings.Join(fields[1:], " ")
+	types, lower, upper, textQuery := parseTraceFilters(query)
+	if m.menu.page == menuTracing {
+		query = textQuery
 	}
 	for i, row := range rows {
 		text := row.label + " " + row.detail
 		if m.menu.page == menuResume && i < len(m.menu.sessions) {
 			text = m.menu.sessions[i].Title + " " + row.detail
 		}
-		if m.menu.page == menuTracing && i < len(m.menu.trace) {
-			e := m.menu.trace[i]
-			if kind != "" && e.Kind != kind {
-				continue
+		if m.menu.page == menuTracing {
+			if i >= len(m.menu.trace) {
+				if len(types) > 0 || lower > 0 || upper > 0 {
+					continue
+				}
+			} else {
+				e := m.menu.trace[i]
+				position := i + 1
+				if (len(types) > 0 && !traceTypeIn(e.Kind, types)) || (lower > 0 && position < lower) || (upper > 0 && position > upper) {
+					continue
+				}
+				text += " " + e.Text
 			}
-			text += " " + e.Text
-		} else if kind != "" {
-			continue
 		}
 		matches := true
 		switch {
@@ -168,6 +173,32 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 		}
 	}
 	return indices
+}
+
+func parseTraceFilters(query string) (types []string, lower, upper int, text string) {
+	var terms []string
+	for _, term := range strings.Fields(query) {
+		if term[0] == ':' && len(term) > 1 {
+			types = append(types, strings.Split(strings.ToLower(term[1:]), "+")...)
+			continue
+		}
+		if len(term) > 1 && (term[0] == '>' || term[0] == '<') {
+			if n, err := strconv.Atoi(term[1:]); err == nil {
+				if term[0] == '>' {
+					lower = max(lower, n)
+				} else if upper == 0 || n < upper {
+					upper = n
+				}
+				continue
+			}
+		}
+		terms = append(terms, term)
+	}
+	return types, lower, upper, strings.Join(terms, " ")
+}
+
+func traceTypeIn(kind string, filters []string) bool {
+	return slices.ContainsFunc(filters, func(filter string) bool { return traceKindMatches(kind, filter) })
 }
 
 func (m model) menuRows() []menuRow {

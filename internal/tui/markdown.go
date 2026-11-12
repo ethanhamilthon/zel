@@ -180,10 +180,14 @@ var (
 )
 
 func renderMarkdown(text string, width int, streaming bool) (string, bool) {
+	return renderMarkdownStyle(text, width, streaming, markdownStyle)
+}
+
+func renderMarkdownStyle(text string, width int, streaming bool, style string) (string, bool) {
 	width = max(1, width)
-	if key := [3]any{width, lipgloss.ColorProfile(), markdownStyle}; mdKey != key {
+	if key := [3]any{width, lipgloss.ColorProfile(), style}; mdKey != key {
 		mdKey = key
-		mdRenderer, _ = glamour.NewTermRenderer(glamour.WithStylesFromJSONBytes([]byte(markdownStyle)), glamour.WithWordWrap(width), glamour.WithColorProfile(lipgloss.ColorProfile()), glamour.WithInlineTableLinks(true))
+		mdRenderer, _ = glamour.NewTermRenderer(glamour.WithStylesFromJSONBytes([]byte(style)), glamour.WithWordWrap(width), glamour.WithColorProfile(lipgloss.ColorProfile()), glamour.WithInlineTableLinks(true))
 	}
 	if mdRenderer == nil {
 		return "", false
@@ -205,6 +209,12 @@ func renderMarkdown(text string, width int, streaming bool) (string, bool) {
 	}
 	out, ok := renderGlamour(text)
 	return markdownLinks(out), ok
+}
+
+// renderTraceMarkdown keeps trace body colors local to the tracing viewer.
+func renderTraceMarkdown(text string, width int, color lipgloss.Color) (string, bool) {
+	style := strings.Replace(markdownStyle, `{"document":`, `{"text":{"color":"`+string(color)+`"},"document":`, 1)
+	return renderMarkdownStyle(text, width, false, style)
 }
 
 func renderGlamour(text string) (string, bool) {

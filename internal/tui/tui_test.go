@@ -16,7 +16,9 @@ import (
 	"zel/internal/core"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestShiftEnterTerminalSequences(t *testing.T) {
@@ -869,7 +871,7 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 func TestTracingNumbersBoundariesAndLiveText(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.menu = &menuState{page: menuTracing, trace: []core.TraceEntry{{Kind: "user", Text: "hi"}, {Kind: "assistant", Text: "hello"}}}
-	for _, text := range []string{"1 user", "2 assistant"} {
+	for _, text := range []string{"1 user", "2 agent"} {
 		if !strings.Contains(ansi.Strip(m.menuView()), text) {
 			t.Fatalf("missing %q", text)
 		}
@@ -1170,7 +1172,7 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 	for _, e := range m.menu.trace {
 		m.menu.query = ":" + e.Kind + " needle"
 		rows := m.menuRows()
-		if len(rows) != 1 || rows[0].label != e.Kind {
+		if len(rows) != 1 || rows[0].label != traceKindLabel(e.Kind) {
 			t.Fatalf("query %s: %v", m.menu.query, rows)
 		}
 	}
@@ -1728,6 +1730,117 @@ func TestTracingEntryNumber(t *testing.T) {
 	_, shortcut := m.menuHead()
 	if shortcut != "Ctrl+T" {
 		t.Fatalf("list header changed: %q", shortcut)
+	}
+}
+
+func TestTracingCombinedTypeAndInclusiveIndexFilters(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.menu = &menuState{page: menuTracing}
+	for i := 0; i < 130; i++ {
+		kind := "system"
+		if i == 122 || i == 124 {
+			kind = "bash"
+		} else if i == 123 {
+			kind = "user"
+		}
+		m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: kind, Text: "entry"})
+	}
+	rows := m.rawMenuRows()
+	m.menu.query = ":bash+user"
+	if got := m.buildMenuIndices(rows); !reflect.DeepEqual(got, []int{122, 123, 124}) {
+		t.Fatalf("combined types: %v", got)
+	}
+	m.menu.query = ">123 :bash"
+	if got := m.buildMenuIndices(rows); !reflect.DeepEqual(got, []int{122, 124}) {
+		t.Fatalf("inclusive index lower bound: %v", got)
+	}
+	m.menu.query = "<123 :bash+user"
+	if got := m.buildMenuIndices(rows); !reflect.DeepEqual(got, []int{122}) {
+		t.Fatalf("inclusive index upper bound: %v", got)
+	}
+}
+
+func TestTracingEntryMarkdownHeaderColorsAndScrolling(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(profile)
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 80, 30
+	start := time.Unix(100, 0)
+	m.menu = &menuState{page: menuTracing, trace: []core.TraceEntry{
+		{Kind: "system", Text: "system message", At: start},
+		{Kind: "assistant", Text: "**markdown bold** content", At: start.Add(2 * time.Second)},
+	}}
+	m.openTrace(1)
+	view := m.menuView()
+	plain := ansi.Strip(view)
+	if !strings.Contains(view, "\x1b[38;2;255;255;255m") {
+		t.Fatal("agent Markdown body does not use the trace white color")
+	}
+	for _, kind := range []string{"system", "user"} {
+		m.menu.trace[1] = core.TraceEntry{Kind: kind, Text: "**trace markdown**"}
+		m.openTrace(1)
+		body := ansi.Strip(strings.Join(m.traceViewLines(m.menuWidth()), "\n"))
+		if strings.Contains(body, "**trace markdown**") || !strings.Contains(body, "trace markdown") {
+			t.Errorf("%s Markdown was not rendered: %q", kind, body)
+		}
+	}
+	m.menu.trace[1] = core.TraceEntry{Kind: "assistant", Text: "**markdown bold** content", At: start.Add(2 * time.Second)}
+	m.openTrace(1)
+	view = m.menuView()
+	plain = ansi.Strip(view)
+	if !strings.Contains(plain, "2s") || !strings.Contains(plain, "agent") || !strings.Contains(plain, "2/2") {
+		t.Fatalf("trace header missing elapsed/type/position: %q", plain)
+	}
+	header := strings.Split(plain, "\n")[m.menuTop()]
+	if got, want := strings.Index(header, "agent"), m.menuLeft()+(m.menuWidth()-len("agent"))/2; got != want {
+		t.Fatalf("entry type column %d, want centered column %d: %q", got, want, header)
+	}
+	if strings.Contains(plain, "**markdown bold**") || !strings.Contains(plain, "markdown bold") {
+		t.Fatalf("trace Markdown was not rendered: %q", plain)
+	}
+	if chat, ok := renderMarkdown("plain chat text", 40, false); !ok || strings.Contains(chat, "\x1b[38;2;255;255;255m") {
+		t.Fatal("trace color leaked into normal chat Markdown")
+	}
+	lines := strings.Split(plain, "\n")
+	for i := m.menuTop(); i < min(len(lines), m.menuTop()+3); i++ {
+		if strings.TrimSpace(lines[i]) == "assistant" || strings.TrimSpace(lines[i]) == "agent" {
+			t.Fatalf("duplicate type-only line remains: %q", lines[i])
+		}
+	}
+	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "bash": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
+		if got := string(traceColor(kind)); got != want {
+			t.Errorf("%s color = %s, want %s", kind, got, want)
+		}
+	}
+	brightness := func(color string) int {
+		var r, g, b int
+		if _, err := fmt.Sscanf(color, "#%02x%02x%02x", &r, &g, &b); err != nil {
+			t.Fatalf("invalid trace color %q: %v", color, err)
+		}
+		return r + g + b
+	}
+	if brightness(string(traceColor("output"))) >= brightness(string(traceColor("system"))) {
+		t.Fatal("output text must be darker than system text")
+	}
+
+	body := make([]string, 30)
+	for i := range body {
+		body[i] = fmt.Sprintf("line %02d", i)
+	}
+	m.menu.trace[1] = core.TraceEntry{Kind: "bash", Text: strings.Join(body, "\n"), At: start.Add(2 * time.Second)}
+	m.openTrace(1)
+	if got := len(m.pageLines("", m.menuWidth())); got > 10 {
+		t.Fatalf("trace viewport has %d rows, want at most 10", got)
+	}
+	_, _ = m.menuMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if m.menu.offset == 0 {
+		t.Fatal("mouse wheel did not scroll the trace body")
+	}
+	before := m.menu.offset
+	m = key(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.menu.offset >= before {
+		t.Fatal("arrow key did not scroll the trace body")
 	}
 }
 

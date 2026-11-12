@@ -17,9 +17,13 @@ func (m model) menuView() string {
 	title, shortcut := m.menuHead()
 	lines := make([]string, 0, m.height)
 	lines = append(lines, make([]string, m.menuTop())...)
-	lines = append(lines, pad+lipgloss.NewStyle().Foreground(foreground).Render(title)+
-		strings.Repeat(" ", max(1, w-ansi.StringWidth(title)-ansi.StringWidth(shortcut)))+
-		lipgloss.NewStyle().Foreground(muted).Render(shortcut), "")
+	header := pad + lipgloss.NewStyle().Foreground(foreground).Render(title) +
+		strings.Repeat(" ", max(1, w-ansi.StringWidth(title)-ansi.StringWidth(shortcut))) +
+		lipgloss.NewStyle().Foreground(muted).Render(shortcut)
+	if m.traceEntryView() {
+		header = m.traceHeader(pad, w)
+	}
+	lines = append(lines, header, "")
 	if searchableMenu(m.menu.page) {
 		// The search input sits one blank line below the header.
 		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
@@ -60,7 +64,11 @@ func (m model) menuBodyRoom() int {
 	if m.menu.page == menuFiles {
 		bottom = 1
 	}
-	return max(1, m.height-bottom-m.menuBodyStart())
+	room := max(1, m.height-bottom-m.menuBodyStart())
+	if m.traceEntryView() {
+		return min(10, room)
+	}
+	return room
 }
 
 // menuLeft, menuTop and menuWidth place the menu block on the screen; the
@@ -80,7 +88,11 @@ func (m model) menuTop() int {
 		body++
 	}
 	if m.menu.page == menuText || m.menu.page == menuInfo {
-		body = len(m.wrapText(m.menuText(), m.menuWidth()))
+		if m.traceEntryView() {
+			body = min(10, len(m.traceViewLines(m.menuWidth())))
+		} else {
+			body = len(m.wrapText(m.menuText(), m.menuWidth()))
+		}
 	}
 	height := m.height
 	if m.menu.page == menuFiles {
@@ -104,6 +116,7 @@ func (m model) menuHead() (title, shortcut string) {
 	if m.menu.page == menuText {
 		title = m.menu.title
 		if m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace) {
+			title = traceElapsed(m.menu.trace, m.menu.traceIndex)
 			shortcut = fmt.Sprintf("%d/%d", m.menu.traceIndex+1, len(m.menu.trace))
 		}
 	}
@@ -114,6 +127,16 @@ func (m model) menuHead() (title, shortcut string) {
 // list their rows with the selected one in view.
 func (m model) pageLines(pad string, w int) []string {
 	if m.menu.page == menuText || m.menu.page == menuInfo {
+		if m.traceEntryView() {
+			body := m.traceViewLines(w)
+			height := m.menuBodyRoom()
+			start := min(max(0, m.menu.offset), max(0, len(body)-height))
+			lines := make([]string, 0, height)
+			for i := start; i < min(len(body), start+height); i++ {
+				lines = append(lines, pad+body[i])
+			}
+			return lines
+		}
 		body := m.wrapText(m.menuText(), w)
 		height := m.menuBodyRoom()
 		start := min(max(0, m.menu.offset), max(0, len(body)-1))
@@ -147,7 +170,12 @@ func (m model) pageLines(pad string, w int) []string {
 			label = ansi.Truncate(label, max(1, width-3-dw-ansi.StringWidth(prefix)), "…")
 			gap = strings.Repeat(" ", max(0, width-ansi.StringWidth(prefix)-ansi.StringWidth(label)-2-dw))
 		}
-		lines = append(lines, pad+prefix+fg.Render(label)+accent.Render(marker)+gap+dim.Render(detail))
+		labelStyle, detailStyle := fg, dim
+		if m.menu.page == menuTracing && i < len(indices) && indices[i] < len(m.menu.trace) {
+			color := traceColor(m.menu.trace[indices[i]].Kind)
+			labelStyle, detailStyle = lipgloss.NewStyle().Foreground(color), lipgloss.NewStyle().Foreground(color)
+		}
+		lines = append(lines, pad+prefix+labelStyle.Render(label)+accent.Render(marker)+gap+detailStyle.Render(detail))
 	}
 	if m.menu.page == menuRename {
 		lines = append(lines, "")
@@ -182,6 +210,47 @@ func (m model) wrapText(text string, w int) []string {
 	return lines
 }
 
+func (m model) traceEntryView() bool {
+	return m.menu != nil && m.menu.page == menuText && m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace)
+}
+
+func (m model) traceHeader(pad string, width int) string {
+	e := m.menu.trace[m.menu.traceIndex]
+	third := max(1, width/3)
+	left := ansi.Truncate(traceElapsed(m.menu.trace, m.menu.traceIndex), third, "…")
+	kind := ansi.Truncate(traceKindLabel(e.Kind), third, "…")
+	right := ansi.Truncate(fmt.Sprintf("%d/%d", m.menu.traceIndex+1, len(m.menu.trace)), width-third, "…")
+	leftWidth, kindWidth, rightWidth := ansi.StringWidth(left), ansi.StringWidth(kind), ansi.StringWidth(right)
+	centerAt, rightAt := (width-kindWidth)/2, width-rightWidth
+	if centerAt < leftWidth || centerAt+kindWidth >= rightAt {
+		centerAt = max(leftWidth+1, centerAt)
+		kind = ansi.Truncate(kind, max(1, rightAt-centerAt-1), "…")
+		kindWidth = ansi.StringWidth(kind)
+	}
+	return pad + lipgloss.NewStyle().Foreground(muted).Render(left) +
+		strings.Repeat(" ", max(1, centerAt-leftWidth)) +
+		lipgloss.NewStyle().Foreground(traceColor(e.Kind)).Render(kind) +
+		strings.Repeat(" ", max(1, rightAt-centerAt-kindWidth)) +
+		lipgloss.NewStyle().Foreground(muted).Render(right)
+}
+
+func (m model) traceViewLines(width int) []string {
+	e := m.menu.trace[m.menu.traceIndex]
+	text := traceText(e)
+	color := traceColor(e.Kind)
+	if e.Kind == "system" || e.Kind == "user" || e.Kind == "assistant" || e.Kind == "agent" {
+		if rendered, ok := renderTraceMarkdown(text, max(1, width-2), color); ok {
+			return strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+		}
+	}
+	lines := m.wrapText(text, width)
+	style := lipgloss.NewStyle().Foreground(color)
+	for i := range lines {
+		lines[i] = style.Render(lines[i])
+	}
+	return lines
+}
+
 func (m model) menuText() string {
 	if m.menu.page != menuInfo {
 		return m.menu.text
@@ -195,6 +264,16 @@ func (m model) menuText() string {
 
 // scrollText scrolls the body of a text page by delta rows.
 func (m *model) scrollText(delta int) {
-	body := m.wrapText(m.menuText(), m.menuWidth())
+	var body []string
+	if m.traceEntryView() {
+		body = m.traceViewLines(m.menuWidth())
+	} else {
+		body = m.wrapText(m.menuText(), m.menuWidth())
+	}
+	if m.traceEntryView() {
+		room := m.menuBodyRoom()
+		m.menu.offset = min(max(0, m.menu.offset+delta), max(0, len(body)-room))
+		return
+	}
 	m.menu.offset = min(max(0, m.menu.offset+delta), max(0, len(body)-1))
 }

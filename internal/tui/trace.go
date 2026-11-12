@@ -8,11 +8,44 @@ import (
 
 	"zel/internal/core"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // traceLabel is the first column of the Tracing page: the kind of the entry.
-func traceLabel(e core.TraceEntry) string { return e.Kind }
+func traceLabel(e core.TraceEntry) string { return traceKindLabel(e.Kind) }
+
+func traceKindLabel(kind string) string {
+	if kind == "assistant" {
+		return "agent"
+	}
+	return kind
+}
+
+func traceKindMatches(kind, filter string) bool {
+	return strings.EqualFold(traceKindLabel(kind), traceKindLabel(filter))
+}
+
+func traceColor(kind string) lipgloss.Color {
+	switch kind {
+	case "system":
+		return darkGray
+	case "user":
+		return inputBlue
+	case "assistant", "agent":
+		return lipgloss.Color("#ffffff")
+	case "bash":
+		return codeGray
+	case "notice", "task":
+		return lipgloss.Color("#808080")
+	case "output":
+		return lipgloss.Color("#404040")
+	case "error":
+		return errorColor
+	default:
+		return muted
+	}
+}
 
 // traceDetail is the second column: when it happened and its first line, or the
 // number of lines for a long body.
@@ -28,20 +61,32 @@ func traceDetail(e core.TraceEntry) string {
 	return first + " · " + e.At.Format("15:04:05")
 }
 
-// traceTitle is the header of one traced entry.
-func traceTitle(e core.TraceEntry) string {
-	if e.At.IsZero() {
-		return e.Kind
-	}
-	return e.Kind + " · " + e.At.Format(time.DateTime)
-}
-
 // traceText is the body of one traced entry, keeping the raw text.
 func traceText(e core.TraceEntry) string {
 	if strings.TrimSpace(e.Text) == "" {
 		return "(empty)"
 	}
 	return e.Text
+}
+
+func traceElapsed(trace []core.TraceEntry, index int) string {
+	if index < 0 || index >= len(trace) || trace[index].At.IsZero() {
+		return "0s"
+	}
+	start := trace[index].At
+	for _, entry := range trace {
+		if !entry.At.IsZero() && entry.At.Before(start) {
+			start = entry.At
+		}
+	}
+	return formatDuration(trace[index].At.Sub(start))
+}
+
+func (m *model) openTrace(index int) {
+	e := m.menu.trace[index]
+	m.menu.traceIndex = index
+	m.menu.parent, m.menu.page, m.menu.offset = menuTracing, menuText, 0
+	m.menu.title, m.menu.text = "Menu/Tracing/"+traceKindLabel(e.Kind), traceText(e)
 }
 
 // History is committed at the end of a model response; include the streaming
@@ -82,8 +127,5 @@ func (m *model) moveTrace(delta int) {
 		return
 	}
 	mu.selected = selected
-	mu.traceIndex = indices[selected]
-	e := mu.trace[mu.traceIndex]
-	mu.offset = 0
-	mu.title, mu.text = "Menu/Tracing/"+e.Kind, traceTitle(e)+"\n\n"+traceText(e)
+	m.openTrace(indices[selected])
 }

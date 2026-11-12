@@ -205,6 +205,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return next, cmd
 	}
+	if m.traceEntryView() && !n.traceEntryView() {
+		cmd = tea.Batch(cmd, tea.DisableMouse)
+	}
 
 	if (n.dirty || n.renderPending) && !n.redrawScheduled {
 		n.redrawScheduled = true

@@ -24,7 +24,8 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	defer m.events.Close()
 	termOut = os.Stdout
 	output := &cursorOutput{ReadWriteCloser: os.Stdout}
-	// Leave mouse reporting disabled so the terminal owns selection and copying.
+	// Keep mouse reporting off by default so the terminal owns selection and copying.
+	// The tracing entry view enables it temporarily for wheel scrolling.
 	program := tea.NewProgram(m, tea.WithOutput(output), tea.WithAltScreen(), tea.WithFilter(keyboard.filter))
 	running, stop := context.WithCancel(ctx)
 	defer stop()
@@ -238,9 +239,8 @@ func (m *model) refreshMenu() {
 	case menuTracing:
 		mu.trace = m.sessionTrace()
 		mu.listCache = nil
-		if mu.page == menuText && mu.traceIndex < len(mu.trace) {
-			e := mu.trace[mu.traceIndex]
-			mu.text = traceTitle(e) + "\n\n" + traceText(e)
+		if mu.page == menuText && mu.traceIndex >= 0 && mu.traceIndex < len(mu.trace) {
+			mu.text = traceText(mu.trace[mu.traceIndex])
 		}
 	case menuResume:
 		if sessions, err := m.ctl.Sessions(); err == nil {

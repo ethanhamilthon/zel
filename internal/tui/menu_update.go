@@ -77,9 +77,21 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				m.moveTrace(delta)
 			}
-		case "up", "pgup":
+		case "up":
+			step := max(1, m.menuBodyRoom()/2)
+			if m.traceEntryView() {
+				step = 1
+			}
+			m.scrollText(-step)
+		case "down":
+			step := max(1, m.menuBodyRoom()/2)
+			if m.traceEntryView() {
+				step = 1
+			}
+			m.scrollText(step)
+		case "pgup":
 			m.scrollText(-max(1, m.menuBodyRoom()/2))
-		case "down", "pgdown":
+		case "pgdown":
 			m.scrollText(max(1, m.menuBodyRoom()/2))
 		case "home":
 			m.menu.offset = 0
@@ -327,10 +339,8 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 		}
 	case menuTracing:
 		if index < len(mu.trace) {
-			mu.traceIndex = index
-			e := mu.trace[index]
-			m.openText("Menu/Tracing/"+e.Kind, traceTitle(e)+"\n\n"+traceText(e))
-			return m, nil
+			m.openTrace(index)
+			return m, tea.EnableMouseCellMotion
 		}
 	case menuTask:
 		if index == 0 {
