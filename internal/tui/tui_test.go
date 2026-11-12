@@ -839,8 +839,8 @@ func TestTracingPageListsSessionTrace(t *testing.T) {
 		t.Fatalf("trace label search lost type/index filters: %v", indices)
 	}
 	m.menu.query = "rg bug"
-	if indices := m.menuIndices(m.rawMenuRows()); len(indices) != 0 {
-		t.Fatalf("trace search matched body text, indices %v", indices)
+	if indices := m.menuIndices(m.rawMenuRows()); !reflect.DeepEqual(indices, []int{2}) {
+		t.Fatalf("trace search failed to match body text, indices %v", indices)
 	}
 	m.menu.query = ""
 
@@ -1287,8 +1287,8 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 		t.Fatalf("unmatched text: %v", rows)
 	}
 	m.menu.query = "needle"
-	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
-		t.Fatalf("ordinary search matched entry bodies: %v", rows)
+	if rows := m.menuRows(); len(rows) != len(m.menu.trace) {
+		t.Fatalf("ordinary search failed to match entry bodies: %v", rows)
 	}
 }
 
@@ -1862,6 +1862,56 @@ func TestTracingCombinedTypeAndInclusiveIndexFilters(t *testing.T) {
 	m.menu.query = "<123 :bash+user"
 	if got := m.buildMenuIndices(rows); !reflect.DeepEqual(got, []int{122}) {
 		t.Fatalf("inclusive index upper bound: %v", got)
+	}
+}
+
+func TestSearchMatches(t *testing.T) {
+	cases := []struct {
+		text  string
+		query string
+		want  bool
+	}{
+		{"bash zel -p command", "zel -p", true},
+		{"bash zel -p command", "zel", true},
+		{"bash echo hello", "zel -p", false},
+		{"bash echo hello", "", true},
+		{"BASH ZEL -P", "zel -p", true},
+		{"bash zel -p", "'zel -p'", true},
+	}
+	for _, tc := range cases {
+		if got := searchMatches(tc.text, tc.query); got != tc.want {
+			t.Errorf("searchMatches(%q, %q) = %v, want %v", tc.text, tc.query, got, tc.want)
+		}
+	}
+}
+
+func TestTracingFullContextSearch(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.menu = &menuState{page: menuTracing}
+	for i := 0; i < 150; i++ {
+		m.menu.trace = append(m.menu.trace, core.TraceEntry{
+			Kind: "system",
+			Text: fmt.Sprintf("system entry %d", i+1),
+		})
+	}
+	m.menu.trace[49] = core.TraceEntry{Kind: "bash", Text: "zel -p subagent"}
+	m.menu.trace[104] = core.TraceEntry{Kind: "bash", Text: "git status"}
+	m.menu.trace[109] = core.TraceEntry{Kind: "user", Text: "please run zel -p"}
+	m.menu.trace[114] = core.TraceEntry{Kind: "bash", Text: "zel -p --timeout 60"}
+	m.menu.trace[119] = core.TraceEntry{Kind: "bash", Text: "echo running\nzel -p /tmp/work"}
+	m.menu.trace[124] = core.TraceEntry{Kind: "output", Text: "output from zel -p"}
+
+	rows := m.rawMenuRows()
+	m.menu.query = ":bash >100 zel -p"
+	got := m.buildMenuIndices(rows)
+	want := []int{114, 119}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("query :bash >100 zel -p = %v, want %v", got, want)
+	}
+
+	matchedRows := m.menuRows()
+	if len(matchedRows) != 2 || matchedRows[0].label != "bash" || matchedRows[1].label != "bash" {
+		t.Fatalf("menuRows: %v", matchedRows)
 	}
 }
 
