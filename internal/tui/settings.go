@@ -40,7 +40,7 @@ func (m *model) openProviderForm(name string, onboarding bool) {
 	p := m.ctl.Settings().Providers[name]
 	p.BaseURL = cmp.Or(p.BaseURL, "https://api.openai.com/v1")
 	p.API = cmp.Or(p.API, core.APIResponses)
-	m.startForm(&formState{kind: "provider", original: name, onboarding: onboarding, fields: []string{"Name", "Base URL", "API key", "API type (responses / chat)"}, values: []string{name, p.BaseURL, p.APIKey, p.API}})
+	m.startForm(&formState{kind: "provider", original: name, onboarding: onboarding, fields: []string{"API type (responses / chat)", "Base URL", "API key", "Name"}, values: []string{p.API, p.BaseURL, p.APIKey, name}})
 }
 func (m *model) openProviders() {
 	m.menu.page, m.menu.selected, m.menu.query, m.menu.search = menuProviders, 0, "", nil
@@ -109,7 +109,7 @@ func validateFormField(f *formState) error {
 	value := f.values[f.step]
 	if f.kind == "provider" {
 		switch f.step {
-		case 0:
+		case 3:
 			if value == "" {
 				return fmt.Errorf("Provider name is required")
 			}
@@ -118,7 +118,7 @@ func validateFormField(f *formState) error {
 			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 				return fmt.Errorf("Enter an HTTP(S) base URL")
 			}
-		case 3:
+		case 0:
 			if value != core.APIResponses && value != core.APIChat {
 				return fmt.Errorf("Choose responses or chat")
 			}
@@ -143,9 +143,9 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 	s := m.ctl.Settings()
 	switch f.kind {
 	case "provider":
-		name := f.values[0]
+		name := f.values[3]
 		if _, exists := s.Providers[name]; exists && name != f.original {
-			f.step = 0
+			f.step = 3
 			f.input.SetValue(name)
 			f.err = "A provider with this name already exists"
 			return m, nil
@@ -156,7 +156,7 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 				s.Provider = name
 			}
 		}
-		s.Providers[name] = core.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[3]}
+		s.Providers[name] = core.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[0]}
 	case "setting":
 		if f.setting == 0 {
 			s.UI.Editor = f.values[0]
@@ -219,30 +219,20 @@ func (m model) formView() string {
 	f.input.SetWidth(max(1, w-2))
 	f.input.SetHeight(1)
 	view := f.input.View()
-	if f.kind == "provider" && f.step == 2 {
-		// Mask the key while retaining the native cursor marker and its position.
-		raw := ansi.Strip(view)
-		marker := strings.Index(raw, composerCursorMarker)
-		if marker >= 0 {
-			before, after := raw[:marker], raw[marker+len(composerCursorMarker):]
-			view = strings.Repeat("•", len([]rune(strings.TrimRight(before, " ")))) + composerCursorMarker + strings.Repeat("•", len([]rune(strings.TrimRight(after, " "))))
-		} else {
-			view = strings.Repeat("•", len([]rune(f.input.Value())))
-		}
-	}
 	lines := make([]string, max(0, (m.height-9)/2))
 	center := func(text string) string {
 		text = ansi.Truncate(text, w, "…")
 		return pad + strings.Repeat(" ", max(0, (w-ansi.StringWidth(text))/2)) + text
 	}
-	lines = append(lines, center(lipgloss.NewStyle().Foreground(inputBlue).Render(title)), center(subtitle), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), "", pad+renderRail(view, w, false), "")
+	lines = append(lines, center(lipgloss.NewStyle().Foreground(inputBlue).Render(title)), center(lipgloss.NewStyle().Foreground(darkGray).Render(subtitle)), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), "", pad+renderRail(view, w, false), "")
 	if f.err != "" {
 		lines = append(lines, pad+lipgloss.NewStyle().Foreground(errorColor).Render(ansi.Truncate(f.err, w, "…")))
 	}
 	for len(lines) < m.height-2 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, center("Tab / Shift+Tab: step · Enter: next"), center("← / →: cursor · Ctrl+Q: quit"))
+	hint := lipgloss.NewStyle().Foreground(darkGray)
+	lines = append(lines, center(hint.Render("Tab / Shift+Tab: step · Enter: next")), center(hint.Render("← / →: cursor · Ctrl+Q: quit")))
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}

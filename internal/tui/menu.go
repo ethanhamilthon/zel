@@ -25,7 +25,6 @@ const (
 	menuModel
 	menuEffort
 	menuTasks
-	menuTask
 	menuTracing
 	menuRename
 	menuInfo
@@ -42,7 +41,7 @@ const (
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
-	menuTasks: "Menu/Tasks", menuTask: "Menu/Tasks/Task", menuTracing: "Menu/Tracing",
+	menuTasks: "Menu/Tasks", menuTracing: "Menu/Tracing",
 	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuFiles: "Menu/Files", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help", menuCreate: "Menu/Files/New",
 }
 

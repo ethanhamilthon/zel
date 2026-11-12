@@ -290,38 +290,44 @@ func (a *Runtime) StartSubagent(command string) *SubagentHandle {
 	return StartSubagent(a.home, a.id, ParentSession(), command)
 }
 
+// ActiveSubagents lists the running zel -p children of this session tree. A child
+// is seen twice: as the shell command that launched it (tool call or background
+// task) and as its own registered run. The two views are paired by start order so
+// each child shows once, with the registered run's step count when it has one.
 func (a *Runtime) ActiveSubagents() []SubagentRun {
 	rootID := a.rootID()
-	var list []SubagentRun
-	seen := map[string]bool{}
-	add := func(r SubagentRun) {
-		if !seen[r.ID] && !seen[r.Command] {
-			seen[r.ID], seen[r.Command] = true, true
-			list = append(list, r)
+	byStart := func(a, b SubagentRun) int {
+		if c := a.Started.Compare(b.Started); c != 0 {
+			return c
 		}
+		return strings.Compare(a.ID, b.ID)
 	}
-	for _, s := range ActiveSubagentsForParent(a.home, rootID) {
-		add(s)
-	}
+	registered := ActiveSubagentsForParent(a.home, rootID)
+	var launched []SubagentRun
 	if a.tasks != nil {
 		tasks, _ := a.Tasks()
 		for _, t := range tasks {
 			if t.Status == "running" && strings.Contains(t.Command, "zel -p") {
-				add(SubagentRun{ID: t.ID, Parent: rootID, Started: t.Started, Steps: a.TaskSteps(t.ID), Command: t.Command})
+				launched = append(launched, SubagentRun{ID: t.ID, Parent: rootID, Started: t.Started, Steps: a.TaskSteps(t.ID), Command: t.Command})
 			}
 		}
 	}
 	a.histMu.RLock()
 	if a.currentToolSubagent != nil {
-		add(*a.currentToolSubagent)
+		launched = append(launched, *a.currentToolSubagent)
 	}
 	a.histMu.RUnlock()
-	slices.SortFunc(list, func(a, b SubagentRun) int {
-		if c := a.Started.Compare(b.Started); c != 0 {
-			return c
+	slices.SortFunc(registered, byStart)
+	slices.SortFunc(launched, byStart)
+	list := registered
+	for i, l := range launched {
+		if i >= len(registered) {
+			list = append(list, l)
+		} else if registered[i].Steps == 0 && l.Steps > 0 {
+			list[i].Steps = l.Steps
 		}
-		return strings.Compare(a.ID, b.ID)
-	})
+	}
+	slices.SortFunc(list, byStart)
 	return list
 }
 

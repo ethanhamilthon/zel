@@ -117,7 +117,7 @@ func (m model) turnSteps() int {
 }
 
 // subagentFrames is the blinking agent animation, alternating between visible and hidden.
-var subagentFrames = []string{"🤖", "🤖", "🤖", "🤖", "  ", "  "}
+var subagentFrames = []string{"◆", "◆", "◆", "◆", "  ", "  "}
 
 // subagentBlock renders the indicator rows for running subagents (zel -p children).
 func (m model) subagentBlock() string {
@@ -264,13 +264,13 @@ func (m *model) refreshMenu() {
 		if info, err := m.ctl.Info(); err == nil {
 			mu.info = infoRows(info)
 		}
-	case menuTasks, menuTask:
+	case menuTasks:
 		if tasks, err := m.ctl.Tasks(); err == nil {
 			mu.tasks = tasks
 		}
 		if mu.page == menuText {
 			if text, err := m.ctl.TaskOutput(mu.task); err == nil {
-				mu.text = text
+				mu.text = m.taskText(mu.task, text)
 			}
 		}
 	case menuTracing:

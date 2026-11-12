@@ -94,8 +94,6 @@ func (m model) buildMenuRows() []menuRow {
 		if rows == nil {
 			rows = []menuRow{{"No background tasks", ""}}
 		}
-	case menuTask:
-		rows = []menuRow{{"Show output", ""}, {"Stop task", "kill"}}
 	case menuTracing:
 		for _, e := range mu.trace {
 			rows = append(rows, menuRow{traceLabel(e), traceDetail(e)})

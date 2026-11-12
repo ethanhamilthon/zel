@@ -128,6 +128,9 @@ func (m model) menuHead() (title, shortcut string) {
 	}
 	if m.menu.page == menuText {
 		title = m.menu.title
+		if t, ok := m.findTask(m.menu.task); ok && m.menu.parent == menuTasks {
+			shortcut = taskStatus(t)
+		}
 		if m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace) {
 			title = traceElapsed(m.menu.trace, m.menu.traceIndex)
 			shortcut = fmt.Sprintf("%d/%d", m.menu.traceIndex+1, len(m.menu.trace))
@@ -154,8 +157,18 @@ func (m model) pageLines(pad string, w int) []string {
 		height := m.menuBodyRoom()
 		start := min(max(0, m.menu.offset), max(0, len(body)-1))
 		lines := make([]string, 0, height)
+		gray := 0
+		if m.menu.parent == menuTasks {
+			if t, ok := m.findTask(m.menu.task); ok {
+				gray = len(m.wrapText(strings.Join(strings.Fields(t.Command), " "), w))
+			}
+		}
 		for i := start; i < min(len(body), start+height); i++ {
-			lines = append(lines, pad+lipgloss.NewStyle().Foreground(foreground).Render(body[i]))
+			color := foreground
+			if i < gray {
+				color = muted
+			}
+			lines = append(lines, pad+lipgloss.NewStyle().Foreground(color).Render(body[i]))
 		}
 		return lines
 	}
@@ -188,7 +201,13 @@ func (m model) pageLines(pad string, w int) []string {
 			color := traceColor(m.menu.trace[indices[i]].Kind)
 			labelStyle, detailStyle = lipgloss.NewStyle().Foreground(color), lipgloss.NewStyle().Foreground(color)
 		}
-		lines = append(lines, pad+prefix+labelStyle.Render(label)+accent.Render(marker)+gap+detailStyle.Render(detail))
+		rendered := labelStyle.Render(label)
+		if m.menu.page == menuTasks && i < len(rows) {
+			if id, command, ok := strings.Cut(label, " "); ok {
+				rendered = fg.Render(id) + " " + dim.Render(command)
+			}
+		}
+		lines = append(lines, pad+prefix+rendered+accent.Render(marker)+gap+detailStyle.Render(detail))
 	}
 	if m.menu.page == menuRename {
 		lines = append(lines, "")

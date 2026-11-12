@@ -50,17 +50,36 @@ func sessionTime(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// taskRow splits a background task into the menu's label and detail columns.
+// taskRow splits a background task into the menu's label and detail columns:
+// "failed", "done", "stopped" or how long it has been running.
 func taskRow(t core.Task) (label, detail string) {
-	status := t.Status
-	if t.ExitCode != nil && *t.ExitCode != 0 {
-		status += fmt.Sprintf(" (%d)", *t.ExitCode)
+	detail = t.Status
+	if t.Status == "running" {
+		detail = formatDuration(time.Since(t.Started))
 	}
-	end := t.Ended
-	if end.IsZero() {
-		end = time.Now()
+	return t.ID + " " + strings.Join(strings.Fields(t.Command), " "), detail
+}
+
+// taskStatus is the status shown in the header of a task page.
+func taskStatus(t core.Task) string {
+	_, detail := taskRow(t)
+	return detail
+}
+
+// findTask returns the listed task with the given id.
+func (m model) findTask(id string) (core.Task, bool) {
+	for _, t := range m.menu.tasks {
+		if t.ID == id {
+			return t, true
+		}
 	}
-	return t.ID + " $ " + strings.Join(strings.Fields(t.Command), " "), status + " " + formatDuration(end.Sub(t.Started))
+	return core.Task{}, false
+}
+
+// taskText is the body of a task page: the command followed by the live output.
+func (m model) taskText(id, output string) string {
+	t, _ := m.findTask(id)
+	return strings.Join(strings.Fields(t.Command), " ") + "\n\n" + output
 }
 
 type modelsLoaded struct {

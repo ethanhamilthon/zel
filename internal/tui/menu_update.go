@@ -49,8 +49,6 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 		return m, nil
 	case menuEffort:
 		mu.page = menuModel
-	case menuTask:
-		mu.page = menuTasks
 	default:
 		mu.page = menuMain
 	}
@@ -65,6 +63,19 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	mu := m.menu
 	n := len(m.menuRows())
+	if v.String() == "ctrl+x" {
+		id := ""
+		if mu.page == menuText && mu.parent == menuTasks {
+			id = mu.task
+		} else if mu.page == menuTasks && mu.selected < len(mu.tasks) {
+			id = mu.tasks[len(mu.tasks)-1-mu.selected].ID
+		}
+		if id != "" {
+			_ = m.ctl.StopTask(id)
+			m.refreshMenu()
+		}
+		return m, nil
+	}
 	if mu.page == menuText || mu.page == menuInfo {
 		switch v.String() {
 		case "esc":
@@ -338,29 +349,17 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 	case menuTasks:
 		if index < len(mu.tasks) {
 			mu.task = mu.tasks[len(mu.tasks)-1-index].ID
-			open(menuTask)
+			output, err := m.ctl.TaskOutput(mu.task)
+			if err != nil {
+				return m.reject(err)
+			}
+			m.openText(mu.task, m.taskText(mu.task, output))
 		}
 	case menuTracing:
 		if index < len(mu.trace) {
 			m.openTrace(index)
 			return m, tea.EnableMouseCellMotion
 		}
-	case menuTask:
-		if index == 0 {
-			output, err := m.ctl.TaskOutput(mu.task)
-			if err != nil {
-				return m.reject(err)
-			}
-			m.openText("Menu/Tasks/"+mu.task, output)
-			return m, nil
-		}
-		m = m.closeMenu()
-		if err := m.ctl.StopTask(mu.task); err != nil {
-			return m.reject(err)
-		}
-		m.add("notice", "Task "+mu.task+" stopped.")
-		m.refresh(true)
-		return m, nil
 	case menuRename:
 		m = m.closeMenu()
 		return m.submit(m.ctl.Rename(strings.TrimSpace(mu.name)))

@@ -1145,7 +1145,7 @@ func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 	}
 	task := m.menu.tasks[0]
 	defer m.ctl.StopTask(task.ID)
-	m.menu = &menuState{page: menuText, parent: menuTask, task: task.ID, offset: 1}
+	m.menu = &menuState{page: menuText, parent: menuTasks, task: task.ID, offset: 1}
 	if err := os.WriteFile(task.Log, []byte("first line\nnew output\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1243,24 +1243,24 @@ func TestOnboardingStepsPersistProviderAndSelectModel(t *testing.T) {
 	if !strings.Contains(view, "Welcome to Zel") || !strings.Contains(view, "Tab / Shift+Tab") {
 		t.Fatalf("onboarding hints missing: %s", view)
 	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("local")})
+	m.menu.form.input.SetValue("chat")
 	m = key(m, tea.KeyMsg{Type: tea.KeyLeft})
 	if m.menu.form.step != 0 {
 		t.Fatal("left arrow changed step")
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.menu.form.step != 1 || m.menu.form.values[0] != "local" {
+	if m.menu.form.step != 1 || m.menu.form.values[0] != "chat" {
 		t.Fatal("Tab did not preserve field")
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.menu.form.step != 0 || m.menu.form.input.Value() != "local" {
+	if m.menu.form.step != 0 || m.menu.form.input.Value() != "chat" {
 		t.Fatal("Shift+Tab did not restore field")
 	}
-	values := []string{"local", "http://127.0.0.1:1/v1", "private-test-key", core.APIChat}
+	values := []string{core.APIChat, "http://127.0.0.1:1/v1", "private-test-key", "local"}
 	for i, value := range values {
 		m.menu.form.input.SetValue(value)
-		if i == 2 && strings.Contains(m.View(), value) {
-			t.Fatal("API key visible in form")
+		if i == 2 && !strings.Contains(ansi.Strip(m.View()), value) {
+			t.Fatal("API key must be visible in form")
 		}
 		m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	}
@@ -1294,8 +1294,8 @@ func TestProvidersCtrlAStartsAddFlowWithoutSelectingListItem(t *testing.T) {
 	if m.menu == nil || m.menu.page != menuForm || m.menu.form == nil || m.menu.form.step != 0 {
 		t.Fatalf("Ctrl+A should open the add-provider form, not activate the selected provider: %#v", m.menu)
 	}
-	if m.menu.form.values[0] != "" {
-		t.Fatalf("Ctrl+A opened an edit flow for %q instead of a new provider", m.menu.form.values[0])
+	if m.menu.form.values[3] != "" {
+		t.Fatalf("Ctrl+A opened an edit flow for %q instead of a new provider", m.menu.form.values[3])
 	}
 }
 
@@ -1304,7 +1304,7 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	m := f.m
 	m.menu = &menuState{}
 	m.openProviderForm("p", false)
-	m.menu.form.input.SetValue("p")
+	m.menu.form.input.SetValue(core.APIChat)
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m.menu.form.input.SetValue("invalid")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -2580,7 +2580,7 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 	if !strings.Contains(stripped, "10s · 3 steps") {
 		t.Fatalf("row missing time or steps: %q", stripped)
 	}
-	if !strings.HasPrefix(stripped, "🤖 ") && !strings.HasPrefix(stripped, "   ") {
+	if !strings.HasPrefix(stripped, "◆ ") && !strings.HasPrefix(stripped, "◇ ") && !strings.HasPrefix(stripped, "   ") {
 		t.Fatalf("row missing agent icon or blink pad: %q", stripped)
 	}
 	if strings.Contains(row, "▌") {
@@ -2612,7 +2612,7 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 	m.width = 80
 	child.Started = time.Now() // frame 0
 	f0 := ansi.Strip(m.formatSubagentRow(child))
-	if !strings.HasPrefix(f0, "🤖 ") {
+	if !strings.HasPrefix(f0, "◆ ") {
 		t.Fatalf("frame 0 should have visible icon, got %q", f0)
 	}
 	child.Started = time.Now().Add(-320 * time.Millisecond) // frame 4 (320ms / 80ms = 4)
