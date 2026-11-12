@@ -315,7 +315,13 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	}
 	defer a.Close()
 	if headless {
-		if err := a.Run(ctx, prompt, func(core.TurnEvent) {}); err != nil {
+		sub := a.StartSubagent(prompt)
+		defer sub.Finish()
+		if err := a.Run(ctx, prompt, func(e core.TurnEvent) {
+			if e.Kind == "code" || e.Kind == "reasoning" {
+				sub.AddStep()
+			}
+		}); err != nil {
 			return cancelledOr(ctx, err)
 		}
 		_, err := fmt.Fprintln(out, a.FinalText())

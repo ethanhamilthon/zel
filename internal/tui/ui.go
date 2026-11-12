@@ -75,6 +75,7 @@ type model struct {
 	fileDismissed             bool
 	fileDismissedValue        string
 	fileDismissedCursor       int
+	subagents                 []core.SubagentRun
 	frameAt                   time.Time
 	dirty                     bool
 	renderPending             bool
@@ -87,6 +88,18 @@ const (
 )
 
 type redraw struct{}
+
+type SubagentRun = core.SubagentRun
+
+func (m model) activeSubagents() []SubagentRun {
+	if m.subagents != nil {
+		return m.subagents
+	}
+	if m.ctl != nil {
+		return m.ctl.ActiveSubagents()
+	}
+	return nil
+}
 
 func newComposer() textarea.Model {
 	input := textarea.New()
@@ -299,15 +312,38 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.dirty || m.renderPending {
 			m.refresh(follow)
 		}
+		if len(m.activeSubagents()) > 0 {
+			started := time.Time{}
+			if m.ctl != nil {
+				started = m.ctl.Status().Started
+			}
+			if sub := m.activeSubagents(); len(sub) > 0 && started.IsZero() {
+				started = sub[0].Started
+			}
+			return m, workingPulse(started)
+		}
 		return m, nil
 	case workingTick:
+		if m.ctl == nil {
+			return m, nil
+		}
 		status := m.ctl.Status()
-		if !status.Busy || !v.started.Equal(status.Started) {
+		subagents := m.activeSubagents()
+		hasWork := status.Busy || len(subagents) > 0
+		if !hasWork {
+			m.refresh(follow)
+			return m, nil
+		}
+		if status.Busy && !v.started.IsZero() && !v.started.Equal(status.Started) && len(subagents) == 0 {
 			return m, nil
 		}
 		m.term.tick()
 		m.refresh(follow)
-		return m, workingPulse(status.Started)
+		started := status.Started
+		if !status.Busy && len(subagents) > 0 {
+			started = subagents[0].Started
+		}
+		return m, workingPulse(started)
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, v.Width), max(1, v.Height)
 		m.refresh(follow)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,13 +35,14 @@ type tasks struct {
 	closed            bool
 	wg                sync.WaitGroup
 	report            func(string)
+	steps             map[string]int
 }
 
 func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
 	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}}
+		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}}
 }
 
 func (t *tasks) run(command string) (string, error) {
@@ -265,6 +267,86 @@ func (a *Runtime) StopTask(id string) error {
 		return fmt.Errorf("task %s is not running", id)
 	}
 	return a.tasks.stop(id)
+}
+
+func (t *tasks) SetSteps(id string, steps int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.steps == nil {
+		t.steps = map[string]int{}
+	}
+	t.steps[id] = steps
+}
+
+func (t *tasks) Steps(id string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.steps[id]
+}
+
+func (a *Runtime) SetTaskSteps(id string, steps int) {
+	if a.tasks != nil {
+		a.tasks.SetSteps(id, steps)
+	}
+}
+
+func (a *Runtime) TaskSteps(id string) int {
+	if a.tasks != nil {
+		return a.tasks.Steps(id)
+	}
+	return 0
+}
+
+func (a *Runtime) StartSubagent(command string) *SubagentHandle {
+	return StartSubagent(a.home, a.id, a.ParentSession(), command)
+}
+
+func (a *Runtime) ActiveSubagents() []SubagentRun {
+	list := ActiveSubagentsForParent(a.home, a.id)
+	seen := map[string]bool{}
+	for _, s := range list {
+		seen[s.ID] = true
+		seen[s.Command] = true
+	}
+
+	if a.tasks != nil {
+		tasks, _ := a.Tasks()
+		for _, task := range tasks {
+			if task.Status == "running" && strings.Contains(task.Command, "zel -p") {
+				if seen[task.ID] || seen[task.Command] {
+					continue
+				}
+				list = append(list, SubagentRun{
+					ID:      task.ID,
+					Parent:  a.id,
+					Started: task.Started,
+					Steps:   a.TaskSteps(task.ID),
+					Command: task.Command,
+				})
+				seen[task.ID] = true
+				seen[task.Command] = true
+			}
+		}
+	}
+
+	a.histMu.RLock()
+	fore := a.currentToolSubagent
+	a.histMu.RUnlock()
+	if fore != nil && !seen[fore.ID] && !seen[fore.Command] {
+		list = append(list, *fore)
+	}
+
+	slices.SortFunc(list, func(a, b SubagentRun) int {
+		if !a.Started.Equal(b.Started) {
+			if a.Started.Before(b.Started) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+
+	return list
 }
 
 func sessionTasks(db *store.Store, session string) ([]Task, error) { return db.Tasks(session) }

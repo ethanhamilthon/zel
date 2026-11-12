@@ -2469,3 +2469,167 @@ func TestHomePathsInFileBrowser(t *testing.T) {
 		t.Fatalf("file browser title = %q", title)
 	}
 }
+
+func TestSubagentIndicatorFormatting(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width = 80
+	started := time.Now().Add(-10 * time.Second)
+
+	child := core.SubagentRun{
+		ID:      "sub-1",
+		Parent:  "parent-1",
+		Started: started,
+		Steps:   3,
+		Command: "zel -p 'summarize'",
+	}
+	row := m.formatSubagentRow(child)
+	stripped := ansi.Strip(row)
+	if !strings.Contains(stripped, "10s · 3 steps") {
+		t.Fatalf("row missing time or steps: %q", stripped)
+	}
+	if !strings.HasPrefix(stripped, "🤖 ") && !strings.HasPrefix(stripped, "   ") {
+		t.Fatalf("row missing agent icon or blink pad: %q", stripped)
+	}
+	if strings.Contains(row, "▌") {
+		t.Fatalf("subagent row must not contain rail: %q", row)
+	}
+
+	// Test step counts: 0 steps, 1 step, 5 steps
+	child.Steps = 0
+	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "0 steps") {
+		t.Fatalf("expected 0 steps, got %q", s)
+	}
+	child.Steps = 1
+	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "1 step") {
+		t.Fatalf("expected 1 step, got %q", s)
+	}
+	child.Steps = 5
+	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "5 steps") {
+		t.Fatalf("expected 5 steps, got %q", s)
+	}
+
+	// Test narrow width truncation
+	m.width = 12
+	narrow := ansi.Strip(m.formatSubagentRow(child))
+	if !strings.Contains(narrow, "…") {
+		t.Fatalf("expected truncated text on narrow width, got %q", narrow)
+	}
+
+	// Test blink frames: frame 0 has icon, frame 4 has padding
+	m.width = 80
+	child.Started = time.Now() // frame 0
+	f0 := ansi.Strip(m.formatSubagentRow(child))
+	if !strings.HasPrefix(f0, "🤖 ") {
+		t.Fatalf("frame 0 should have visible icon, got %q", f0)
+	}
+	child.Started = time.Now().Add(-320 * time.Millisecond) // frame 4 (320ms / 80ms = 4)
+	f4 := ansi.Strip(m.formatSubagentRow(child))
+	if !strings.HasPrefix(f4, "   ") {
+		t.Fatalf("frame 4 should be blink off with padding, got %q", f4)
+	}
+}
+
+func TestSubagentIndicatorLifecycleAndUpdates(t *testing.T) {
+	m := bareModel(t, "/project")
+	sessionID := m.ctl.Status().Session
+
+	if got := m.subagentBlock(); got != "" {
+		t.Fatalf("expected empty subagent block, got %q", got)
+	}
+
+	// Start subagent
+	sub := core.StartSubagent(t.TempDir(), "child-1", sessionID, "zel -p 'sub'")
+	defer sub.Finish()
+
+	block := m.subagentBlock()
+	if block == "" {
+		t.Fatal("subagent block should appear while subagent is running")
+	}
+	stripped := ansi.Strip(block)
+	if !strings.Contains(stripped, "0 steps") {
+		t.Fatalf("expected initial 0 steps, got: %q", stripped)
+	}
+	if !strings.HasSuffix(block, "\n\n") {
+		t.Fatalf("expected block to end with \\n\\n, got: %q", block)
+	}
+
+	// Update step count
+	sub.AddStep()
+	block1 := ansi.Strip(m.subagentBlock())
+	if !strings.Contains(block1, "1 step") {
+		t.Fatalf("expected 1 step after AddStep, got: %q", block1)
+	}
+
+	sub.AddStep()
+	block2 := ansi.Strip(m.subagentBlock())
+	if !strings.Contains(block2, "2 steps") {
+		t.Fatalf("expected 2 steps after AddStep, got: %q", block2)
+	}
+
+	// Finish subagent -> disappears
+	sub.Finish()
+	if got := m.subagentBlock(); got != "" {
+		t.Fatalf("expected subagent block to disappear after Finish, got %q", got)
+	}
+}
+
+func TestSubagentIndicatorFromBackgroundTask(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	sessionID := m.ctl.Status().Session
+
+	if _, err := core.RunTask(m.cwd, sessionID, "sleep 30"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.subagentBlock(); got != "" {
+		t.Fatalf("non-zel task showed subagent indicator: %q", got)
+	}
+
+	taskID, err := core.RunTask(m.cwd, sessionID, "zel -p 'run test'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.ctl.StopTask(taskID) }()
+
+	block := m.subagentBlock()
+	if block == "" {
+		t.Fatal("expected subagent indicator for zel -p task")
+	}
+	if !strings.Contains(ansi.Strip(block), "0 steps") {
+		t.Fatalf("expected 0 steps for task: %q", block)
+	}
+
+	m.ctl.SetTaskSteps(taskID, 4)
+	blockSteps := ansi.Strip(m.subagentBlock())
+	if !strings.Contains(blockSteps, "4 steps") {
+		t.Fatalf("expected 4 steps after SetTaskSteps, got: %q", blockSteps)
+	}
+
+	if err := m.ctl.StopTask(taskID); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if m.subagentBlock() == "" {
+			break
+		}
+	}
+	if got := m.subagentBlock(); got != "" {
+		t.Fatalf("expected subagent indicator to disappear after task stopped, got %q", got)
+	}
+}
+
+func TestSubagentIndicatorInScreen(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width, m.height = 80, 24
+	m.subagents = []core.SubagentRun{{
+		ID:      "sub-1",
+		Parent:  m.ctl.Status().Session,
+		Started: time.Now(),
+		Steps:   1,
+		Command: "zel -p 'test'",
+	}}
+	m.refresh(false)
+	view := m.viewport.View()
+	if !strings.Contains(view, "1 step") {
+		t.Fatalf("expected rendered screen to contain subagent indicator, got:\n%s", view)
+	}
+}

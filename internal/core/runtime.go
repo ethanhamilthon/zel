@@ -59,30 +59,33 @@ type Options struct {
 }
 
 type Runtime struct {
-	opts          Options
-	home          string
-	cfg           *settingsState
-	histMu        *sync.RWMutex
-	Shell         *shell.Runner
-	History       []json.RawMessage
-	itemMeta      map[int]*Metadata
-	db            *store.Store
-	project       string
-	id            string
-	saved         int
-	stored        bool
-	owner         *os.File
-	prompt        string
-	promptFrozen  bool
-	title         string
-	lastRequest   Metadata
-	imageWarnings []Record
-	sock          *sessionSocket
-	queue         *Steering
-	slots         *imageSlots
-	tasks         *tasks
-	hooks         *hooks.Runner
+	opts                Options
+	home                string
+	cfg                 *settingsState
+	histMu              *sync.RWMutex
+	Shell               *shell.Runner
+	History             []json.RawMessage
+	itemMeta            map[int]*Metadata
+	db                  *store.Store
+	project             string
+	id                  string
+	saved               int
+	stored              bool
+	owner               *os.File
+	prompt              string
+	promptFrozen        bool
+	title               string
+	lastRequest         Metadata
+	imageWarnings       []Record
+	sock                *sessionSocket
+	queue               *Steering
+	slots               *imageSlots
+	tasks               *tasks
+	hooks               *hooks.Runner
+	currentToolSubagent *SubagentRun
 }
+
+func (a *Runtime) Home() string { return a.home }
 
 func New(dir string, opts Options) (*Runtime, error) {
 	home, err := ZelHome(dir)
@@ -282,6 +285,21 @@ func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, e
 	}
 	a.fireContext(ctx, "bash_start", map[string]string{"ZEL_COMMAND": args.Command})
 	shellStarted := time.Now()
+	if strings.Contains(args.Command, "zel -p") {
+		a.histMu.Lock()
+		a.currentToolSubagent = &SubagentRun{
+			ID:      callID,
+			Parent:  a.SessionID(),
+			Started: shellStarted,
+			Command: args.Command,
+		}
+		a.histMu.Unlock()
+		defer func() {
+			a.histMu.Lock()
+			a.currentToolSubagent = nil
+			a.histMu.Unlock()
+		}()
+	}
 	result, bg := a.Shell.Run(ctx, args.Command, timeout, limit, detach)
 	a.fire("bash_end", map[string]string{"ZEL_COMMAND": args.Command, "ZEL_EXIT_CODE": strconv.Itoa(result.ExitCode), "ZEL_OUTPUT": result.Output, "ZEL_DURATION_MS": millis(time.Since(shellStarted))})
 	if bg == nil {
