@@ -92,8 +92,8 @@ func (m model) workingBlock() string {
 		parts = append(parts, formatSteps(m.turnSteps()))
 	}
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
-	text := ansi.Truncate(strings.Join(parts, " · "), max(1, m.width-4), "…")
-	return "  " + lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
+	text := ansi.Truncate(strings.Join(parts, " · "), max(1, m.width-2), "…")
+	return lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
 }
 
 // turnSteps counts the tool calls and thinking blocks of the running turn. The
