@@ -25,8 +25,15 @@ func (m model) menuView() string {
 		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
-	for len(lines) < m.height {
-		lines = append(lines, "")
+	if m.menu.page == menuFiles {
+		for len(lines) < max(0, m.height-1) {
+			lines = append(lines, "")
+		}
+		lines = append(lines, pad+lipgloss.NewStyle().Foreground(muted).Render("Ctrl+A: New file or directory"))
+	} else {
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
 	}
 	row, column := 0, 0
 	for i, line := range lines[:m.height] {
@@ -48,7 +55,13 @@ func (m model) menuBodyStart() int {
 	return start
 }
 
-func (m model) menuBodyRoom() int { return max(1, m.height-m.menuBodyStart()) }
+func (m model) menuBodyRoom() int {
+	bottom := 0
+	if m.menu.page == menuFiles {
+		bottom = 1
+	}
+	return max(1, m.height-bottom-m.menuBodyStart())
+}
 
 // menuLeft, menuTop and menuWidth place the menu block on the screen; the
 // prepared entries of a text page scroll inside it.
@@ -63,13 +76,17 @@ func (m model) menuTop() int {
 	if body > maxListItems {
 		body = maxListItems + 1
 	}
-	if m.menu.page == menuRename {
+	if m.menu.page == menuRename || m.menu.page == menuCreate {
 		body++
 	}
 	if m.menu.page == menuText || m.menu.page == menuInfo {
 		body = len(m.wrapText(m.menuText(), m.menuWidth()))
 	}
-	return max(0, (m.height-header-body)/2)
+	height := m.height
+	if m.menu.page == menuFiles {
+		height--
+	}
+	return max(0, (height-header-body)/2)
 }
 
 func (m model) menuWidth() int { return max(10, min(menuWidth, m.width-4)) }
@@ -79,11 +96,7 @@ func (m model) menuWidth() int { return max(10, min(menuWidth, m.width-4)) }
 func (m model) menuHead() (title, shortcut string) {
 	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T", menuFiles: "Ctrl+F"}[m.menu.page]
 	if m.menu.page == menuMain {
-		name := m.ctl.Settings().Name
-		if name == "" {
-			name = "Menu"
-		}
-		title = "zel " + strings.TrimPrefix(Version, "v") + "/" + name
+		title = "zel " + strings.TrimPrefix(Version, "v")
 	}
 	if m.menu.page == menuFiles {
 		title = "Menu/Files " + core.DisplayPath(m.menu.directory)
@@ -140,7 +153,7 @@ func (m model) pageLines(pad string, w int) []string {
 		lines = append(lines, "")
 	}
 	if remaining := len(rows) - first - visible; remaining > 0 {
-		lines = append(lines, pad+dim.Render(fmt.Sprintf("  %d more items", remaining)))
+		lines = append(lines, pad+dim.Render(fmt.Sprintf("  + %d more items", remaining)))
 	}
 	return lines
 }

@@ -34,6 +34,10 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 		mu.page, mu.selected = mu.parent, 0
 		return m, nil
 	}
+	if mu.page == menuCreate {
+		mu.page, mu.name, mu.status = menuFiles, "", ""
+		return m, nil
+	}
 	if mu.direct {
 		return m.closeMenu(), nil
 	}
@@ -85,6 +89,11 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch v.String() {
+	case "ctrl+a":
+		if mu.page == menuFiles {
+			mu.page, mu.name, mu.status, mu.selected = menuCreate, "", "", 0
+			return m, nil
+		}
 	case "esc":
 		if mu.page == menuConfirm {
 			return m.menuBack()
@@ -113,7 +122,7 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.menuActivate()
 	default:
 		switch mu.page {
-		case menuRename:
+		case menuRename, menuCreate:
 			editText(&mu.name, v)
 		default:
 			if searchableMenu(mu.page) {
@@ -342,6 +351,8 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 	case menuRename:
 		m = m.closeMenu()
 		return m.submit(m.ctl.Rename(strings.TrimSpace(mu.name)))
+	case menuCreate:
+		return m.createFileOrDirectory()
 	}
 	return m, nil
 }

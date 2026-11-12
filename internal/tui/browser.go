@@ -87,3 +87,36 @@ func (m model) editFile(path string) (tea.Model, tea.Cmd) {
 	m.editorActive = true
 	return m, tea.ExecProcess(command, func(err error) tea.Msg { return fileEditorFinished{err} })
 }
+
+func (m model) createFileOrDirectory() (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(m.menu.name)
+	if name == "" {
+		m.menu.status = "Enter a name; end with / for a directory"
+		return m, nil
+	}
+	directory := strings.HasSuffix(name, "/") || strings.HasSuffix(name, "\\")
+	name = strings.TrimRight(name, "/\\")
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") || hasControl(name) {
+		m.menu.status = "Enter a name in the current directory"
+		return m, nil
+	}
+	path := filepath.Join(m.menu.directory, name)
+	if directory {
+		if err := os.Mkdir(path, 0755); err != nil {
+			m.menu.status = err.Error()
+			return m, nil
+		}
+	} else {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			m.menu.status = err.Error()
+			return m, nil
+		}
+		if err := file.Close(); err != nil {
+			m.menu.status = err.Error()
+			return m, nil
+		}
+	}
+	m.menu.page, m.menu.name, m.menu.status = menuFiles, "", ""
+	return m, m.readDirectory(m.menu.directory)
+}

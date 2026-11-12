@@ -122,17 +122,14 @@ func (m *model) acceptClipboard(result clipboardResult) tea.Cmd {
 	return nil
 }
 
-// clipboardWrite is replaceable in tests so they never touch the system clipboard.
-var clipboardWrite = clipboard.WriteAll
-
-type answerCopied struct{ err error }
-
 func (m model) copyAnswer() (tea.Model, tea.Cmd) {
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		e := m.entries[i]
 		if e.Kind == "assistant" && strings.TrimSpace(e.Text) != "" {
-			text := e.Text
-			return m, func() tea.Msg { return answerCopied{err: clipboardWrite(text)} }
+			m.setComposer(e.Text)
+			m.input.CursorEnd()
+			m.refresh(true)
+			return m, nil
 		}
 	}
 	return m, nil

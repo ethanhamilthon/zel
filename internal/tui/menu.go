@@ -37,23 +37,24 @@ const (
 	menuSettings
 	menuFiles
 	menuConfirm
+	menuCreate
 )
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
 	menuTasks: "Menu/Tasks", menuTask: "Menu/Tasks/Task", menuTracing: "Menu/Tracing",
-	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuFiles: "Menu/Files", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
+	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuFiles: "Menu/Files", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help", menuCreate: "Menu/Files/New",
 }
 
 type menuRow struct{ label, detail string }
 
 var mainRows = []menuRow{
-	{"Resume", "Saved sessions"}, {"New session", "Fresh chat, re-read config · Ctrl+N"}, {"Models", "Model, reasoning effort"},
-	{"Tasks", "Background tasks"}, {"Tracing", "Everything the session did"}, {"Rename", "Rename this session"},
-	{"Info", "Session, config, tokens"}, {"Reload", "Re-read the config"}, {"Help", "Keyboard shortcuts"},
-	{"Quit", "Save and exit"}, {"Editor", "Edit input · Ctrl+E"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse and edit"},
-	{"Copy answer", "Last answer as plain text · Ctrl+Y"},
+	{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
+	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
+	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "New Color or Prompt"}, {"Help", "Keyboard shortcuts"},
+	{"Quit", "Exit, Ctrl+Q"}, {"Editor", "Edit input, Ctrl+E"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse files, Ctrl+F"},
+	{"Copy", "Agent answer to input, Ctrl+Y"},
 }
 
 type menuListCache struct {

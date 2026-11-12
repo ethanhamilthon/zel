@@ -31,9 +31,6 @@ func (m model) buildMenuRows() []menuRow {
 	switch mu.page {
 	case menuMain:
 		rows = slices.Clone(mainRows)
-		if n := m.ctl.Status().Tasks; n > 0 {
-			rows[3].detail = fmt.Sprintf("%d running", n)
-		}
 	case menuProviders:
 		rows = []menuRow{{"Add provider", ""}}
 		for _, name := range mu.providerNames {
@@ -114,6 +111,12 @@ func (m model) buildMenuRows() []menuRow {
 		rows = mu.info
 	case menuRename:
 		rows = []menuRow{{mu.name + "▏", "empty = default title"}}
+	case menuCreate:
+		detail := "end with / for directory"
+		if mu.status != "" {
+			detail = mu.status
+		}
+		rows = []menuRow{{mu.name + "▏", detail}}
 	}
 	if mu.page == menuModel {
 		rows = append(rows, menuRow{"Retry model listing", ""}, menuRow{"Enter model manually", ""})
@@ -151,7 +154,16 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 		} else if kind != "" {
 			continue
 		}
-		if !searchableMenu(m.menu.page) || m.menu.page == menuModel || searchMatches(text, query) {
+		matches := true
+		switch {
+		case !searchableMenu(m.menu.page), m.menu.page == menuModel:
+			matches = true
+		case m.menu.page == menuTracing:
+			matches = searchMatches(text, query)
+		default:
+			matches = menuLabelMatches(row.label, query)
+		}
+		if matches {
 			indices = append(indices, i)
 		}
 	}

@@ -171,7 +171,13 @@ func (m *model) refresh(follow bool) {
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)
 	m.viewport.Height = max(1, m.height)
-	m.viewport.TopMargin = 1
+	m.viewport.TopMargin = 0
+	for _, e := range m.entries {
+		if (e.Kind == "assistant" || e.Kind == "user") && strings.TrimSpace(e.Text) != "" {
+			m.viewport.TopMargin = 1
+			break
+		}
+	}
 	m.viewport.SetLines(m.timelineRows(renderBudget))
 	m.frameAt, m.dirty = time.Now(), false
 	if follow {
@@ -320,11 +326,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case linkOpened:
 		if v.err != nil {
 			return m.stop("error", "Could not open "+v.target+": "+v.err.Error())
-		}
-		return m, nil
-	case answerCopied:
-		if v.err != nil {
-			return m.stop("error", "Copy failed: "+v.err.Error())
 		}
 		return m, nil
 	case core.Event:

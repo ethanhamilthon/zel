@@ -13,6 +13,10 @@ func searchableMenu(page menuPage) bool {
 	return page == menuMain || page == menuResume || page == menuModel || page == menuEffort || page == menuTracing || page == menuProviders || page == menuFiles
 }
 
+func menuLabelMatches(label, query string) bool {
+	return strings.HasPrefix(strings.ToLower(label), strings.ToLower(query))
+}
+
 func searchMatches(text, query string) bool {
 	text = strings.ToLower(text)
 	for _, word := range strings.Fields(strings.ToLower(query)) {
@@ -40,8 +44,7 @@ func (m model) menuInput(width int) *textarea.Model {
 	return mu.search
 }
 
-// filteredModels returns the models that match every word of the search text
-// in the model name or the provider name.
+// filteredModels returns models whose visible names have the search text as a prefix.
 func (m model) filteredModels() []core.ModelChoice {
 	settings := m.ctl.Settings()
 	choices := []core.ModelChoice{{Provider: settings.Provider, Model: settings.Model}}
@@ -52,7 +55,7 @@ func (m model) filteredModels() []core.ModelChoice {
 	}
 	var found []core.ModelChoice
 	for _, c := range choices {
-		if c.Model != "" && searchMatches(c.Model+" "+c.Provider, m.menu.query) {
+		if c.Model != "" && menuLabelMatches(c.Model, m.menu.query) {
 			found = append(found, c)
 		}
 	}

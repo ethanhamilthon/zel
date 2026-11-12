@@ -160,6 +160,7 @@ func TestComposerLayoutMatchesTextareaProbe(t *testing.T) {
 func TestNativeCursorPosition(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.viewport.Width, m.viewport.Height = 20, 3
+	m.viewport.TopMargin = 1
 	m.viewport.lines = []string{"header", "▌ ab" + composerCursorMarker + "界", "footer"}
 	view := m.View()
 	if !strings.HasSuffix(view, "\x1b]1337;ZelCaret;3;5\x07") || strings.Contains(view, composerCursorMarker) {
@@ -350,7 +351,7 @@ func TestMenuShortcutDecodesFromTerminalBytes(t *testing.T) {
 func TestMenuModelSearch(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.models = []core.ModelChoice{{Provider: "clip", Model: "claude-opus-5"}, {Provider: "clip", Model: "gpt-6-sol"}, {Provider: "other", Model: "claude-sonnet-5"}}
-	m.menu = &menuState{page: menuModel, query: "CLAUDE 5"}
+	m.menu = &menuState{page: menuModel, query: "CLAUDE"}
 	if got := m.filteredModels(); len(got) != 2 || got[1].Model != "claude-sonnet-5" {
 		t.Fatalf("filtered = %v", got)
 	}
@@ -651,6 +652,11 @@ func TestMenuSearchPreservesActionsAndComposer(t *testing.T) {
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "Models" {
 		t.Fatalf("main menu search: %v", rows)
 	}
+	m.menu.query, m.menu.search = "i", nil
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "Info" {
+		t.Fatalf("main menu search must match labels by prefix only: %v", rows)
+	}
+	m.menu.query = "model"
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuModel || m.menu.query != "" || m.input.Value() != "keep this draft" {
 		t.Fatal("filtered main action opened the wrong page or overwrote the draft")
@@ -728,8 +734,12 @@ func TestMenuHeadersSearchCaretAndShortcutBytes(t *testing.T) {
 	}
 	m := bareModel(t, "/project")
 	m.openMenu()
+	oldVersion := Version
+	Version = "0.3.3"
+	t.Cleanup(func() { Version = oldVersion })
 	view := m.menuView()
-	if !strings.Contains(ansi.Strip(view), "zel "+strings.TrimPrefix(Version, "v")+"/Menu") || !strings.Contains(view, "▌") || strings.Contains(view, "ZelCaret;0;0") || strings.Contains(view, composerCursorMarker) {
+	mainHeader := strings.TrimSpace(strings.Split(ansi.Strip(view), "\n")[m.menuTop()])
+	if !strings.HasPrefix(mainHeader, "zel 0.3.3") || !strings.HasSuffix(mainHeader, "Ctrl+K") || strings.Contains(mainHeader, "/Menu") || !strings.Contains(view, "▌") || strings.Contains(view, "ZelCaret;0;0") || strings.Contains(view, composerCursorMarker) {
 		t.Fatalf("main header or search caret missing: %q", view)
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mdel")})
@@ -765,7 +775,7 @@ func TestMenuSearchGapBelowHeader(t *testing.T) {
 		m.menu = &menuState{page: page}
 		lines := strings.Split(ansi.Strip(m.menuView()), "\n")
 		head := slices.IndexFunc(lines, func(line string) bool { return strings.TrimSpace(line) != "" })
-		if head < 0 || !strings.Contains(lines[head], "Menu") {
+		if head < 0 || (page == menuMain && !strings.HasPrefix(strings.TrimSpace(lines[head]), "zel ")) || (page != menuMain && !strings.Contains(lines[head], "Menu")) {
 			t.Fatalf("%v: header line missing: %q", page, lines)
 		}
 		if strings.TrimSpace(lines[head+1]) != "" || !strings.Contains(lines[head+2], "type to search") {
@@ -1329,6 +1339,67 @@ func TestStopAndQuitShortcuts(t *testing.T) {
 	}
 }
 
+func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.menu = &menuState{page: menuMain}
+	want := []menuRow{
+		{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
+		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
+		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "New Color or Prompt"}, {"Help", "Keyboard shortcuts"},
+		{"Quit", "Exit, Ctrl+Q"}, {"Editor", "Edit input, Ctrl+E"}, {"Providers", "Add, edit, remove"},
+		{"Settings", "Editor, output, timeouts"}, {"Files", "Browse files, Ctrl+F"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+	}
+	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("main menu rows = %#v, want %#v", got, want)
+	}
+	m.width, m.height = 80, 30
+	lines := m.pageLines("", m.menuWidth())
+	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 5 more items") {
+		t.Fatalf("main menu overflow hint = %q", lines)
+	}
+}
+
+func TestFileCreationShortcutAndHint(t *testing.T) {
+	dir := t.TempDir()
+	m := bareModel(t, dir)
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlF})
+	plain := ansi.Strip(m.menuView())
+	lines := strings.Split(plain, "\n")
+	if got := strings.TrimSpace(lines[len(lines)-1]); got != "Ctrl+A: New file or directory" {
+		t.Fatalf("Files bottom hint = %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	if m.menu.page != menuCreate {
+		t.Fatalf("Ctrl+A opened page %v, want create prompt", m.menu.page)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("notes.txt")})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatalf("new file was not created: %v", err)
+	}
+	if m.menu.page != menuFiles {
+		t.Fatalf("create returned to page %v, want Files", m.menu.page)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("docs/")})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	info, err := os.Stat(filepath.Join(dir, "docs"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("new directory missing or not a directory: %v", err)
+	}
+}
+
+func TestAutocompleteSelectionUsesArrow(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.fileCompletions = []string{"@first", "@second"}
+	m.fileSelected = 1
+	m.refresh(true)
+	plain := ansi.Strip(strings.Join(m.timelineRows(0), "\n"))
+	if !strings.Contains(plain, "  @first") || !strings.Contains(plain, " <@second") {
+		t.Fatalf("completion selection did not use aligned arrow: %q", plain)
+	}
+}
+
 func TestFilesSearchInputAndCacheRefresh(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"target", "other"} {
@@ -1367,7 +1438,7 @@ func TestListLimitHintAndTraceCache(t *testing.T) {
 		m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: "user", Text: fmt.Sprintf("entry %d", i)})
 	}
 	lines := m.pageLines("", 56)
-	if len(lines) != 11 || !strings.Contains(lines[10], "15 more items") {
+	if len(lines) != 11 || !strings.Contains(lines[10], "+ 15 more items") {
 		t.Fatalf("list not capped: %v", lines)
 	}
 	cache := m.menu.listCache
@@ -1399,10 +1470,15 @@ func TestInputBlankLines(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	m.input.SetValue("draft")
 	m.refresh(true)
+	if m.viewport.topMargin() != 0 || m.inputTop != 0 {
+		t.Fatalf("empty chat has extra composer spacing: margin=%d, input top=%d", m.viewport.topMargin(), m.inputTop)
+	}
+	m.entries = []entry{{Kind: "assistant", Text: "answer"}}
+	m.refresh(true)
 	rows := strings.Split(ansi.Strip(m.View()), "\n")
 	top := m.inputTop + m.viewport.topMargin() - m.viewport.YOffset
-	if top < 1 || strings.TrimSpace(rows[top-1]) != "" || strings.TrimSpace(rows[top+m.input.Height()]) != "" {
-		t.Fatalf("composer needs blank lines: %q", rows)
+	if top < 1 || strings.TrimSpace(rows[top-1]) == "" || strings.TrimSpace(rows[top+m.input.Height()]) != "" {
+		t.Fatalf("history has extra composer spacing: %q", rows)
 	}
 	m.openMenu()
 	view := strings.Split(ansi.Strip(m.menuView()), "\n")
@@ -1688,7 +1764,7 @@ func TestEscapeNeverCancelsActiveWork(t *testing.T) {
 	close(gate)
 }
 
-func TestComposerAlwaysHasBlankRowAboveIt(t *testing.T) {
+func TestComposerHasNoExtraBlankRowAboveIt(t *testing.T) {
 	f := newFixture(t, true)
 	gate := make(chan struct{})
 	f.hold.Store(&gate)
@@ -1699,8 +1775,8 @@ func TestComposerAlwaysHasBlankRowAboveIt(t *testing.T) {
 		f.m.refresh(true)
 		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
 		top := f.m.inputTop + f.m.viewport.topMargin() - f.m.viewport.YOffset
-		if top < 1 || strings.TrimSpace(rows[top-1]) != "" {
-			t.Fatalf("%s: composer lost blank row: top=%d rows=%q", state, top, rows)
+		if top > 0 && strings.TrimSpace(rows[top-1]) == "" {
+			t.Fatalf("%s: composer has blank row above it: top=%d rows=%q", state, top, rows)
 		}
 	}
 	check("empty")
@@ -1839,13 +1915,14 @@ func TestChatTopMarginSurvivesMessagesAndScrolling(t *testing.T) {
 	check := func(state string) {
 		t.Helper()
 		rows := strings.Split(ansi.Strip(f.m.View()), "\n")
-		if len(rows) != f.m.height || strings.TrimSpace(rows[0]) != "" {
-			t.Fatalf("%s: missing screen top margin: %q", state, rows)
+		wantMargin := len(f.m.entries) > 0
+		if len(rows) != f.m.height || (strings.TrimSpace(rows[0]) == "") != wantMargin {
+			t.Fatalf("%s: unexpected screen top spacing: %q", state, rows)
 		}
 	}
 	f.m.refresh(true)
 	check("new session")
-	if f.m.inputTop != 0 {
+	if f.m.inputTop != 0 || f.m.viewport.topMargin() != 0 {
 		t.Fatal("new session has duplicate top spacing")
 	}
 	f.m.input.SetValue("hello")
@@ -1939,10 +2016,6 @@ func TestScrollUpMovesThroughComposerBeforeChat(t *testing.T) {
 }
 
 func TestCopyLastAnswer(t *testing.T) {
-	original := clipboardWrite
-	t.Cleanup(func() { clipboardWrite = original })
-	var copied string
-	clipboardWrite = func(text string) error { copied = text; return nil }
 	const answer = "First paragraph\n\nSecond paragraph with **markdown** and a long line."
 	for _, route := range []string{"shortcut", "menu", "form"} {
 		m := bareModel(t, t.TempDir())
@@ -1953,13 +2026,12 @@ func TestCopyLastAnswer(t *testing.T) {
 			{Kind: "user", Text: "next question"},
 			{Kind: "assistant", Text: "  "},
 		}
-		m.input.SetValue("keep draft")
-		copied = ""
+		m.input.SetValue("replace this draft")
 		var updated tea.Model
 		var cmd tea.Cmd
 		if route == "menu" {
 			m.openMenu()
-			m.menu.query = "Copy answer"
+			m.menu.query = "Copy"
 			updated, cmd = m.menuActivate()
 		} else {
 			if route == "form" {
@@ -1968,26 +2040,17 @@ func TestCopyLastAnswer(t *testing.T) {
 			}
 			updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
 		}
-		if cmd == nil {
-			t.Fatalf("%s did not copy", route)
+		if cmd != nil {
+			t.Fatalf("%s unexpectedly requested clipboard access", route)
 		}
-		result, ok := cmd().(answerCopied)
-		if !ok || result.err != nil || copied != answer {
-			t.Fatalf("%s copied %q: %+v", route, copied, result)
-		}
-		if updated.(model).input.Value() != "keep draft" {
-			t.Fatal("copy changed the draft")
+		if got := updated.(model).input.Value(); got != answer {
+			t.Fatalf("%s inserted %q, want latest assistant response", route, got)
 		}
 	}
 	m := bareModel(t, t.TempDir())
-	if _, cmd := m.copyAnswer(); cmd != nil {
-		t.Fatal("empty conversation must not overwrite the clipboard")
-	}
-	clipboardWrite = func(string) error { return fmt.Errorf("clipboard unavailable") }
-	m.entries = []entry{{Kind: "assistant", Text: answer}}
-	_, cmd := m.copyAnswer()
-	if result := cmd().(answerCopied); result.err == nil {
-		t.Fatal("copy error was lost")
+	m.input.SetValue("keep draft")
+	if updated, cmd := m.copyAnswer(); cmd != nil || updated.(model).input.Value() != "keep draft" {
+		t.Fatal("empty conversation changed the composer")
 	}
 }
 
