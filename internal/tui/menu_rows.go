@@ -141,10 +141,6 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 		query = textQuery
 	}
 	for i, row := range rows {
-		text := row.label + " " + row.detail
-		if m.menu.page == menuResume && i < len(m.menu.sessions) {
-			text = m.menu.sessions[i].Title + " " + row.detail
-		}
 		if m.menu.page == menuTracing {
 			if i >= len(m.menu.trace) {
 				if len(types) > 0 || lower > 0 || upper > 0 {
@@ -156,15 +152,12 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 				if (len(types) > 0 && !traceTypeIn(e.Kind, types)) || (lower > 0 && position < lower) || (upper > 0 && position > upper) {
 					continue
 				}
-				text += " " + e.Text
 			}
 		}
 		matches := true
 		switch {
 		case !searchableMenu(m.menu.page), m.menu.page == menuModel:
 			matches = true
-		case m.menu.page == menuTracing:
-			matches = searchMatches(text, query)
 		default:
 			matches = menuLabelMatches(row.label, query)
 		}

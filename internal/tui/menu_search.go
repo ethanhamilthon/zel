@@ -17,16 +17,6 @@ func menuLabelMatches(label, query string) bool {
 	return strings.HasPrefix(strings.ToLower(label), strings.ToLower(query))
 }
 
-func searchMatches(text, query string) bool {
-	text = strings.ToLower(text)
-	for _, word := range strings.Fields(strings.ToLower(query)) {
-		if !strings.Contains(text, word) {
-			return false
-		}
-	}
-	return true
-}
-
 // menuIndices preserves action identities when the visible rows are filtered.
 func (m model) menuInput(width int) *textarea.Model {
 	mu := m.menu

@@ -808,11 +808,20 @@ func TestTracingPageListsSessionTrace(t *testing.T) {
 			t.Fatalf("%q missing in:\n%s", want, view)
 		}
 	}
-	m.menu.query = "rg bug"
+	m.menu.query = "BA"
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "bash" {
-		t.Fatalf("trace search: %v", rows)
+		t.Fatalf("trace label-prefix search: %v", rows)
+	}
+	m.menu.query = "BA :bash >3"
+	if indices := m.menuIndices(m.rawMenuRows()); !reflect.DeepEqual(indices, []int{2}) {
+		t.Fatalf("trace label search lost type/index filters: %v", indices)
+	}
+	m.menu.query = "rg bug"
+	if indices := m.menuIndices(m.rawMenuRows()); len(indices) != 0 {
+		t.Fatalf("trace search matched body text, indices %v", indices)
 	}
 	m.menu.query = ""
+
 	m.menu.selected = 1
 	next, _ := m.menuActivate()
 	m = next.(model)
@@ -822,6 +831,63 @@ func TestTracingPageListsSessionTrace(t *testing.T) {
 	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.menu == nil || m.menu.page != menuTracing {
 		t.Fatalf("Esc from an entry left %+v", m.menu)
+	}
+}
+
+func TestTraceEntryUpdateDisablesMouseOnEveryExit(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyCtrlK} {
+		t.Run(key.String(), func(t *testing.T) {
+			m := bareModel(t, "/project")
+			m.menu = &menuState{
+				page: menuText, parent: menuTracing, traceIndex: 0,
+				trace: []core.TraceEntry{{Kind: "user", Text: "hello"}},
+			}
+			next, cmd := m.Update(tea.KeyMsg{Type: key})
+			updated := next.(model)
+			if key == tea.KeyEsc {
+				if updated.menu == nil || updated.menu.page != menuTracing {
+					t.Fatalf("Escape state = %+v, want tracing list", updated.menu)
+				}
+			} else if updated.menu != nil {
+				t.Fatalf("Ctrl+K left menu open: %+v", updated.menu)
+			}
+			if cmd == nil || fmt.Sprintf("%T", cmd()) != "tea.disableMouseMsg" {
+				t.Fatalf("exit command = %T, want mouse disable", cmd)
+			}
+
+			if key == tea.KeyEsc {
+				_, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+				if cmd != nil {
+					t.Fatalf("closing tracing list returned unexpected command %T", cmd)
+				}
+			}
+		})
+	}
+}
+
+func TestMenuBodyRoomKeepsFilesFooterAndTraceLimit(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width, m.height = 80, 30
+	m.menu = &menuState{page: menuFiles}
+	wantFilesRoom := max(1, m.height-1-m.menuBodyStart())
+	if got := m.menuBodyRoom(); got != wantFilesRoom {
+		t.Fatalf("Files body room = %d, want %d with footer row reserved", got, wantFilesRoom)
+	}
+	lines := strings.Split(ansi.Strip(m.menuView()), "\n")
+	if got := strings.TrimSpace(lines[len(lines)-1]); got != "Ctrl+A: New file or directory" {
+		t.Fatalf("Files footer = %q", got)
+	}
+
+	m.menu = &menuState{
+		page: menuText, parent: menuTracing, traceIndex: 0,
+		trace: []core.TraceEntry{{Kind: "user", Text: strings.Repeat("line\n", 30)}},
+	}
+	wantTraceRoom := min(10, max(1, m.height-m.menuBodyStart()))
+	if got := m.menuBodyRoom(); got != wantTraceRoom {
+		t.Fatalf("trace body room = %d, want %d", got, wantTraceRoom)
+	}
+	if got := len(m.pageLines("", m.menuWidth())); got > 10 {
+		t.Fatalf("trace viewport has %d rows, want at most 10", got)
 	}
 }
 
@@ -1170,13 +1236,13 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 		m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: kind, Text: "needle text"})
 	}
 	for _, e := range m.menu.trace {
-		m.menu.query = ":" + e.Kind + " needle"
+		m.menu.query = ":" + e.Kind
 		rows := m.menuRows()
 		if len(rows) != 1 || rows[0].label != traceKindLabel(e.Kind) {
 			t.Fatalf("query %s: %v", m.menu.query, rows)
 		}
 	}
-	m.menu.query = ":USER\tneedle"
+	m.menu.query = ":USER"
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "user" {
 		t.Fatalf("case/whitespace: %v", rows)
 	}
@@ -1185,8 +1251,8 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 		t.Fatalf("unmatched text: %v", rows)
 	}
 	m.menu.query = "needle"
-	if len(m.menuRows()) != len(m.menu.trace) {
-		t.Fatal("ordinary search changed")
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
+		t.Fatalf("ordinary search matched entry bodies: %v", rows)
 	}
 }
 
@@ -1449,7 +1515,7 @@ func TestListLimitHintAndTraceCache(t *testing.T) {
 	if m.menu.listCache != cache || &m.menuRows()[0] != &rows[0] {
 		t.Fatal("cursor movement rebuilt trace rows")
 	}
-	m.menu.query = ":user entry 24"
+	m.menu.query = ":user >25 <25"
 	if got := m.menuRows(); len(got) != 1 || !strings.Contains(got[0].detail, "24") {
 		t.Fatalf("stale query cache: %v", got)
 	}
@@ -1571,10 +1637,10 @@ func TestTracingEntryNavigationPreservesList(t *testing.T) {
 			m.width, m.height = 90, 24
 			m.menu = &menuState{page: menuTracing, direct: direct, query: "match", selected: 1,
 				trace: []core.TraceEntry{
-					{Kind: "output", Text: "match first"},
-					{Kind: "output", Text: "not included"},
-					{Kind: "output", Text: "match middle\n" + strings.Repeat("line\n", 100)},
-					{Kind: "output", Text: "match last"},
+					{Kind: "match", Text: "first"},
+					{Kind: "excluded", Text: "not included"},
+					{Kind: "match", Text: "middle\n" + strings.Repeat("line\n", 100)},
+					{Kind: "match", Text: "last"},
 				},
 			}
 			m.menuRows() // Exercise the filtered-list cache as well.
@@ -1665,10 +1731,10 @@ func TestNewSessionShortcutBlockedDuringTurn(t *testing.T) {
 func TestTracingNavigationAcrossRefresh(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	m.entries = []entry{
-		{Kind: "output", Text: "match first", Preview: true},
-		{Kind: "output", Text: "excluded", Preview: true},
-		{Kind: "output", Text: "match middle", Preview: true},
-		{Kind: "output", Text: "match last", Preview: true},
+		{Kind: "match", Text: "first", Preview: true},
+		{Kind: "excluded", Text: "excluded", Preview: true},
+		{Kind: "match", Text: "middle", Preview: true},
+		{Kind: "match", Text: "last", Preview: true},
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
 	m.menu.query, m.menu.selected = "match", 2
@@ -1678,10 +1744,10 @@ func TestTracingNavigationAcrossRefresh(t *testing.T) {
 		text     string
 		selected int
 	}{
-		{tea.KeyLeft, "match middle", 1},
-		{tea.KeyLeft, "match first", 0},
-		{tea.KeyRight, "match middle", 1},
-		{tea.KeyRight, "match last", 2},
+		{tea.KeyLeft, "middle", 1},
+		{tea.KeyLeft, "first", 0},
+		{tea.KeyRight, "middle", 1},
+		{tea.KeyRight, "last", 2},
 	} {
 		next, _ := m.Update(menuTick{})
 		m = next.(model)
@@ -1702,9 +1768,9 @@ func TestTracingEntryNumber(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	m.width, m.height = 90, 24
 	m.entries = []entry{
-		{Kind: "output", Text: "match first", Preview: true},
-		{Kind: "output", Text: "excluded", Preview: true},
-		{Kind: "output", Text: "match last", Preview: true},
+		{Kind: "match", Text: "first", Preview: true},
+		{Kind: "excluded", Text: "excluded", Preview: true},
+		{Kind: "match", Text: "last", Preview: true},
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
 	m.menu.query, m.menu.selected = "match", 1
@@ -2290,6 +2356,34 @@ func TestTurnStepsReconcilesAnswerTotals(t *testing.T) {
 	m.entries = append(m.entries, entry{Kind: "assistant", Meta: &core.Metadata{Steps: 3}})
 	if got := m.turnSteps(); got != 5 {
 		t.Fatalf("older total reduced steps: %d", got)
+	}
+}
+
+func TestInfoRowsDisplayHomePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := filepath.Join(home, "projects", "zel")
+	config := filepath.Join(home, ".config", "zel", "config.toml")
+	external := filepath.Join(t.TempDir(), "shared.toml")
+	info := core.Info{Project: project, Configs: []string{config, external}}
+	rows := infoRows(info)
+	if info.Project != project || info.Configs[0] != config {
+		t.Fatal("display path conversion modified the filesystem paths")
+	}
+	var got []string
+	for _, row := range rows {
+		got = append(got, row.label)
+	}
+	text := strings.Join(got, "\n")
+	for _, want := range []string{"~/projects/zel", "~/.config/zel/config.toml", external} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Info rows do not contain %q:\n%s", want, text)
+		}
+	}
+	for _, absolute := range []string{project, config} {
+		if strings.Contains(text, absolute) {
+			t.Errorf("Info rows leaked home path %q", absolute)
+		}
 	}
 }
 

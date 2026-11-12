@@ -197,6 +197,7 @@ func (m *model) add(kind, text string) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	wasTraceEntry := m.traceEntryView()
 	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
 		m.syncSteer()
 	}
@@ -205,7 +206,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return next, cmd
 	}
-	if m.traceEntryView() && !n.traceEntryView() {
+	if wasTraceEntry && !n.traceEntryView() {
 		cmd = tea.Batch(cmd, tea.DisableMouse)
 	}
 

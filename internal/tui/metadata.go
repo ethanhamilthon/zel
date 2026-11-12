@@ -43,7 +43,10 @@ func formatBytes(n int) string {
 
 // infoRows are the rows of the Info page: session, model, config layers and token totals.
 func infoRows(info core.Info) []menuRow {
-	configs := info.Configs
+	configs := make([]string, len(info.Configs))
+	for i, path := range info.Configs {
+		configs[i] = core.DisplayPath(path)
+	}
 	if len(configs) == 0 {
 		configs = []string{"none (defaults)"}
 	}
@@ -55,7 +58,7 @@ func infoRows(info core.Info) []menuRow {
 		}
 		cache = fmt.Sprintf("%.0f%% cache hit", percent)
 	}
-	text := "Project:\n" + info.Name + "\n" + info.Description + "\nColor: " + info.Color + "\n\nSession:\n" + info.Session + "\n" + info.Title + "\n" + info.Project +
+	text := "Project:\n" + info.Name + "\n" + info.Description + "\nColor: " + info.Color + "\n\nSession:\n" + info.Session + "\n" + info.Title + "\n" + core.DisplayPath(info.Project) +
 		"\n\nModel:\n" + info.Provider + "\n" + info.Model + " · " + info.Effort +
 		"\n\nConfigs:\n" + strings.Join(configs, "\n") +
 		"\n\nContext:\n" + fmt.Sprintf("%s in · %s out · %s context · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), formatContext(info.Context), cache)
