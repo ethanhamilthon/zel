@@ -16,14 +16,29 @@ import (
 func traceLabel(e core.TraceEntry) string { return traceKindLabel(e.Kind) }
 
 func traceKindLabel(kind string) string {
-	if kind == "assistant" {
+	switch kind {
+	case "assistant":
 		return "agent"
+	case "code":
+		return "bash"
+	case "reasoning":
+		return "thinking"
 	}
 	return kind
 }
 
 func traceKindMatches(kind, filter string) bool {
 	return strings.EqualFold(traceKindLabel(kind), traceKindLabel(filter))
+}
+
+// traceContext returns the full searchable text for a traced entry,
+// including its kind label, detail summary, and complete body text.
+func traceContext(e core.TraceEntry) string {
+	parts := []string{traceLabel(e), e.Kind, traceDetail(e), e.Text}
+	if stripped := ansi.Strip(e.Text); stripped != e.Text {
+		parts = append(parts, stripped)
+	}
+	return strings.Join(parts, " ")
 }
 
 func traceColor(kind string) lipgloss.Color {

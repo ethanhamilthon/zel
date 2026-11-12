@@ -140,6 +140,7 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 		query = textQuery
 	}
 	for i, row := range rows {
+		text := row.label + " " + row.detail
 		if m.menu.page == menuTracing {
 			if i >= len(m.menu.trace) {
 				if len(types) > 0 || lower > 0 || upper > 0 {
@@ -151,12 +152,15 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 				if (len(types) > 0 && !traceTypeIn(e.Kind, types)) || (lower > 0 && position < lower) || (upper > 0 && position > upper) {
 					continue
 				}
+				text = traceContext(e)
 			}
 		}
 		matches := true
 		switch {
 		case !searchableMenu(m.menu.page), m.menu.page == menuModel:
 			matches = true
+		case m.menu.page == menuTracing:
+			matches = searchMatches(text, query)
 		default:
 			matches = menuLabelMatches(row.label, query)
 		}
@@ -175,7 +179,11 @@ func parseTraceFilters(query string) (types []string, lower, upper int, text str
 			continue
 		}
 		if len(term) > 1 && (term[0] == '>' || term[0] == '<') {
-			if n, err := strconv.Atoi(term[1:]); err == nil {
+			raw := term[1:]
+			if strings.HasPrefix(raw, "=") {
+				raw = raw[1:]
+			}
+			if n, err := strconv.Atoi(raw); err == nil {
 				if term[0] == '>' {
 					lower = max(lower, n)
 				} else if upper == 0 || n < upper {
