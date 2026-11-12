@@ -95,3 +95,18 @@ func (s *Store) SessionProject(id string) (string, error) {
 	err := s.QueryRow(`SELECT project FROM sessions WHERE id = ?`, id).Scan(&project)
 	return project, err
 }
+
+func (s *Store) RenameSession(id, title string) error {
+	res, err := s.Exec(`UPDATE sessions SET title = ? WHERE id = ?`, title, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

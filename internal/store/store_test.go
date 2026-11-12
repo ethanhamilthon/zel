@@ -54,4 +54,14 @@ func TestSessionRoundTripAndExistingDatabase(t *testing.T) {
 	if items, err := db.Items("s1"); err != nil || len(items) != 2 {
 		t.Fatalf("appended items=%v err=%v", items, err)
 	}
+	if err := db.RenameSession("s1", "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = db.Session("s1", "/project")
+	if err != nil || loaded.Title != "renamed" {
+		t.Fatalf("renamed session=%+v err=%v", loaded, err)
+	}
+	if err := db.RenameSession("unknown", "renamed"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for unknown session, got %v", err)
+	}
 }
