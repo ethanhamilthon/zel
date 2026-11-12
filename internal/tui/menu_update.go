@@ -334,7 +334,10 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 		}
 	case menuEffort:
 		m = m.closeMenu()
-		return m.submit(m.ctl.SelectModel(mu.provider, mu.model, core.Efforts[index]))
+		if index >= 0 && index < len(core.Efforts) {
+			return m.submit(m.ctl.SelectModel(mu.provider, mu.model, core.Efforts[index]))
+		}
+		return m, nil
 	case menuTasks:
 		if index < len(mu.tasks) {
 			mu.task = mu.tasks[len(mu.tasks)-1-index].ID
