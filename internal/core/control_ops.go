@@ -198,6 +198,23 @@ func (c *Controller) TaskOutput(id string) (string, error) {
 	return "", fail(CodeInvalid, "task not found: %s", id)
 }
 
+func (c *Controller) ActiveSubagents() (list []SubagentRun) {
+	c.view(func() {
+		list = c.a.ActiveSubagents()
+	})
+	return list
+}
+
+func (c *Controller) SetTaskSteps(id string, steps int) {
+	c.view(func() { c.a.SetTaskSteps(id, steps) })
+}
+
+func (c *Controller) TaskSteps(id string) int {
+	var n int
+	c.view(func() { n = c.a.TaskSteps(id) })
+	return n
+}
+
 func (c *Controller) StopTask(id string) error {
 	var err error
 	c.view(func() {

@@ -599,7 +599,7 @@ func TestPackageBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines += bytes.Count(main, []byte{'\n'})
-	const maxProductionLines = 10250 // Keep a strict cap while accommodating the 0.3.3 UI and path additions.
+	const maxProductionLines = 10600 // Keep a strict cap while accommodating 0.3.5 subagent indicators.
 	if lines >= maxProductionLines {
 		t.Errorf("production Go code has %d lines; keep it below %d", lines, maxProductionLines)
 	}

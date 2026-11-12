@@ -184,6 +184,7 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		}
 	}
 	screen.add(m.workingBlock())
+	screen.add(m.subagentBlock())
 	// Remove only trailing boundary whitespace, preserving all message-internal rows.
 	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
 		screen = screen[:len(screen)-1]
