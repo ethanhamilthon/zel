@@ -160,7 +160,7 @@ func (m *model) composerOffset(x, y int) (int, bool) {
 	}
 	row := rows[min(len(rows)-1, m.composerScroll(rows)+r)]
 	runes := []rune(value)
-	cx := max(0, x-2)
+	cx := max(0, x)
 	offset, cells := row.start, 0
 	for offset < row.end && cells < cx {
 		cells += ansi.StringWidth(string(runes[offset]))

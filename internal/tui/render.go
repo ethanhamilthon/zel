@@ -40,7 +40,7 @@ var painted = map[paintKey]string{}
 
 func paint(text string, width int, bg, fg lipgloss.TerminalColor) string {
 	rows := strings.Split(text, "\n")
-	style := lipgloss.NewStyle().Width(width).Background(bg).Foreground(fg)
+	style := lipgloss.NewStyle().Background(bg).Foreground(fg)
 	for i, row := range rows {
 		key := paintKey{row, width, bg, fg, lipgloss.ColorProfile()}
 		if out, ok := painted[key]; ok {
@@ -66,25 +66,22 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	text := ansi.Strip(e.Text)
 	switch e.Kind {
 	case "user":
-		return renderRail(ansi.Wrap(text, max(1, width-2), ""), width, false)
+		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, darkGray)
 	case "assistant":
 	default:
 		return ""
 	}
 	body, ok := "", false
 	if markdown {
-		body, ok = renderMarkdown(text, max(1, width-4), e.Preview)
+		body, ok = renderMarkdown(text, width, e.Preview)
 	}
 	if !ok {
-		body = ansi.Wrap(text, max(1, width-4), "")
+		body = ansi.Wrap(text, width, "")
 	}
 	if body == "" {
 		body = "(no output)"
 	}
-	lines := linkedRows(body, max(1, width-2))
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(strings.Repeat(" ", min(2, max(0, width-1)))+line, width, "…")
-	}
+	lines := linkedRows(body, width)
 	out := paint(strings.Join(lines, "\n"), width, lipgloss.NoColor{}, foreground)
 	if !showTurnStats {
 		return out
@@ -93,7 +90,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	if metadata := answerMetadata(e); metadata != "" {
 		header += " " + metadata
 	}
-	return paint(ansi.Truncate("  "+header, width, "…"), width, lipgloss.NoColor{}, assistantColor) + "\n" + out
+	return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, assistantColor) + "\n" + out
 }
 
 func answerMetadata(e entry) string {
@@ -126,7 +123,11 @@ func renderRail(text string, width int, queued bool) string {
 const composerCursorMarker = "\x1b]1337;ZelCursor\x07"
 
 func (m model) inputBlock() string {
-	return renderRail(m.input.View(), m.width, m.pendingSteer != 0)
+	lines := strings.Split(m.input.View(), "\n")
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, max(1, m.width), "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 type screenRows []string

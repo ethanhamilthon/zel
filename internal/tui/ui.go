@@ -136,7 +136,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(m.startCmd, func() tea.Msg { return prefetchModels{} }, menuPulse())
 }
 func (m *model) resizeInput() {
-	value, width, height := m.input.Value(), max(1, m.width-2), max(1, m.height-2)
+	value, width, height := m.input.Value(), max(1, m.width), max(1, m.height-2)
 	if m.inputWidth == width && m.inputHeight == height && m.inputValue == value {
 		return
 	}

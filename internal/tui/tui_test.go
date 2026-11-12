@@ -103,7 +103,7 @@ func TestMarkdownWrapWithHyphens(t *testing.T) {
 		rows := strings.Split(ansi.Strip(renderEntry(entry{Kind: "assistant", Text: text}, width, -1)), "\n")[1:]
 		var words []string
 		for _, row := range rows {
-			if w := ansi.StringWidth(strings.TrimRight(row, " ")); w > width-2 {
+			if w := ansi.StringWidth(strings.TrimRight(row, " ")); w > width {
 				t.Fatalf("width %d: row overflows (%d): %q", width, w, row)
 			}
 			words = append(words, strings.Fields(row)...)
@@ -925,8 +925,37 @@ func TestUserMessageWraps(t *testing.T) {
 			t.Fatalf("row overflows: %q", row)
 		}
 	}
-	if got := strings.Join(strings.Fields(strings.ReplaceAll(view, "▌", " ")), " "); got != strings.TrimSpace(text) {
+	if strings.Contains(view, "▌") {
+		t.Fatalf("user message must not contain rail: %q", view)
+	}
+	if got := strings.Join(strings.Fields(view), " "); got != strings.TrimSpace(text) {
 		t.Fatalf("text changed: %q", got)
+	}
+
+	raw := renderEntry(entry{Kind: "user", Text: "dark gray test"}, 40, -1)
+	wantColor := lipgloss.NewStyle().Foreground(darkGray).Render("dark gray test")
+	if raw != wantColor {
+		t.Fatalf("user message color mismatch:\ngot  %q\nwant %q", raw, wantColor)
+	}
+
+	assistantRaw := renderEntry(entry{Kind: "assistant", Text: "answer text"}, 40, -1)
+	for _, row := range strings.Split(ansi.Strip(assistantRaw), "\n") {
+		if strings.HasPrefix(row, " ") {
+			t.Fatalf("assistant row must not have leading space: %q", row)
+		}
+	}
+
+	f, release := busyModel(t)
+	defer release()
+	if wb := f.workingBlock(); strings.HasPrefix(wb, " ") || strings.Contains(wb, "▌") {
+		t.Fatalf("working block must not have leading space or rail: %q", wb)
+	}
+
+	m := bareModel(t, "/project")
+	m.input.SetValue("user input")
+	m.refresh(false)
+	if ib := m.inputBlock(); strings.Contains(ib, "▌") {
+		t.Fatalf("input block must not contain rail: %q", ib)
 	}
 }
 
@@ -2176,11 +2205,11 @@ func TestChatTopMarginSurvivesMessagesAndScrolling(t *testing.T) {
 	f.m.input.SetValue("draft")
 	f.m.refresh(true)
 	y := f.m.inputTop + f.m.viewport.topMargin() - f.m.viewport.YOffset
-	if offset, ok := f.m.composerOffset(2, y); !ok || offset != 0 {
+	if offset, ok := f.m.composerOffset(0, y); !ok || offset != 0 {
 		t.Fatalf("margin shifted composer mouse mapping: %d %v", offset, ok)
 	}
 	f.m.viewport.YOffset = f.m.inputTop + 1
-	if _, ok := f.m.composerOffset(2, 0); ok {
+	if _, ok := f.m.composerOffset(0, 0); ok {
 		t.Fatal("blank screen margin accepts composer clicks")
 	}
 	f.m.height = 1
