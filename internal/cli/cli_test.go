@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"zel/internal/core"
+	"zel/internal/store"
 )
 
 func TestIsHelper(t *testing.T) {
@@ -196,5 +197,90 @@ func TestInitCommand(t *testing.T) {
 	}
 	if err := Run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {
 		t.Fatal("expected usage error")
+	}
+}
+
+func TestSessionRenameCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	db, err := store.Open(filepath.Join(home, "zel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveSession(store.Session{ID: "s1", Project: cwd, First: "first prompt"}, nil, nil, 0); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	var out, diagnostics strings.Builder
+
+	// Missing args cases
+	for _, args := range [][]string{
+		{"session", "rename"},
+		{"session", "rename", "s1"},
+		{"session", "rename", "s1", ""},
+		{"session", "rename", "s1", "   "},
+		{"session", "rename", "", "new title"},
+	} {
+		if err := Run(context.Background(), args, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {
+			t.Fatalf("expected error for missing args %v", args)
+		}
+	}
+
+	// Unknown session ID
+	if err := Run(context.Background(), []string{"session", "rename", "unknown-session", "new title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error for unknown session, got %v", err)
+	}
+
+	// Successful rename
+	if err := Run(context.Background(), []string{"session", "rename", "s1", "my custom title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatalf("rename failed: %v", err)
+	}
+
+	db, err = store.Open(filepath.Join(home, "zel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	loaded, err := db.Session("s1", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Title != "my custom title" {
+		t.Fatalf("expected title %q, got %q", "my custom title", loaded.Title)
+	}
+
+	summaries, err := db.Sessions(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) == 0 || summaries[0].Title != "my custom title" {
+		t.Fatalf("expected summary title %q, got %+v", "my custom title", summaries)
+	}
+
+	// Rename with multiple unquoted arguments
+	if err := Run(context.Background(), []string{"session", "rename", "s1", "another", "new", "title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatalf("multi-arg rename failed: %v", err)
+	}
+	loaded, err = db.Session("s1", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Title != "another new title" {
+		t.Fatalf("expected title %q, got %q", "another new title", loaded.Title)
+	}
+
+	// Help text includes session rename
+	var helpOut strings.Builder
+	if err := Run(context.Background(), []string{"help"}, strings.NewReader(""), &helpOut, &diagnostics, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(helpOut.String(), "session rename") {
+		t.Fatalf("help text missing session rename: %s", helpOut.String())
 	}
 }

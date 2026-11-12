@@ -144,7 +144,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 		case "events":
 			return eventsCommand(args[1:], out)
 		case "session":
-			return readSessionCommand(args[1:], out)
+			return sessionSubcommand(args[1:], out)
 		case "models":
 			return modelsCommand(ctx, args[1:], out, diagnostics)
 		}
@@ -347,6 +347,29 @@ func modelList(choices []core.ModelChoice) []map[string]string {
 		list = append(list, map[string]string{"provider": c.Provider, "model": c.Model})
 	}
 	return list
+}
+
+func sessionSubcommand(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "rename" {
+		return renameSessionCommand(args[1:])
+	}
+	return readSessionCommand(args, out)
+}
+
+func renameSessionCommand(args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: zel session rename <id> <name>")
+	}
+	id := strings.TrimSpace(args[0])
+	name := strings.TrimSpace(strings.Join(args[1:], " "))
+	if id == "" || name == "" {
+		return errors.New("usage: zel session rename <id> <name>")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	return core.RenameSession(cwd, id, name)
 }
 
 func readSessionCommand(args []string, out io.Writer) error {
