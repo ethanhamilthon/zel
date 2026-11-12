@@ -385,6 +385,49 @@ func TestMenuModelSearch(t *testing.T) {
 	}
 }
 
+func TestFuzzySearchAcceptance(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.models = []core.ModelChoice{
+		{Provider: "openai", Model: "gpt-5.1"},
+		{Provider: "anthropic", Model: "claude-3-7-sonnet"},
+	}
+
+	// 1. Model menu: fuzzy query 'gpt5' matches 'gpt-5.1'
+	m.menu = &menuState{page: menuModel, query: "gpt5"}
+	if got := m.filteredModels(); len(got) != 1 || got[0].Model != "gpt-5.1" {
+		t.Fatalf("expected gpt-5.1 to match 'gpt5', got %v", got)
+	}
+
+	// 2. Main menu: still strict (prefix only)
+	m.menu = &menuState{page: menuMain, query: "es"}
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
+		t.Fatalf("main menu must not match 'es' non-strictly: %v", rows)
+	}
+	m.menu.query = "res"
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "Resume" {
+		t.Fatalf("main menu must match 'res' prefix: %v", rows)
+	}
+
+	// 3. Files menu: fuzzy matching
+	m.menu = &menuState{
+		page:  menuFiles,
+		files: []fileItem{{"..", true}, {"gpt-5.1.txt", false}, {"menu_search.go", false}},
+		query: "gpt5",
+	}
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "gpt-5.1.txt" {
+		t.Fatalf("files menu must match 'gpt5' fuzzily, got %v", rows)
+	}
+	m.menu.query, m.menu.listCache = "msgo", nil
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "menu_search.go" {
+		t.Fatalf("files menu must match 'msgo' fuzzily, got %v", rows)
+	}
+
+	// 4. File autocomplete completion: fuzzy
+	if got := filterFileCompletions([]string{"nested/main.go", "gpt-5.1.go", "main.go"}, "gpt5"); !reflect.DeepEqual(got, []string{"gpt-5.1.go"}) {
+		t.Fatalf("file completions must match 'gpt5' fuzzily, got %v", got)
+	}
+}
+
 func TestChatShowsOnlyMessages(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width = 80

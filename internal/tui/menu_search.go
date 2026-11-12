@@ -17,18 +17,45 @@ func menuLabelMatches(label, query string) bool {
 	return strings.HasPrefix(strings.ToLower(label), strings.ToLower(query))
 }
 
-func searchMatches(text, query string) bool {
-	text = strings.ToLower(text)
+func matchWords(query string, match func(word string) bool) bool {
 	for _, word := range strings.Fields(strings.ToLower(query)) {
-		word = strings.Trim(word, "`\"'")
-		if word == "" {
-			continue
-		}
-		if !strings.Contains(text, word) {
+		if word = strings.Trim(word, "`\"'"); word != "" && !match(word) {
 			return false
 		}
 	}
 	return true
+}
+
+func searchMatches(text, query string) bool {
+	text = strings.ToLower(text)
+	return matchWords(query, func(w string) bool { return strings.Contains(text, w) })
+}
+
+// fuzzyMatch reports whether pattern is a subsequence of text (case-insensitive runes).
+func fuzzyMatch(text, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	pr, pi := []rune(pattern), 0
+	for _, r := range text {
+		if r == pr[pi] {
+			if pi++; pi == len(pr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fuzzyMatches reports whether every word in query appears as a fuzzy subsequence in text.
+func fuzzyMatches(text, query string) bool {
+	text = strings.ToLower(text)
+	return matchWords(query, func(w string) bool { return fuzzyMatch(text, w) })
+}
+
+func modelChoiceMatches(c core.ModelChoice, query string) bool {
+	mLower, pLower := strings.ToLower(c.Model), strings.ToLower(c.Provider)
+	return matchWords(query, func(w string) bool { return fuzzyMatch(mLower, w) || fuzzyMatch(pLower, w) })
 }
 
 // menuIndices preserves action identities when the visible rows are filtered.
@@ -48,7 +75,7 @@ func (m model) menuInput(width int) *textarea.Model {
 	return mu.search
 }
 
-// filteredModels returns models whose visible names have the search text as a prefix.
+// filteredModels returns models whose visible names or providers match the search query fuzzily.
 func (m model) filteredModels() []core.ModelChoice {
 	settings := m.ctl.Settings()
 	choices := []core.ModelChoice{{Provider: settings.Provider, Model: settings.Model}}
@@ -59,7 +86,7 @@ func (m model) filteredModels() []core.ModelChoice {
 	}
 	var found []core.ModelChoice
 	for _, c := range choices {
-		if c.Model != "" && menuLabelMatches(c.Model, m.menu.query) {
+		if c.Model != "" && modelChoiceMatches(c, m.menu.query) {
 			found = append(found, c)
 		}
 	}

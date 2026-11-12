@@ -186,7 +186,7 @@ func fileCompletionRoot(cwd, query string) (string, error) {
 func filterFileCompletions(indexed []string, query string) []string {
 	prefix, query := fileQueryParts(query)
 	qLower := strings.ToLower(query)
-	var cat0, cat1 []string
+	var cat0, cat1, cat2 []string
 	for _, p := range indexed {
 		if strings.Contains(strings.TrimSuffix(p, "/"), "/") {
 			continue
@@ -196,11 +196,14 @@ func filterFileCompletions(indexed []string, query string) []string {
 			cat0 = append(cat0, prefix+p)
 		} else if strings.Contains(pLower, qLower) {
 			cat1 = append(cat1, prefix+p)
+		} else if fuzzyMatches(pLower, qLower) {
+			cat2 = append(cat2, prefix+p)
 		}
 	}
 	slices.Sort(cat0)
 	slices.Sort(cat1)
-	res := append(cat0, cat1...)
+	slices.Sort(cat2)
+	res := append(append(cat0, cat1...), cat2...)
 	return res[:min(fileMaxCandidates, len(res))]
 }
 

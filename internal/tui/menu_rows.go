@@ -161,8 +161,12 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 			matches = true
 		case m.menu.page == menuTracing:
 			matches = searchMatches(text, query)
-		default:
+		case m.menu.page == menuMain:
 			matches = menuLabelMatches(row.label, query)
+		case m.menu.page == menuProviders:
+			matches = fuzzyMatches(text, query)
+		default:
+			matches = fuzzyMatches(row.label, query)
 		}
 		if matches {
 			indices = append(indices, i)
