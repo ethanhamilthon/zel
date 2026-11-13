@@ -106,13 +106,15 @@ func newComposer() textarea.Model {
 	input.SetHeight(1)
 	input.Focus()
 	input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
-	base := lipgloss.NewStyle().Foreground(foreground)
-	style := textarea.Style{Base: base, CursorLine: base, Text: base, Placeholder: base.Foreground(muted), EndOfBuffer: base}
+	// Text matches sent user messages; the line being edited is highlighted.
+	base := lipgloss.NewStyle().Foreground(darkGray)
+	current := lipgloss.NewStyle().Foreground(composerCurrent)
+	style := textarea.Style{Base: base, CursorLine: current, Text: base, Placeholder: base.Foreground(muted), EndOfBuffer: base}
 	input.FocusedStyle, input.BlurredStyle = style, style
 	input.Cursor.SetMode(cursor.CursorStatic)
 	// A zero-width marker locates the native terminal cursor after rendering.
 	input.Cursor.Style = lipgloss.NewStyle().Transform(func(s string) string {
-		return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(foreground).Render(s)
+		return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(composerCurrent).Render(s)
 	})
 	return input
 }

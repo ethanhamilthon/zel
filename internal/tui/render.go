@@ -17,6 +17,7 @@ var (
 	muted            = lipgloss.Color("#929292")
 	codeGray         = lipgloss.Color("#a0a0a0")
 	darkGray         = lipgloss.Color("#606060")
+	composerCurrent  = lipgloss.Color("#ffffff")
 	inputBlue        = lipgloss.Color("#d97757")
 	inputBackground  = lipgloss.Color("#202020")
 	selectBackground = lipgloss.Color("#303030")
