@@ -3,7 +3,6 @@ package tui
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -174,10 +173,9 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 func (m *model) refresh(follow bool) {
-	if theme := m.ctl.Settings().UI.Theme; fmt.Sprint(theme) != m.themeKey {
-		m.themeKey, m.cache = fmt.Sprint(theme), nil
-		applyTheme(theme)
-		m.term.setBackground(theme["background"])
+	if accent := m.ctl.Settings().UI.Accent; "accent:"+accent != m.themeKey {
+		m.themeKey, m.cache = "accent:"+accent, nil
+		applyTheme(accent)
 	}
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)

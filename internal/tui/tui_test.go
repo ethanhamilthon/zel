@@ -1313,7 +1313,7 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 }
 
 func TestSingleAccent(t *testing.T) {
-	applyTheme(map[string]string{"accent": "#80b3ad"})
+	applyTheme("#80b3ad")
 	for _, color := range []string{string(inputBlue), string(cyan), string(assistantColor), string(infoColor), string(warnColor)} {
 		if color != "#80b3ad" {
 			t.Fatalf("independent accent: %s", color)
@@ -1322,7 +1322,25 @@ func TestSingleAccent(t *testing.T) {
 	if string(errorColor) == string(inputBlue) || string(queueColor) == string(inputBlue) {
 		t.Fatal("error red or neutral queued pulse lost")
 	}
-	applyTheme(nil)
+	applyTheme("")
+}
+
+func TestAccentChoiceFromSettings(t *testing.T) {
+	defer applyTheme("")
+	m := bareModel(t, t.TempDir())
+	m.menu = &menuState{page: menuSettings, selected: 5}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuAccent || len(m.menuRows()) < 15 || m.menuRows()[0].detail != "current" {
+		t.Fatalf("accent page not opened: %v %v", m.menu.page, m.menuRows())
+	}
+	m.menu.selected = accentIndex("#80b3ad")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.ctl.Settings().UI.Accent != "#80b3ad" || string(inputBlue) != "#80b3ad" || m.menu.page != menuSettings {
+		t.Fatalf("accent not applied: %q %q %v", m.ctl.Settings().UI.Accent, inputBlue, m.menu.page)
+	}
+	if rows := m.menuRows(); rows[5].detail != "Teal" {
+		t.Fatalf("settings row = %v", rows[5])
+	}
 }
 
 func TestStopAndQuitShortcuts(t *testing.T) {
@@ -1382,7 +1400,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Output, timeouts, compaction"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+		{"Settings", "Output, timeouts, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)

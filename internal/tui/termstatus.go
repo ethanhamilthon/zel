@@ -3,10 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
-
-	"github.com/muesli/termenv"
 )
 
 // termOut receives terminal status sequences; Run sets it to stdout, tests leave it nil.
@@ -20,35 +17,7 @@ type termState struct {
 	state, title string // state: idle, working, done or error
 	frame        int
 	lastTitle    string
-	background   string // optional OSC 11 terminal background
 	used         bool
-}
-
-// setBackground paints the terminal's default background through OSC 11, so every
-// cell without its own color follows this background; empty restores the default.
-func (t *termState) setBackground(color string) {
-	color = oscColor(color)
-	if color == t.background {
-		return
-	}
-	if color == "" {
-		t.write("\x1b]111\x07")
-	} else {
-		t.write("\x1b]11;" + color + "\x07")
-	}
-	t.background = color
-}
-
-// oscColor turns a lipgloss color ("#rrggbb" or an ANSI 0-255 index) into an OSC color.
-func oscColor(value string) string {
-	value = strings.TrimSpace(value)
-	if n, err := strconv.Atoi(value); err == nil && n >= 0 && n < 256 {
-		return termenv.ConvertToRGB(termenv.ANSI256Color(n)).Hex()
-	}
-	if strings.HasPrefix(value, "#") && strings.Trim(value[1:], "0123456789abcdefABCDEF") == "" && (len(value) == 4 || len(value) == 7) {
-		return value
-	}
-	return ""
 }
 
 func (t *termState) start(title string) {
@@ -105,7 +74,6 @@ func (t *termState) reset() {
 	if t.used {
 		t.write("\x1b]9;4;0\x07\x1b]2;\x07")
 	}
-	t.setBackground("")
 }
 
 func (t *termState) setTitle() {

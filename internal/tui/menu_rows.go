@@ -39,7 +39,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}}
+		rows = []menuRow{{"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentColors[accentIndex(s.UI.Accent)].name}}
 	case menuResume:
 		for _, s := range mu.sessions {
 			rows = append(rows, menuRow{sessionTitle(s), sessionTime(s.Updated)})
@@ -66,6 +66,15 @@ func (m model) buildMenuRows() []menuRow {
 			rows = []menuRow{{"Loading models...", ""}}
 		default:
 			rows = []menuRow{{"No models", ""}}
+		}
+	case menuAccent:
+		current := accentIndex(m.ctl.Settings().UI.Accent)
+		for i, c := range accentColors {
+			row := menuRow{label: c.name}
+			if i == current {
+				row.detail = "current"
+			}
+			rows = append(rows, row)
 		}
 	case menuEffort:
 		settings := m.ctl.Settings()

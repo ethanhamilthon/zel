@@ -40,7 +40,7 @@ Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
 Settings controls the Bash output budget, Bash timeout, auto compaction,
-and reasoning summaries. Providers, keys, defaults, preferences, sessions, and
+reasoning summaries, and the accent color (20 presets). Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
 environment variable with `{{$VARIABLE}}`.
@@ -122,8 +122,8 @@ and your terminal's link-opening gesture for links.
 
 Ctrl+M and Ctrl+I require Kitty keyboard protocol support to distinguish them
 from Enter and Tab; otherwise use Menu. New session and Resume are blocked
-during active turns. A queued message stays editable in the composer; editing
-withdraws it, and Enter queues it again.
+during active turns. A queued message stays editable in the composer and the working
+indicator shows it as queued; editing withdraws it, and Enter queues it again.
 
 ## Automation and security
 

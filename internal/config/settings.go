@@ -33,7 +33,7 @@ type Provider struct {
 // UI holds application display preferences.
 type UI struct {
 	SlashMenu bool
-	Theme     map[string]string `json:"-"`
+	Accent    string // accent color; empty selects the default
 }
 
 // SystemBlock is a Markdown body from one project instruction layer.
@@ -54,7 +54,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", ReasoningSummary: true, ShellOutput: ShellOutput, ShellTimeout: ShellTimeout, CompactionThreshold: CompactionThreshold,
-		UI: UI{SlashMenu: true, Theme: map[string]string{}}, Providers: map[string]Provider{}}
+		UI: UI{SlashMenu: true}, Providers: map[string]Provider{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {

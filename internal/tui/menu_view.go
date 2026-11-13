@@ -187,6 +187,9 @@ func (m model) pageLines(pad string, w int) []string {
 			color := traceColor(m.menu.trace[indices[i]].Kind)
 			labelStyle, detailStyle = lipgloss.NewStyle().Foreground(color), lipgloss.NewStyle().Foreground(color)
 		}
+		if m.menu.page == menuAccent && i < len(accentColors) {
+			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(accentColors[i].hex))
+		}
 		rendered := labelStyle.Render(label)
 		if m.menu.page == menuTasks && i < len(rows) {
 			if id, command, ok := strings.Cut(label, " "); ok {

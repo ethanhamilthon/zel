@@ -35,12 +35,13 @@ const (
 	menuForm
 	menuSettings
 	menuConfirm
+	menuAccent
 )
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
 	menuTasks: "Menu/Tasks", menuTracing: "Menu/Tracing",
-	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
+	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuAccent: "Menu/Settings/Accent", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
 }
 
 type menuRow struct{ label, detail string }
@@ -50,7 +51,7 @@ var mainRows = []menuRow{
 	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts, compaction"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts, accent"},
 	{"Copy", "Agent answer to input, Ctrl+Y"},
 }
 
