@@ -209,3 +209,45 @@ func TestReloadKeepsOldSnapshotOnBrokenInitLua(t *testing.T) {
 		t.Fatalf("reload did not apply: %s", req)
 	}
 }
+
+func TestDocumentedExamplesLoad(t *testing.T) {
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", "docs", "examples", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	bin := t.TempDir()
+	writeFile(t, filepath.Join(bin, "ddgs"), "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\necho '[{\"title\":\"T\",\"href\":\"http://x\",\"body\":\"B\"}]' > \"$out\"\n")
+	if err := os.Chmod(filepath.Join(bin, "ddgs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if n == 1 {
+			return luaReply("c1", `for _, h in ipairs(web.search("q", 1)) do print(h.url, h.title) end`)
+		}
+		return textReply("done")
+	}}
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		writeFile(t, filepath.Join(home, "init.lua"), read("global-init.lua")+"\n"+read("web-plugin.lua"))
+		writeFile(t, filepath.Join(dir, "AGENTS.md"), "AGENTS-TEXT")
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), read("project-init.lua"))
+	})
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	req := fp.requests()[0]
+	for _, want := range []string{"web.search(q: string", "web.fetch(url: string", "zel.check(pkg?: string", "AGENTS-TEXT", "## project", "## global"} {
+		if !strings.Contains(req, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	if out := fp.requests()[1]; !strings.Contains(out, "http://x") {
+		t.Fatalf("web.search plugin did not run: %s", out)
+	}
+	if a.lua.get().LoadErrs != nil {
+		t.Fatalf("load errors: %v", a.lua.get().LoadErrs)
+	}
+}

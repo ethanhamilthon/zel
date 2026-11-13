@@ -1,7 +1,12 @@
 # Zel — Minimalist AI Coding Agent
 
-A focused terminal coding agent with one tool: Bash. You control the system
-prompt through project Markdown, providers and preferences through the UI.
+A focused terminal coding agent with one tool: Lua. The model writes Lua; shell
+commands, files, HTTP, background tasks and subagents are plain functions in it.
+You extend the agent in Lua too, with `~/.zel/init.lua` and `./.zel/init.lua`;
+providers and preferences live in the UI.
+
+> **0.5.0 is a breaking release.** The Bash tool and `ZEL.md` are gone. Move
+> your instructions into `.zel/init.lua` (see below). There is no migration.
 
 ## Install
 
@@ -39,39 +44,74 @@ Effort defaults to `medium`.
 Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
-Settings controls the Bash output budget, Bash timeout, auto compaction,
+Settings controls the Lua output budget, Lua call timeout, auto compaction,
 reasoning summaries, and the accent color (20 presets). Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
 environment variable with `{{$VARIABLE}}`.
 
-## Project instructions: ZEL.md
+## The lua tool
 
-Run `zel init` in a project folder to create `ZEL.md` from the exact contents of
-a local `AGENTS.md` when present (otherwise empty). An existing `ZEL.md` is never
-overwritten. This command does not require a provider or create a session.
+The model has exactly one tool, `lua`. Its input is raw Lua code; an optional
+first line `--! timeout=N` sets the call timeout in seconds (default 120, max 600).
+Providers with free-form tools (OpenAI Responses) get the code as raw text, the
+others a JSON `{"code": "..."}`; both are normalized to the same call.
 
-`ZEL.md` is plain Markdown: the whole file is the system prompt. Layers load in
-order and accumulate:
+Every call gets a fresh Lua state: globals do not survive, only `state.get/set/list`
+does (scope `session` or `project`, stored in `zel.db`). Output is whatever the
+code `print()`s plus the returned value. Everything blocks, except
+`tasks.spawn` and `agents.spawn`, which return handles for work that continues in
+the background; unclaimed results arrive later as `<task-result>` or
+`<agent-result>` messages. Messages you type during a call are queued until the
+call ends; Ctrl+D (stop the turn) cancels the running call; background work keeps running.
 
-1. `$ZEL_HOME/ZEL.md` (default `~/.zel/ZEL.md`)
-2. Every `ZEL.md` from the filesystem root down to the working directory
-3. `--config FILE`, when supplied (must exist)
+Host API: `sh`, `fs.*`, `web.request/get/post`, `json`, `tasks.*`, `agents.*`,
+`wait_all`, `state.*`, `view`, `session`, `log`, `sleep`. The model sees the
+current API in the system prompt. Full reference: [docs/lua-api.md](docs/lua-api.md).
 
-A fenced `` ```bash `` block is run when the prompt is built, in the working
-directory with a 30 second limit, and its output replaces the block. For example,
-`` ```bash `` / `git status --short` / `` ``` `` puts the current status into the
-prompt. These commands run without confirmation, so only use `ZEL.md` files you
-trust.
+There is no sandbox, permission prompt or trust dialog: Lua runs with your user
+permissions and network access, so only use `init.lua` files you trust.
 
-A session saves its prompt snapshot. Reload rebuilds it; while a turn is active,
-the prompt change is deferred until that turn finishes. New sessions reread layers.
+## Configuration: init.lua
+
+Run `zel init` in a project folder to create `./.zel/init.lua` (it loads a local
+`AGENTS.md` as instructions when present). An existing file is never overwritten.
+This command does not require a provider or create a session.
+
+Layers load in order:
+
+1. `$ZEL_HOME/init.lua` (default `~/.zel/init.lua`)
+2. the nearest `.zel/init.lua` from the working directory upward
+3. `--config FILE` (a `.lua` file), when supplied (must exist)
+
+```lua
+local zel = require("zel")
+zel.instructions{file = "AGENTS.md"}                      -- static prompt text
+zel.prompt(function() return "git: " .. sh("git status --short").out end)
+zel.defaults{model = "sonnet-5.5", effort = "medium"}     -- CLI flags still win
+zel.fn{                                                   -- a function for the agent
+  name = "zel.check", summary = "gofmt + vet + tests, returns only failures",
+  params = {{"pkg", "string?", "go package pattern", default = "./..."}},
+  run = function(pkg) return sh("go vet " .. pkg).out end,
+}
+zel.on("turn_end", function(ev) end)  -- also session_start, message, before_call, after_call, bg_done
+```
+
+Registered functions are rendered into the system prompt (signature, summary,
+examples), so the model finds them without extra setup. `package.path` includes
+`~/.zel/lua/?.lua` and `.zel/lua/?.lua`. A layer that fails to load is skipped
+with a notice. Web search and fetch are not in the core (only raw `web.request`);
+a ready plugin is in [docs/examples](docs/examples/).
+
+A session reads init.lua once, at start or resume, and keeps that snapshot (and
+its saved prompt). Menu → Reload rebuilds both; while a turn is active the reload is
+deferred until it ends, and a broken file keeps the previous snapshot.
 
 ### Output limits
 
-Bash output uses a byte budget with head/tail truncation. With
+Lua call output uses a byte budget with head/tail truncation. With
 4096 bytes configured, Zel retains the first 2048 bytes, a truncation marker,
-and the last 2048 bytes. The marker is additional to the retained-byte budget.
+and the last 2048 bytes (`sh().out` inside Lua is not truncated by it). The marker is additional to the retained-byte budget.
 Output within the limit is unchanged. Zero means unlimited; the default is
 8192 bytes.
 
@@ -93,7 +133,7 @@ thoughts, errors, and other events belong in Tracing; there are no
 visibility toggles. Info, Tracing, and Tasks refresh while open.
 
 Tracing search accepts a leading exact type, optionally followed by search text:
-`:user`, `:assistant fix tests`, `:bash go test`, `:error`. Every displayed
+`:user`, `:assistant fix tests`, `:lua go test`, `:error`. Every displayed
 entry type is supported; ordinary search works without a prefix.
 
 Typing `@` in the composer completes file paths, one directory at a time.
@@ -136,7 +176,7 @@ indicator shows it as queued; editing withdraws it, and Enter queues it again.
 Run one task without the TUI:
 
 ```sh
-zel -p "Review this project" --provider NAME --model MODEL --effort high --config ./ZEL.md
+zel -p "Review this project" --provider NAME --model MODEL --effort high --config ./extra.lua
 zel session -s SESSION_ID
 ```
 
@@ -171,7 +211,7 @@ Settings and model changes are rejected during an active turn. Reload is deferre
 until the turn ends. New/resume asks before stopping running background tasks;
 provider deletion asks before deleting the provider and its saved API key.
 
-Zel executes commands with your user permissions and network access, not inside
+Zel executes Lua and shell commands with your user permissions and network access, not inside
 a sandbox.
 
 ## Contributing
