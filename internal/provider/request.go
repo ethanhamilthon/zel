@@ -12,14 +12,26 @@ type Request struct {
 type Tool struct {
 	Name, Description string
 	Parameters        map[string]any
+	// Freeform names the single string argument of a tool whose input is raw
+	// text. Where the API supports free-form (custom) tools the text travels
+	// unescaped; elsewhere it is the JSON function argument of that name.
+	Freeform string
 }
 
-func (r Request) payload() map[string]any {
+func (r Request) payload(custom bool) map[string]any {
 	tools := make([]any, 0, len(r.Tools))
+	input := r.Input
+	if custom {
+		input = customInput(r.Input, r.Tools)
+	}
 	for _, t := range r.Tools {
+		if custom && t.Freeform != "" {
+			tools = append(tools, map[string]any{"type": "custom", "name": t.Name, "description": t.Description, "format": map[string]any{"type": "text"}})
+			continue
+		}
 		tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": true})
 	}
-	body := map[string]any{"model": r.Model, "instructions": r.Instructions, "input": r.Input, "store": false, "tools": tools}
+	body := map[string]any{"model": r.Model, "instructions": r.Instructions, "input": input, "store": false, "tools": tools}
 	reasoning := map[string]any{}
 	if r.Effort != "" {
 		reasoning["effort"] = r.Effort

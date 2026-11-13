@@ -133,6 +133,7 @@ type StreamEvent struct {
 	OutputIndex int64                           `json:"output_index"`
 	Delta       string                          `json:"delta"`
 	Arguments   string                          `json:"arguments"`
+	Input       string                          `json:"input"`
 	Item        json.RawMessage                 `json:"item"`
 	Code        string                          `json:"code"`
 	Message     string                          `json:"message"`
@@ -232,10 +233,26 @@ const (
 // Stream normalizes API failures and retries only before exposing response events.
 func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEvent) error) (err error) {
 	defer func() { err = c.safeError(err) }()
-	body := request.payload()
+	custom := c.FreeformTools()
+	freeform := freeformFields(request.Tools)
+	body := request.payload(custom)
 	for attempt := 0; ; attempt++ {
 		delivered, completed := false, false
+		inputs := map[int64]string{}
 		err := c.streamOnce(ctx, body, func(event StreamEvent) error {
+			if custom {
+				var emit []StreamEvent
+				emit, event = normalizeCustom(event, freeform, inputs)
+				for _, e := range emit {
+					delivered = true
+					if err := fn(e); err != nil {
+						return err
+					}
+				}
+				if event.Type == "" {
+					return nil
+				}
+			}
 			switch event.Type {
 			case "response.failed", "response.incomplete", "error":
 				return StreamFailure(event)
