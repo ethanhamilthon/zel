@@ -531,15 +531,7 @@ func (m model) View() string {
 	if m.menu != nil {
 		return m.menuView()
 	}
-	lines := strings.Split(m.viewport.View(), "\n")
-	row, column := 0, 0
-	for i, line := range lines {
-		if at := strings.Index(line, composerCursorMarker); at >= 0 {
-			row, column = i+1, lipgloss.Width(line[:at])+1
-		}
-		lines[i] = strings.ReplaceAll(line, composerCursorMarker, "")
-	}
-	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
+	return frame(strings.Split(m.viewport.View(), "\n"))
 }
 
 func (m model) sendInput(input core.Input) (tea.Model, tea.Cmd) {

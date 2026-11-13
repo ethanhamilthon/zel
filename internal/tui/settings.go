@@ -232,12 +232,5 @@ func (m model) formView() string {
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}
-	row, col := 0, 0
-	for i := range lines {
-		if at := strings.Index(lines[i], composerCursorMarker); at >= 0 {
-			row, col = i+1, ansi.StringWidth(lines[i][:at])+1
-		}
-		lines[i] = strings.ReplaceAll(lines[i], composerCursorMarker, "")
-	}
-	return strings.Join(lines[:m.height], "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, col)
+	return frame(lines[:m.height])
 }

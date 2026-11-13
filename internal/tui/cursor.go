@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 var caretPosition = regexp.MustCompile(`\x1b\]1337;ZelCaret;([0-9]+);([0-9]+)\x07`)
@@ -69,4 +71,82 @@ func (o *cursorOutput) Write(p []byte) (int, error) {
 		return 0, io.ErrShortWrite
 	}
 	return len(p), nil
+}
+
+// frame joins screen rows, locating the composer caret and dropping trailing
+// blank cells. Padding spaces would otherwise end up in terminal selections and
+// paste as extra lines; Bubble Tea clears the rest of each shorter row itself.
+func frame(lines []string) string {
+	row, column := 0, 0
+	for i, line := range lines {
+		if at := strings.Index(line, composerCursorMarker); at >= 0 {
+			row, column = i+1, ansi.StringWidth(line[:at])+1
+		}
+		lines[i] = trimTrailingSpaces(strings.ReplaceAll(line, composerCursorMarker, ""))
+	}
+	return strings.Join(lines, "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
+}
+
+var escapeSequence = regexp.MustCompile(`\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[\]]`)
+
+// trimTrailingSpaces removes unstyled spaces at the end of a row while keeping
+// its escape sequences. Spaces drawn with reverse video or a background stay.
+func trimTrailingSpaces(line string) string {
+	if !strings.Contains(line, " ") {
+		return line
+	}
+	escapes := escapeSequence.FindAllStringIndex(line, -1)
+	var out strings.Builder
+	var tail strings.Builder // escapes seen since the last visible text
+	pending, styled := 0, false
+	flush := func() {
+		out.WriteString(strings.Repeat(" ", pending))
+		pending = 0
+	}
+	text := func(s string) {
+		for _, r := range s {
+			if r == ' ' && !styled {
+				pending++
+				continue
+			}
+			flush()
+			out.WriteString(tail.String())
+			tail.Reset()
+			out.WriteRune(r)
+		}
+	}
+	at := 0
+	for _, e := range escapes {
+		text(line[at:e[0]])
+		seq := line[e[0]:e[1]]
+		if strings.HasSuffix(seq, "m") && strings.HasPrefix(seq, "\x1b[") {
+			params := strings.Split(seq[2:len(seq)-1], ";")
+			for i := 0; i < len(params); i++ {
+				switch params[i] {
+				case "", "0", "27", "49":
+					styled = false
+				case "7":
+					styled = true
+				case "48":
+					styled = true
+					fallthrough
+				case "38", "58":
+					if i+1 < len(params) && params[i+1] == "5" {
+						i += 2
+					} else if i+1 < len(params) && params[i+1] == "2" {
+						i += 4
+					}
+				}
+			}
+		}
+		if pending > 0 || tail.Len() > 0 {
+			tail.WriteString(seq)
+		} else {
+			out.WriteString(seq)
+		}
+		at = e[1]
+	}
+	text(line[at:])
+	out.WriteString(tail.String())
+	return out.String()
 }

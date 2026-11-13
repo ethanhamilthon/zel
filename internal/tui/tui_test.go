@@ -2461,3 +2461,21 @@ func TestSubagentIndicatorInScreen(t *testing.T) {
 		t.Fatalf("expected rendered screen to contain subagent indicator, got:\n%s", view)
 	}
 }
+
+func TestFrameDropsTrailingPadding(t *testing.T) {
+	cases := map[string]string{
+		"\x1b[38;2;214;214;214mХей     \x1b[0m   ": "\x1b[38;2;214;214;214mХей\x1b[0m",
+		"\x1b[38;2;48;7;0m   \x1b[0m":              "\x1b[38;2;48;7;0m\x1b[0m",
+		"a b  ":                                    "a b",
+		"x\x1b[7m  \x1b[0m ":                       "x\x1b[7m  \x1b[0m",
+		"   ":                                      "",
+	}
+	for in, want := range cases {
+		if got := trimTrailingSpaces(in); got != want {
+			t.Errorf("trim(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := frame([]string{"ab" + composerCursorMarker + "  "}); got != "ab\x1b]1337;ZelCaret;1;3\x07" {
+		t.Fatalf("frame = %q", got)
+	}
+}

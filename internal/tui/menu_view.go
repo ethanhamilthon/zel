@@ -48,15 +48,7 @@ func (m model) menuView() string {
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}
-	lines = lines[:m.height]
-	row, column := 0, 0
-	for i, line := range lines {
-		if at := strings.Index(line, composerCursorMarker); at >= 0 {
-			row, column = i+1, ansi.StringWidth(line[:at])+1
-		}
-		lines[i] = strings.ReplaceAll(line, composerCursorMarker, "")
-	}
-	return strings.Join(lines[:m.height], "\n") + fmt.Sprintf("\x1b]1337;ZelCaret;%d;%d\x07", row, column)
+	return frame(lines[:m.height])
 }
 
 // menuBodyStart is the screen row of the first body line and menuBodyRoom the
