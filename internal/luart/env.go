@@ -22,12 +22,14 @@ type TaskOpts struct {
 	Name, Cwd string
 	Env       map[string]string
 	Timeout   time.Duration
+	Waited    bool // the caller waits for the result: no <task-result> message is queued
 }
 
 // AgentOpts are the options of agents.spawn.
 type AgentOpts struct {
 	Prompt, Model, Effort, Provider, Cwd string
 	Timeout                              time.Duration
+	Waited                               bool // the caller waits for the result: no <agent-result> message is queued
 }
 
 // JobInfo is one row of tasks.list / agents.list.

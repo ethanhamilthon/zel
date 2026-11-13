@@ -13,6 +13,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/termenv v0.16.0
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/image v0.46.0
 	modernc.org/sqlite v1.61.1
 )
@@ -41,7 +42,6 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark v1.8.7 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
-	github.com/yuin/gopher-lua v1.1.2 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
