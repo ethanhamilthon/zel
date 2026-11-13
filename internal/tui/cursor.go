@@ -35,6 +35,9 @@ func (o *cursorOutput) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	text := string(p)
+	if strings.Contains(text, displayFrame) {
+		return len(p), nil
+	}
 	for _, match := range caretPosition.FindAllStringSubmatch(text, -1) {
 		o.row, _ = strconv.Atoi(match[1])
 		o.column, _ = strconv.Atoi(match[2])

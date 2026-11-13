@@ -204,6 +204,29 @@ func TestCursorOutputRestoresRendererAndTerminal(t *testing.T) {
 	}
 }
 
+// Moving content must scroll the terminal rather than repaint it, so a text
+// selection survives while the chat follows a working agent.
+func TestDisplayScrollsInsteadOfRepainting(t *testing.T) {
+	var buf strings.Builder
+	d := &display{out: &buf}
+	d.draw("a\nb\nc\nd\x1b]1337;ZelCaret;4;1\x07", 10, 4)
+	buf.Reset()
+	d.draw("c\nd\ne\nf\x1b]1337;ZelCaret;4;1\x07", 10, 4)
+	if got := buf.String(); got != "\x1b[m\x1b[2S\x1b[3;1He\x1b[m\x1b[K\x1b[4;1Hf\x1b[m\x1b[K\x1b]1337;ZelCaret;4;1\x07" {
+		t.Fatalf("scroll up = %q", got)
+	}
+	buf.Reset()
+	d.draw("b\nc\nd\ne\x1b]1337;ZelCaret;4;1\x07", 10, 4)
+	if got := buf.String(); !strings.HasPrefix(got, "\x1b[m\x1b[1T\x1b[1;1Hb") || strings.Contains(got, "1Hc") {
+		t.Fatalf("scroll down = %q", got)
+	}
+	buf.Reset()
+	d.draw("b\nc\nd\ne\x1b]1337;ZelCaret;4;1\x07", 10, 4)
+	if buf.Len() != 0 {
+		t.Fatalf("unchanged frame wrote %q", buf.String())
+	}
+}
+
 func TestFindFileTokenBasics(t *testing.T) {
 	tests := []struct {
 		name   string

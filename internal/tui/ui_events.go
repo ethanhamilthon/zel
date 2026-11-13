@@ -28,6 +28,7 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	output := &cursorOutput{ReadWriteCloser: os.Stdout}
 	// Keep mouse reporting off by default so the terminal owns selection and copying.
 	// The tracing entry view enables it temporarily for wheel scrolling.
+	m.display = &display{out: output}
 	program := tea.NewProgram(m, tea.WithOutput(output), tea.WithAltScreen(), tea.WithFilter(keyboard.filter))
 	running, stop := context.WithCancel(ctx)
 	defer stop()

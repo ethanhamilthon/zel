@@ -30,6 +30,7 @@ type renderedEntry struct {
 type model struct {
 	ctl                       *core.Controller
 	term                      termState
+	display                   *display
 	events                    *eventQueue
 	input                     textarea.Model
 	pendingSteer, steerSerial uint64
@@ -213,6 +214,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if wasTraceEntry && !n.traceEntryView() {
 		cmd = tea.Batch(cmd, tea.DisableMouse)
+	}
+	if n.display != nil {
+		n.display.draw(n.render(), n.width, n.height)
 	}
 
 	if (n.dirty || n.renderPending) && !n.redrawScheduled {
@@ -527,7 +531,16 @@ func (m *model) edit(follow bool, change func() tea.Cmd) tea.Cmd {
 	m.refresh(follow || changed)
 	return tea.Batch(cmd, fileCmd)
 }
+
+// View is a placeholder at runtime, where display draws render's frames itself.
 func (m model) View() string {
+	if m.display != nil {
+		return displayFrame
+	}
+	return m.render()
+}
+
+func (m model) render() string {
 	if m.menu != nil {
 		return m.menuView()
 	}
