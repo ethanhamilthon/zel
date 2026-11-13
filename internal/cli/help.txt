@@ -12,6 +12,7 @@ USAGE
   zel view [-s ID] PATH...
   zel events [-s ID]
   zel init
+  zel update
   zel version
   zel --help | -h | help
 
@@ -24,6 +25,7 @@ GETTING STARTED
 COMMANDS
   init            Create ZEL.md here from local AGENTS.md instructions, if
                   present. Never overwrite it.
+  update          Replace this binary with the latest GitHub release.
   --config FILE   Load this ZEL.md-format instruction file after all other layers.
   -p PROMPT       Run one task without the TUI. Print the persisted session ID
                   first, then the final answer and exit. Diagnostics go to stderr.

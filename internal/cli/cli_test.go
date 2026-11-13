@@ -1,7 +1,12 @@
 package cli
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"zel/internal/core"
@@ -295,5 +301,63 @@ func TestSessionRenameCommand(t *testing.T) {
 	}
 	if !strings.Contains(helpOut.String(), "session rename") {
 		t.Fatalf("help text missing session rename: %s", helpOut.String())
+	}
+}
+
+func TestUpdateReplacesBinaryWithVerifiedRelease(t *testing.T) {
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	payload := []byte("new zel")
+	_ = tw.WriteHeader(&tar.Header{Name: "zel", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write(payload)
+	_ = tw.Close()
+	_ = gz.Close()
+	asset := fmt.Sprintf("zel_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	sum := sha256.Sum256(archive.Bytes())
+	checksums := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			fmt.Fprint(w, `{"tag_name":"v9.0.0"}`)
+		case "/download/v9.0.0/" + asset:
+			w.Write(archive.Bytes())
+		case "/download/v9.0.0/checksums.txt":
+			fmt.Fprint(w, checksums)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "zel")
+	if err := os.WriteFile(target, []byte("old zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldLatest, oldDownload, oldExe, oldVersion := releaseLatest, releaseDownload, executablePath, Version
+	t.Cleanup(func() {
+		releaseLatest, releaseDownload, executablePath, Version = oldLatest, oldDownload, oldExe, oldVersion
+	})
+	releaseLatest, releaseDownload = server.URL+"/latest", server.URL+"/download"
+	executablePath = func() (string, error) { return target, nil }
+
+	Version = "9.0.0"
+	var out strings.Builder
+	if err := updateCommand(context.Background(), nil, &out); err != nil || !strings.Contains(out.String(), "up to date") {
+		t.Fatalf("same version: %q %v", out.String(), err)
+	}
+	Version = "0.4.0"
+	checksums = strings.Repeat("0", 64) + "  " + asset + "\n"
+	if err := updateCommand(context.Background(), nil, &out); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("bad checksum accepted: %v", err)
+	}
+	checksums = hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	if err := updateCommand(context.Background(), nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "new zel" {
+		t.Fatalf("binary = %q %v", data, err)
+	}
+	if newerVersion("0.10.0", "0.9.9") >= 0 || newerVersion("0.3.7", "0.4.0") <= 0 {
+		t.Fatal("version order")
 	}
 }

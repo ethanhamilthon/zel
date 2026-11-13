@@ -147,6 +147,8 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			return sessionSubcommand(args[1:], out)
 		case "models":
 			return modelsCommand(ctx, args[1:], out, diagnostics)
+		case "update":
+			return updateCommand(ctx, args[1:], out)
 		}
 	}
 	return sessionCommand(ctx, args, in, out, options)
