@@ -27,11 +27,8 @@ func TestLoadConfigLayers(t *testing.T) {
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(home, "ZEL.md"), "Global prompt")
-	writeFile(t, filepath.Join(root, "projects", "ZEL.md"), "Parent prompt")
-	writeFile(t, filepath.Join(dir, "ZEL.md"), "Local prompt")
-	flagged := filepath.Join(root, "override.md")
-	writeFile(t, flagged, "Flag prompt")
+	flagged := filepath.Join(root, "override.lua")
+	writeFile(t, flagged, "-- flag layer")
 	t.Setenv("ZEL_CONFIG", flagged)
 	loaded, err := LoadConfig(home, dir)
 	if err != nil {
@@ -40,13 +37,6 @@ func TestLoadConfigLayers(t *testing.T) {
 	if loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.SlashMenu {
 		t.Fatalf("loaded %+v", loaded)
 	}
-	var prompts []string
-	for _, b := range loaded.System {
-		prompts = append(prompts, b.Value)
-	}
-	if strings.Join(prompts, "|") != "Global prompt|Parent prompt|Local prompt|Flag prompt" {
-		t.Fatalf("layers %+v", loaded)
-	}
 	if Redact(loaded, "key sk-secret") != "key [redacted]" {
 		t.Fatal("API key not redacted")
 	}
@@ -54,7 +44,7 @@ func TestLoadConfigLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := LoadConfig(home, dir)
-	if err != nil || len(again.System) != 4 {
+	if err != nil || again.Providers["p"].APIKey != "sk-secret" {
 		t.Fatalf("project state was persisted: %+v %v", again, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "config.toml")); !os.IsNotExist(err) {
@@ -66,27 +56,55 @@ func TestLoadConfigLayers(t *testing.T) {
 	}
 }
 
-func TestProjectPromptBuildsTheRequest(t *testing.T) {
+func TestProjectInitLuaBuildsTheRequest(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) { writeFile(t, filepath.Join(dir, "ZEL.md"), "You are Zel.") })
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), "local zel = require('zel')\nzel.instructions('You are Zel.')\nzel.prompt(function() return 'dyn ' .. (2 + 3) end)\nzel.fn{name='proj.hello', summary='say hello', run=function() return 'hello' end}")
+	})
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fp.requests()[0], `"instructions":"You are Zel."`) {
-		t.Fatalf("request: %s", fp.requests()[0])
+	req := fp.requests()[0]
+	for _, want := range []string{"You are Zel.", "dyn 5", "proj.hello", "say hello", "## built-in"} {
+		if !strings.Contains(req, want) {
+			t.Fatalf("request lacks %q: %s", want, req)
+		}
+	}
+	if strings.Contains(req, "ZEL.md") {
+		t.Fatal("ZEL.md is still mentioned")
 	}
 }
 
-func TestProjectPromptRunsBashBlocks(t *testing.T) {
+func TestZelMdIsNotLoaded(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	prompt := "Branch:\n```bash\necho main\n```\nKeep ```bash inline```.\n```bash\nexit 3\n```\n```sh\necho no\n```"
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) { writeFile(t, filepath.Join(dir, "ZEL.md"), prompt) })
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) { writeFile(t, filepath.Join(dir, "ZEL.md"), "LEGACY-INSTRUCTIONS") })
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	want := `"instructions":"Branch:\nmain\nKeep ` + "```bash inline```" + `.\n\n[zel: exit status 3]\n` + "```sh" + `\necho no\n` + "```" + `"`
-	if !strings.Contains(fp.requests()[0], want) {
-		t.Fatalf("request: %s\nwant: %s", fp.requests()[0], want)
+	if strings.Contains(fp.requests()[0], "LEGACY-INSTRUCTIONS") {
+		t.Fatal("ZEL.md was loaded")
+	}
+}
+
+func TestLuaToolRunsInTheTurn(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if n == 1 {
+			return luaReply("c1", "state.set('k', 41 + 1)\nprint(sh('echo hi').out)")
+		}
+		return textReply("done")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fp.requests()[1], "hi") {
+		t.Fatalf("no tool output: %s", fp.requests()[1])
+	}
+	if v, ok, err := (kvState{a}).Get("session", "k"); err != nil || !ok || v != "42" {
+		t.Fatalf("state value %q %v %v", v, ok, err)
+	}
+	if strings.Contains(fp.requests()[0], `"name":"bash"`) {
+		t.Fatal("the bash tool is still offered")
 	}
 }
 
@@ -198,7 +216,7 @@ func TestSessionListIsScopedAndOrdered(t *testing.T) {
 func TestRecordsDerivedFromHistory(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", "echo hi")
+			return luaReply("c1", `print("hi")`)
 		}
 		return textReply("done")
 	}}
@@ -220,8 +238,8 @@ func TestSaveDefaultUsesDatabase(t *testing.T) {
 	home, dir := t.TempDir(), t.TempDir()
 	s := DefaultSettings()
 	s.Providers["p"] = Provider{BaseURL: "http://localhost:1"}
-	path := filepath.Join(dir, "ZEL.md")
-	original := "---\nname: Untouched\n---\nPrompt"
+	path := filepath.Join(dir, ".zel", "init.lua")
+	original := "-- untouched"
 	writeFile(t, path, original)
 	if err := SaveDefault(home, s, selection{"p", "new", "high"}); err != nil {
 		t.Fatal(err)
@@ -232,7 +250,7 @@ func TestSaveDefaultUsesDatabase(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	if string(data) != original {
-		t.Fatal("ZEL.md changed")
+		t.Fatal("init.lua changed")
 	}
 	info, err := os.Stat(filepath.Join(home, "zel.db"))
 	if err != nil || info.Mode().Perm() != 0600 {
@@ -431,7 +449,7 @@ func TestPackageBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines += bytes.Count(main, []byte{'\n'})
-	const maxProductionLines = 10700 // Keep a strict cap while accommodating 0.3.x features.
+	const maxProductionLines = 15500 // Keep a strict cap while accommodating the 0.5 Lua runtime.
 	if lines >= maxProductionLines {
 		t.Errorf("production Go code has %d lines; keep it below %d", lines, maxProductionLines)
 	}

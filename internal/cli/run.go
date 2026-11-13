@@ -122,9 +122,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 				return err
 			}
 			if created {
-				fmt.Fprintln(out, "Created ZEL.md")
+				fmt.Fprintln(out, "Created .zel/init.lua")
 			} else {
-				fmt.Fprintln(out, "ZEL.md already exists; left unchanged")
+				fmt.Fprintln(out, ".zel/init.lua already exists; left unchanged")
 			}
 			return nil
 		case "version", "help", "--help", "-h":
@@ -162,7 +162,7 @@ func flagSet(name string, define func(*flag.FlagSet)) *flag.FlagSet {
 }
 
 // parseWithConfig parses fs with a --config flag and exports the file as ZEL_CONFIG,
-// so the agent, its bash tool and helper commands all read the same layers.
+// so the agent, its lua tool and helper commands all read the same layers.
 func parseWithConfig(fs *flag.FlagSet, args []string) error {
 	configPath := fs.String("config", "", "config file merged on top of the others")
 	if err := fs.Parse(args); err != nil {

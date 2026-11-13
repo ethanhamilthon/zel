@@ -25,7 +25,7 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, re
 	"Esc: dismiss UI · Ctrl+D: cancel current turn · Ctrl+Q: save and quit"
 
 func help() string {
-	return keyboardHelp + "\n\nHost access: the bash tool runs commands with your permissions; not an OS security sandbox."
+	return keyboardHelp + "\n\nHost access: the lua tool runs code and shell commands with your permissions; not an OS security sandbox."
 }
 
 func sessionTitle(s core.SessionSummary) string {

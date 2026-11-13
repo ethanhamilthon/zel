@@ -186,23 +186,15 @@ func RecordsForItem(item json.RawMessage) []Record {
 	case v.Type == "compaction":
 		return []Record{{Kind: "compaction", Text: "Context compacted"}}
 	case v.Type == "function_call":
-		var args struct{ Command string }
+		var args struct{ Code string }
 		_ = json.Unmarshal([]byte(v.Arguments), &args)
-		if v.Name == "bash" {
-			return []Record{{Kind: "code", Text: args.Command}}
+		if v.Name == "lua" {
+			return []Record{{Kind: "code", Text: args.Code}}
 		}
 		return []Record{{Kind: "code", Text: v.Name + "\n" + v.Arguments}}
 	case v.Type == "function_call_output":
-		var result struct {
-			Output string
-			Error  bool
-		}
-		if json.Unmarshal([]byte(v.Output), &result) == nil {
-			kind := "output"
-			if result.Error {
-				kind = "error"
-			}
-			return []Record{{Kind: kind, Text: result.Output}}
+		if strings.HasPrefix(v.Output, "error: ") {
+			return []Record{{Kind: "error", Text: v.Output}}
 		}
 		return []Record{{Kind: "output", Text: v.Output}}
 	default:

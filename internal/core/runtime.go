@@ -52,31 +52,31 @@ type Options struct {
 }
 
 type Runtime struct {
-	opts                Options
-	home                string
-	cfg                 *settingsState
-	histMu              *sync.RWMutex
-	Shell               *shell.Runner
-	History             []json.RawMessage
-	itemMeta            map[int]*Metadata
-	db                  *store.Store
-	project             string
-	id                  string
-	saved               int
-	stored              bool
-	owner               *os.File
-	prompt              string
-	promptFrozen        bool
-	title               string
-	lastRequest         Metadata
-	requestedLen        int        // History length when lastRequest was sent
-	compacted           compaction // latest automatic compaction boundaries
-	imageWarnings       []Record
-	sock                *sessionSocket
-	queue               *Steering
-	slots               *imageSlots
-	tasks               *tasks
-	lua                 *luaHolder
+	opts          Options
+	home          string
+	cfg           *settingsState
+	histMu        *sync.RWMutex
+	Shell         *shell.Runner
+	History       []json.RawMessage
+	itemMeta      map[int]*Metadata
+	db            *store.Store
+	project       string
+	id            string
+	saved         int
+	stored        bool
+	owner         *os.File
+	prompt        string
+	promptFrozen  bool
+	title         string
+	lastRequest   Metadata
+	requestedLen  int        // History length when lastRequest was sent
+	compacted     compaction // latest automatic compaction boundaries
+	imageWarnings []Record
+	sock          *sessionSocket
+	queue         *Steering
+	slots         *imageSlots
+	tasks         *tasks
+	lua           *luaHolder
 }
 
 func (a *Runtime) Home() string { return a.home }
@@ -124,7 +124,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 	return a, nil
 }
 
-// loadConfig reads preferences and ZEL.md; the session's model selection stays.
+// loadConfig reads preferences and init.lua; the session's model selection stays.
 func (a *Runtime) ReloadConfig() error {
 	return a.loadConfig(a.Shell.Dir)
 }

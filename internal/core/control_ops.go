@@ -110,7 +110,7 @@ func (c *Controller) reloadLocked() {
 		c.emit(Event{Kind: "error", Text: err.Error()})
 		return
 	}
-	c.emit(Event{Kind: "notice", Text: "Settings and ZEL.md reloaded; the system prompt was rebuilt."})
+	c.emit(Event{Kind: "notice", Text: "Settings and init.lua reloaded; the system prompt was rebuilt."})
 }
 
 func (c *Controller) Rename(title string) error {

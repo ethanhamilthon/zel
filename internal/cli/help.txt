@@ -23,10 +23,10 @@ GETTING STARTED
   Preferences and API keys are stored locally in ~/.zel/zel.db, not encrypted.
 
 COMMANDS
-  init            Create ZEL.md here from local AGENTS.md instructions, if
-                  present. Never overwrite it.
+  init            Create ./.zel/init.lua here (it loads local AGENTS.md as
+                  instructions, if present). Never overwrite it.
   update          Replace this binary with the latest GitHub release.
-  --config FILE   Load this ZEL.md-format instruction file after all other layers.
+  --config FILE   Load this extra init.lua (a .lua file) after all other layers.
   -p PROMPT       Run one task without the TUI. Print the persisted session ID
                   first, then the final answer and exit. Diagnostics go to stderr.
   --model MODEL   Override the model for this headless session only.
@@ -45,22 +45,26 @@ COMMANDS
   events          Print the session event log, oldest first.
   -s ID           Target a running session; defaults to ZEL_ENDPOINT.
 
-PROJECT INSTRUCTIONS
-  Load $ZEL_HOME/ZEL.md, then ZEL.md from / down to the working directory, then
-  --config FILE. Missing implicit files are skipped; the explicit file must exist.
-  Each file is plain Markdown; layers accumulate into the system prompt.
-  A session keeps its saved prompt until Reload or New session.
+INIT.LUA
+  The model has one tool: lua (raw Lua code, optional first line
+  "--! timeout=N"). There is no bash tool; shell runs through sh().
+  Config is Lua: ~/.zel/init.lua, then the nearest .zel/init.lua up from the
+  working directory, then --config FILE. Layers instruct (zel.instructions,
+  zel.prompt), set defaults, register functions (zel.fn) shown in the system
+  prompt, and hook events (session_start, message, before_call, after_call,
+  turn_end, bg_done). Layers are read once per session (and on resume);
+  Menu > Reload re-reads them. ZEL.md is no longer read. See docs/lua-api.md.
 
 OUTPUT
-  Bash output uses a head/tail budget: 4096 bytes keeps the first 2048 + marker
-  + last 2048; zero is unlimited.
+  A lua call returns print() output plus the returned value, with a head/tail
+  budget: 8192 bytes keeps the first 4096 + marker + last 4096; zero is unlimited.
 
 ENVIRONMENT
-  ZEL_HOME        State directory, default ~/.zel: zel.db, ZEL.md, locks/, run/,
+  ZEL_HOME        State directory, default ~/.zel: zel.db, init.lua, locks/, run/,
                   attachments/, tasks/, and events/.
-  ZEL_CONFIG      Explicit instruction file; set by --config, inherited by tools.
-  ZEL_SESSION_ID  Active session ID, exported to Bash.
-  ZEL_PARENT      Root session ID of the whole tree, exported to Bash.
+  ZEL_CONFIG      Explicit init.lua file; set by --config, inherited by tools.
+  ZEL_SESSION_ID  Active session ID, exported to sh().
+  ZEL_PARENT      Root session ID of the whole tree, exported to sh().
   ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
 
 INTERFACE
@@ -69,7 +73,7 @@ INTERFACE
   Onboarding: Tab / Shift+Tab switch steps, Left / Right move the cursor,
   Enter advances. Navigation hints appear at the bottom of the screen.
   @ in the composer completes file paths.
-  Tracing search supports :user text, :bash text, and every other entry type.
+  Tracing search supports :user text, :lua text, and every other entry type.
   Chat shows only user messages, answers, and the working indicator.
 
 SECURITY

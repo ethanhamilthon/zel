@@ -24,7 +24,7 @@ import (
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", "echo hi")
+			return luaReply("c1", `print("hi")`)
 		}
 		return textReply("done")
 	}}
@@ -36,7 +36,7 @@ func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	for _, r := range a.Records() {
 		kinds = append(kinds, r.Kind+":"+strings.TrimSpace(r.Text))
 	}
-	if got := strings.Join(kinds, "|"); got != "user:go|code:echo hi|output:hi|assistant:done" {
+	if got := strings.Join(kinds, "|"); got != `user:go|code:print("hi")|output:hi|assistant:done` {
 		t.Fatalf("records = %s", got)
 	}
 	if final := a.FinalText(); final != "done" {
@@ -114,7 +114,7 @@ func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgent(t, fp, Options{})
 	a.History = append(a.History, raw(map[string]any{"role": "user", "content": "start"}),
-		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": `{"command":"touch marker"}`}))
+		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": `{"command":"touch marker"}`}))
 	if _, err := turn(t, a, "continue"); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestRetryDoesNotDuplicateStreamedOutput(t *testing.T) {
 func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", "echo hi")
+			return luaReply("c1", `print("hi")`)
 		}
 		return textReply("done")
 	}}
@@ -219,17 +219,17 @@ func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	}
 }
 
-func TestTypedInputMovesRunningCallToBackground(t *testing.T) {
+func TestTypedInputWaitsForRunningCall(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			args := func(command string) string {
-				data, _ := json.Marshal(map[string]any{"command": command, "timeout": nil})
+			args := func(code string) string {
+				data, _ := json.Marshal(map[string]any{"code": code})
 				return string(data)
 			}
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
-				`{"type":"function_call","call_id":"c1","name":"bash","arguments":%q},`+
-				`{"type":"function_call","call_id":"c2","name":"bash","arguments":%q}]}}`,
-				args("touch started; echo early; sleep 2; echo late"), args("touch second")))
+				`{"type":"function_call","call_id":"c1","name":"lua","arguments":%q},`+
+				`{"type":"function_call","call_id":"c2","name":"lua","arguments":%q}]}}`,
+				args("fs.write('started', '')\nsleep(1)\nprint('late')"), args("fs.write('second', '')")))
 		}
 		return textReply("ok")
 	}}
@@ -242,37 +242,35 @@ func TestTypedInputMovesRunningCallToBackground(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the command never started")
+			t.Fatal("the call never started")
 		}
 	}
 	a.Queue().Push(Input{Text: "STOP-AND-LISTEN"})
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); took > 1800*time.Millisecond {
-		t.Fatalf("the turn waited for the command: %s", took)
+	if took := time.Since(start); took < 900*time.Millisecond {
+		t.Fatalf("the call was interrupted by a typed message: %s", took)
 	}
 	requests := fp.requests()
-	if len(requests) != 2 || !strings.Contains(requests[1], "STOP-AND-LISTEN") || !strings.Contains(requests[1], "background as task t1") ||
-		!strings.Contains(requests[1], "early") || !strings.Contains(requests[1], "Skipped: the user sent a new message") {
+	if len(requests) != 2 || !strings.Contains(requests[1], "late") || !strings.Contains(requests[1], "STOP-AND-LISTEN") {
 		t.Fatalf("second request: %s", requests[len(requests)-1])
 	}
-	if _, err := os.Stat(filepath.Join(a.Shell.Dir, "second")); err == nil {
-		t.Fatal("a call after the message ran")
+	if strings.Index(requests[1], "late") > strings.Index(requests[1], "STOP-AND-LISTEN") {
+		t.Fatal("the queued message arrived before the call output")
 	}
-	got := awaitInput(t, a)
-	if !strings.Contains(got[0].Text, `id="t1" status="done"`) || !strings.Contains(got[0].Text, "early") || !strings.Contains(got[0].Text, "late") {
-		t.Fatalf("task result %q", got[0].Text)
+	if _, err := os.Stat(filepath.Join(a.Shell.Dir, "second")); err != nil {
+		t.Fatal("the second call of the response did not run")
 	}
 }
 
 func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 	cases := map[string]string{
-		`{"command":"echo hi`:         "echo hi",
-		`{"command":"printf \"a\`:     `printf "a`,
-		`{"command":"x", "timeout":1`: "x",
-		`{"command":"`:                "",
-		`{"other":1`:                  "",
+		`{"code":"echo hi`:         "echo hi",
+		`{"code":"printf \"a\`:     `printf "a`,
+		`{"code":"x", "timeout":1`: "x",
+		`{"code":"`:                "",
+		`{"other":1`:               "",
 	}
 	for arguments, want := range cases {
 		if got := partialCode(arguments); got != want {
@@ -448,9 +446,9 @@ func textReply(text string) string {
 	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}]}}`, text))
 }
 
-func bashReply(callID, command string) string {
-	args, _ := json.Marshal(map[string]any{"command": command, "timeout": nil})
-	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"bash","arguments":%q}]}}`, callID, args))
+func luaReply(callID, code string) string {
+	args, _ := json.Marshal(map[string]any{"code": code})
+	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"lua","arguments":%q}]}}`, callID, args))
 }
 
 func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
@@ -768,7 +766,7 @@ func TestBusyRejectionsAndQuitDuringTurn(t *testing.T) {
 
 func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h := newHarness(t, &fakeModel{})
-	local := filepath.Join(h.dir, "ZEL.md")
+	local := filepath.Join(h.dir, ".zel", "init.lua")
 	writeRaw := func(content string) {
 		_ = os.MkdirAll(filepath.Dir(local), 0700)
 		if err := os.WriteFile(local, []byte(content), 0600); err != nil {
@@ -776,7 +774,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 		}
 	}
 	write := func(text string) {
-		writeRaw(text)
+		writeRaw("require('zel').instructions('" + text + "')")
 	}
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
@@ -787,7 +785,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h.send("a")
 	turns(1)
 	if r := h.model.requests()[0]; strings.Contains(r, "v1") {
-		t.Fatalf("a ZEL.md changed after startup was used without /reload: %s", r)
+		t.Fatalf("an init.lua changed after startup was used without /reload: %s", r)
 	}
 	h.ctl.Reload()
 	h.model.mu.Lock()
@@ -795,7 +793,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.await("request b", func([]Event) bool { return len(h.model.requests()) == 2 })
-	writeRaw("v2")
+	write("v2")
 	home, _ := ZelHome(h.dir)
 	settings := h.ctl.Settings()
 	settings.ShellTimeout = 42
@@ -1184,10 +1182,10 @@ func TestSubagentCommittedStepsAndModel(t *testing.T) {
 
 func TestCompactionZones(t *testing.T) {
 	big := func(id string) json.RawMessage {
-		return callOutput(id, shell.Result{Output: "first line of " + id + "\n" + strings.Repeat("x", 4000), ExitCode: 3})
+		return callOutput(id, "first line of "+id+"\n"+strings.Repeat("x", 4000))
 	}
 	call := func(id string) json.RawMessage {
-		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "bash", "arguments": `{"command":"ls"}`})
+		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "lua", "arguments": `{"code":"print(1)"}`})
 	}
 	reply := func(text string) json.RawMessage {
 		return raw(map[string]any{"type": "message", "role": "assistant", "id": "msg_" + text, "content": []any{map[string]any{"type": "output_text", "text": text}}})
@@ -1224,7 +1222,7 @@ func TestCompactionZones(t *testing.T) {
 	if !strings.Contains(sent[0], "first") || !strings.Contains(sent[1], "done1") || !strings.Contains(sent[2], "context-compacted") || !strings.Contains(sent[3], "second") {
 		t.Fatalf("conversation or marker out of order:\n%s", body)
 	}
-	if !strings.Contains(sent[5], `first line of c2\\n[tool output pruned]`) || !strings.Contains(sent[5], `exit_code\":3`) || strings.Contains(sent[5], "xxx") {
+	if !strings.Contains(sent[5], `first line of c2\n[tool output pruned]`) || strings.Contains(sent[5], "xxx") {
 		t.Fatalf("middle output not pruned: %s", sent[5])
 	}
 	if sent[len(sent)-1] != string(history[12]) {
@@ -1235,7 +1233,7 @@ func TestCompactionZones(t *testing.T) {
 func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 2 {
-			return bashReply("c1", "seq 1 300")
+			return luaReply("c1", `for i = 1, 300 do print(i) end`)
 		}
 		return textReply("ok")
 	}}

@@ -11,7 +11,7 @@ import (
 // tool traffic or a notice, in the order the session produced it.
 
 // traceKinds names the record kinds that the chat hides and the Tracing menu shows.
-var traceKinds = map[string]string{"code": "bash", "reasoning": "thinking"}
+var traceKinds = map[string]string{"code": "lua", "reasoning": "thinking"}
 
 func traceKind(kind string) string {
 	if name, ok := traceKinds[kind]; ok {

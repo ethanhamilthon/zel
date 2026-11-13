@@ -151,7 +151,7 @@ func (a *Runtime) rootID() string {
 	return a.id
 }
 
-// shellEnv is exported to every bash tool call. API keys and settings are never exported.
+// shellEnv is exported to every sh() call. API keys and settings are never exported.
 // ZEL_PARENT holds the root session ID of the whole tree.
 func (a *Runtime) shellEnv() map[string]string {
 	env := map[string]string{

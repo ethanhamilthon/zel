@@ -1398,7 +1398,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 	want := []menuRow{
 		{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
 		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
-		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
+		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
 		{"Settings", "Output, timeouts, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
 	}
@@ -1849,7 +1849,7 @@ func TestTracingEntryMarkdownHeaderColorsAndScrolling(t *testing.T) {
 			t.Fatalf("duplicate type-only line remains: %q", lines[i])
 		}
 	}
-	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "bash": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
+	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "lua": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
 		if got := string(traceColor(kind)); got != want {
 			t.Errorf("%s color = %s, want %s", kind, got, want)
 		}

@@ -115,31 +115,21 @@ func conversationOnly(item json.RawMessage) (json.RawMessage, bool) {
 	return raw(v), true
 }
 
-// pruneOutput cuts a Bash result to its first line, keeping the other fields.
+// pruneOutput cuts a lua call result to its first line.
 func pruneOutput(item json.RawMessage) json.RawMessage {
 	var v map[string]any
 	if json.Unmarshal(item, &v) != nil || v["type"] != "function_call_output" {
 		return item
 	}
 	output, _ := v["output"].(string)
-	var result map[string]any
-	text := output
-	if json.Unmarshal([]byte(output), &result) == nil {
-		text, _ = result["output"].(string)
-	}
-	first, _, multiline := strings.Cut(text, "\n")
+	first, _, multiline := strings.Cut(output, "\n")
 	if runes := []rune(first); len(runes) > prunedLineLimit {
 		first, multiline = string(runes[:prunedLineLimit]), true
 	}
 	if !multiline {
 		return item
 	}
-	if result != nil {
-		result["output"] = first + prunedMarker
-		v["output"] = string(raw(result))
-	} else {
-		v["output"] = first + prunedMarker
-	}
+	v["output"] = first + prunedMarker
 	return raw(v)
 }
 

@@ -136,8 +136,8 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			if err := core.WriteConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
-			config := filepath.Join(t.TempDir(), "instructions.md")
-			if err := os.WriteFile(config, []byte("headless config"), 0600); err != nil {
+			config := filepath.Join(t.TempDir(), "init.lua")
+			if err := os.WriteFile(config, []byte("require('zel').instructions('headless config')"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			cwd, _ := os.Getwd()
@@ -191,7 +191,7 @@ func TestInitCommand(t *testing.T) {
 	if err := Run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Created ZEL.md") {
+	if !strings.Contains(out.String(), "Created .zel/init.lua") {
 		t.Fatalf("output: %s", out.String())
 	}
 	if err := Run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {

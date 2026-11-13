@@ -48,7 +48,7 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
-	labels := []string{"Output limit in bytes (0 = unlimited)", "Bash timeout in seconds (1–600)", "Auto compaction threshold in tokens (0 = off)"}
+	labels := []string{"Output limit in bytes (0 = unlimited)", "Lua call timeout in seconds (1–600)", "Auto compaction threshold in tokens (0 = off)"}
 	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout), strconv.Itoa(s.CompactionThreshold)}
 	m.startForm(&formState{kind: "setting", setting: index, fields: []string{labels[index]}, values: []string{values[index]}})
 }
