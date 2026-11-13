@@ -320,8 +320,10 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		sub := a.StartSubagent(prompt)
 		defer sub.Finish()
 		if err := a.Run(ctx, prompt, sub.TrackEvent); err != nil {
+			writeReport(a, "", err)
 			return cancelledOr(ctx, err)
 		}
+		writeReport(a, a.FinalText(), nil)
 		_, err := fmt.Fprintln(out, a.FinalText())
 		return cancelledOr(ctx, err)
 	}
@@ -408,4 +410,22 @@ func readSessionCommand(args []string, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// writeReport tells the parent session that started this run through
+// agents.spawn how it ended: the file named by ZEL_REPORT gets one JSON object.
+func writeReport(a *core.Runtime, answer string, runErr error) {
+	path := os.Getenv("ZEL_REPORT")
+	if path == "" {
+		return
+	}
+	report := map[string]any{"ok": runErr == nil, "answer": answer, "session": a.SessionID()}
+	if runErr != nil {
+		report["error"] = runErr.Error()
+	}
+	data, _ := json.Marshal(report)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
 }

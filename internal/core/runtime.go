@@ -200,13 +200,14 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 		accepted := false
 		for _, instruction := range a.queue.Take() {
 			if strings.TrimSpace(instruction.Text) != "" || len(instruction.Images) > 0 {
-				a.addInput(instruction, emit)
+				a.addInput(a.hookInput(ctx, instruction), emit)
 				accepted = true
 			}
 		}
 		return accepted
 	}
 
+	input = a.hookInput(ctx, input)
 	shown := inputEvent(input)
 	shown.ID = fmt.Sprintf("input-%d", time.Now().UnixNano())
 	a.commitInput(input)

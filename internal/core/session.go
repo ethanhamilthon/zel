@@ -157,6 +157,7 @@ func (a *Runtime) shellEnv() map[string]string {
 	env := map[string]string{
 		"ZEL_SESSION_ID": a.SessionID(),
 		"ZEL_PARENT":     a.rootID(),
+		"ZEL_REPORT":     "", // only agents.spawn sets it for its child
 	}
 	if a.sock != nil {
 		env["ZEL_ENDPOINT"] = a.sock.path

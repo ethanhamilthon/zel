@@ -45,7 +45,7 @@ func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
 	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}, jobs: map[string]*job{}}
+		queue: a.queue, hook: a.bgDone, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}, jobs: map[string]*job{}}
 }
 
 func (t *tasks) run(command string) (string, error) {

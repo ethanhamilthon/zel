@@ -24,8 +24,9 @@ func (h *fakeHost) AcceptSteering() bool {
 	}
 	return false
 }
-func (h *fakeHost) Save() error    { h.log = append(h.log, "save"); return nil }
-func (h *fakeHost) Compact() error { h.log = append(h.log, "compact"); return nil }
+func (h *fakeHost) TurnEnd(context.Context) bool { return false }
+func (h *fakeHost) Save() error                  { h.log = append(h.log, "save"); return nil }
+func (h *fakeHost) Compact() error               { h.log = append(h.log, "compact"); return nil }
 func (h *fakeHost) Request(context.Context) ([]json.RawMessage, error) {
 	h.log = append(h.log, "request")
 	h.requests++

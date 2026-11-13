@@ -8,15 +8,33 @@ import (
 )
 
 type turnHost struct {
-	a       *Runtime
-	emit    func(TurnEvent)
-	accept  func() bool
-	turnSeq int
+	a        *Runtime
+	emit     func(TurnEvent)
+	accept   func() bool
+	turnSeq  int
+	injected int
 }
 
 func (h *turnHost) AcceptSteering() bool { return h.accept() }
-func (h *turnHost) Save() error          { return h.a.saveHistory() }
-func (h *turnHost) Compact() error       { return h.a.compact(h.emit) }
+
+// maxTurnInjections bounds how often turn_end hooks may keep a turn going.
+const maxTurnInjections = 3
+
+// TurnEnd runs the turn_end hooks; a returned text continues the turn as a user message.
+func (h *turnHost) TurnEnd(ctx context.Context) bool {
+	if h.injected >= maxTurnInjections || ctx.Err() != nil {
+		return false
+	}
+	text := h.a.turnEnd(ctx)
+	if text == "" {
+		return false
+	}
+	h.injected++
+	h.a.addInput(Input{Text: text}, h.emit)
+	return true
+}
+func (h *turnHost) Save() error    { return h.a.saveHistory() }
+func (h *turnHost) Compact() error { return h.a.compact(h.emit) }
 func (h *turnHost) Request(ctx context.Context) ([]json.RawMessage, error) {
 	return h.a.request(ctx, h.emit)
 }

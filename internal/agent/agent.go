@@ -15,6 +15,9 @@ type Host interface {
 	Execute(context.Context, entities.ToolCall) error
 	// Compact may shrink the context once all outputs of a step are committed.
 	Compact() error
+	// TurnEnd runs when the model answered without calls. Returning true means
+	// the host added a message and the loop must continue.
+	TurnEnd(context.Context) bool
 }
 
 func Run(ctx context.Context, host Host) error {
@@ -59,6 +62,9 @@ func Run(ctx context.Context, host Host) error {
 			}
 		}
 		if steered := host.AcceptSteering(); calls == 0 && !steered {
+			if host.TurnEnd(ctx) {
+				continue
+			}
 			return nil
 		}
 	}
