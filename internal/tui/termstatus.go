@@ -81,6 +81,18 @@ func (t *termState) finish(status, title string) {
 	t.setTitle()
 }
 
+// seen drops the finished mark once the user interacts: the result was noticed.
+func (t *termState) seen() {
+	if t.state != "done" && t.state != "error" {
+		return
+	}
+	if t.state == "error" {
+		t.write("\x1b]9;4;0\x07")
+	}
+	t.state = "idle"
+	t.setTitle()
+}
+
 func (t *termState) rename(title string) {
 	if title != t.title {
 		t.title = title

@@ -553,6 +553,12 @@ func TestTermStateTurn(t *testing.T) {
 		t.Fatalf("done = %q", got)
 	}
 	out.Reset()
+	ts.seen()
+	ts.seen()
+	if got := out.String(); got != "\x1b]2;fix the bug\x07" {
+		t.Fatalf("seen = %q", got)
+	}
+	out.Reset()
 	ts.start("fix the bug")
 	out.Reset()
 	ts.finish("error", "fix the bug")
