@@ -58,7 +58,7 @@ func infoRows(info core.Info) []menuRow {
 		}
 		cache = fmt.Sprintf("%.0f%% cache hit", percent)
 	}
-	text := "Project:\n" + info.Name + "\n" + info.Description + "\nColor: " + info.Color + "\n\nSession:\n" + info.Session + "\n" + info.Title + "\n" + core.DisplayPath(info.Project) +
+	text := "Session:\n" + info.Session + "\n" + info.Title + "\n" + core.DisplayPath(info.Project) +
 		"\n\nModel:\n" + info.Provider + "\n" + info.Model + " · " + info.Effort +
 		"\n\nConfigs:\n" + strings.Join(configs, "\n") +
 		"\n\nContext:\n" + fmt.Sprintf("%s in · %s out · %s context · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), formatContext(info.Context), cache)

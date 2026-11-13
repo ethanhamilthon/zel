@@ -9,14 +9,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 	"zel/internal/agent"
 	"zel/internal/entities"
-	"zel/internal/hooks"
 	"zel/internal/provider"
 	"zel/internal/store"
 
@@ -55,7 +53,7 @@ func partialCode(arguments string) string {
 type Options struct {
 	Mode                    string               // tui or headless, exported as ZEL_MODE
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
-	SessionReady            func(*Runtime) error // Called before startup hooks; may persist and announce the session.
+	SessionReady            func(*Runtime) error // May persist and announce the session.
 }
 
 type Runtime struct {
@@ -81,7 +79,6 @@ type Runtime struct {
 	queue               *Steering
 	slots               *imageSlots
 	tasks               *tasks
-	hooks               *hooks.Runner
 	currentToolSubagent *SubagentRun
 }
 
@@ -95,7 +92,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{opts: opts, home: home, histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, hooks: &hooks.Runner{}}
+	a := &Runtime{opts: opts, home: home, histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}}
 	a.Shell.Env = a.shellEnv
 	if err := a.loadConfig(dir); err != nil {
 		return nil, err
@@ -122,8 +119,6 @@ func New(dir string, opts Options) (*Runtime, error) {
 			return nil, err
 		}
 	}
-	a.fire("app_start", nil)
-	a.fire("session_start", nil)
 	return a, nil
 }
 
@@ -170,26 +165,11 @@ func (a *Runtime) Run(ctx context.Context, text string, emit func(TurnEvent)) er
 }
 
 func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
-	started := time.Now()
-	if !input.Notice {
-		if a.UserMessages() == 0 {
-			a.fireContext(ctx, "first_message", map[string]string{"ZEL_MESSAGE": input.Text})
-		}
-		a.fireContext(ctx, "user_message", map[string]string{"ZEL_MESSAGE": input.Text})
-	}
-	a.fireContext(ctx, "turn_start", map[string]string{"ZEL_TURN_SOURCE": map[bool]string{true: "notice", false: "user"}[input.Notice], "ZEL_MESSAGE": input.Text})
 	defer func() {
 		err = a.safeError(err)
-		status := "ok"
-		switch {
-		case errors.Is(err, context.Canceled):
-			status = "cancelled"
-		case err != nil:
-			status = "error"
+		if err != nil && !errors.Is(err, context.Canceled) {
 			emit(TurnEvent{Kind: "error", Text: err.Error()})
-			a.fire("error", map[string]string{"ZEL_ERROR": err.Error()})
 		}
-		a.fire("turn_end", map[string]string{"ZEL_TURN_STATUS": status, "ZEL_TURN_DURATION_MS": millis(time.Since(started))})
 		if a.HasSavedSession() {
 			if e := a.saveHistory(); e != nil {
 				err = errors.Join(err, e)
@@ -220,17 +200,11 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 			if strings.TrimSpace(instruction.Text) != "" || len(instruction.Images) > 0 {
 				a.addInput(instruction, emit)
 				accepted = true
-				if !instruction.Notice {
-					a.fireContext(ctx, "user_message", map[string]string{"ZEL_MESSAGE": instruction.Text})
-				}
 			}
 		}
 		return accepted
 	}
 
-	for _, text := range a.takePasted() {
-		a.addInput(Input{Text: text, Notice: true}, emit)
-	}
 	shown := inputEvent(input)
 	shown.ID = fmt.Sprintf("input-%d", time.Now().UnixNano())
 	a.commitInput(input)
@@ -283,7 +257,6 @@ func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, e
 		a.queue.drainTyped()
 		detach = a.queue.typedSignal()
 	}
-	a.fireContext(ctx, "bash_start", map[string]string{"ZEL_COMMAND": args.Command})
 	shellStarted := time.Now()
 	if strings.Contains(args.Command, "zel -p") {
 		a.histMu.Lock()
@@ -301,7 +274,6 @@ func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, e
 		}()
 	}
 	result, bg := a.Shell.Run(ctx, args.Command, timeout, limit, detach)
-	a.fire("bash_end", map[string]string{"ZEL_COMMAND": args.Command, "ZEL_EXIT_CODE": strconv.Itoa(result.ExitCode), "ZEL_OUTPUT": result.Output, "ZEL_DURATION_MS": millis(time.Since(shellStarted))})
 	if bg == nil {
 		return result
 	}
@@ -321,18 +293,6 @@ func (a *Runtime) itemID(index int64) string {
 }
 
 func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []json.RawMessage, err error) {
-	requestStarted := time.Now()
-	a.fireContext(ctx, "model_request_start", nil)
-	for _, text := range a.takePasted() {
-		a.addInput(Input{Text: text, Notice: true}, emit)
-	}
-	defer func() {
-		vars := map[string]string{"ZEL_DURATION_MS": millis(time.Since(requestStarted))}
-		if err != nil {
-			vars["ZEL_ERROR"] = err.Error()
-		}
-		a.fire("model_request_end", vars)
-	}()
 	defer func() { err = a.safeError(err) }()
 	settings, client := a.snapshot()
 	if hint := settings.SetupHint(); hint != "" {

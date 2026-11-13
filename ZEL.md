@@ -1,9 +1,3 @@
----
-name: Zel
-description: A minimal terminal AI coding agent
-color: olive
----
-
 # Zel - minimalistic AI coding agent
 
 - Keep the project language English (UI, docs, comments).

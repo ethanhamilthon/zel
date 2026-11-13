@@ -13,7 +13,6 @@ No provider or database is opened for standalone helpers such as `zel init`.
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | SQLite opening, migrations, preferences, session/item transactions and task records | `entities` |
 | `shell` | Command execution, process groups, cancellation, bounded output and image capture | `entities` |
-| `hooks` | Lifecycle subscriptions, bounded execution and buffered hook output | `config`, `shell` |
 | `agent` | One model/tool loop, steering checkpoints and cancellation boundaries | `entities` |
 | `core` | Runtime assembly, sessions, controller, queues, task lifecycle, persistence and application events | Backend packages |
 | `cli` | Argument parsing, helper commands, output and headless execution | `core`, `entities` |
@@ -49,9 +48,7 @@ existing instruction layers. `config` never opens the database or imports runtim
 types. Session model overrides and mutable execution state remain in `core`.
 
 All SQL lives in `store`. Existing database paths, migrations, saved history,
-configuration formats and helper protocols are retained. Hooks execute through
-`shell`, preserve process-group cleanup and timeouts, and queue successful output
-for the next safe point in the turn rather than starting a turn themselves.
+configuration formats and helper protocols are retained.
 
 ## Verification
 

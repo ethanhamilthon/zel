@@ -9,8 +9,9 @@ import (
 	"time"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"zel/internal/core"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (

@@ -22,8 +22,8 @@ GETTING STARTED
   Preferences and API keys are stored locally in ~/.zel/zel.db, not encrypted.
 
 COMMANDS
-  init            Create ZEL.md here using the folder name, a random color and
-                  local AGENTS.md instructions, if present. Never overwrite it.
+  init            Create ZEL.md here from local AGENTS.md instructions, if
+                  present. Never overwrite it.
   --config FILE   Load this ZEL.md-format instruction file after all other layers.
   -p PROMPT       Run one task without the TUI. Print the persisted session ID
                   first, then the final answer and exit. Diagnostics go to stderr.
@@ -46,30 +46,20 @@ COMMANDS
 PROJECT INSTRUCTIONS
   Load $ZEL_HOME/ZEL.md, then ZEL.md from / down to the working directory, then
   --config FILE. Missing implicit files are skipped; the explicit file must exist.
-  YAML front matter accepts name, description, color, and hooks. Markdown after
-  the front matter is the system prompt. Bodies and hooks accumulate; later
-  metadata overrides earlier values. A hook runs in its defining file's directory.
-  Color selects one of 20 calm accents; default terracotta. Errors remain red.
+  Each file is plain Markdown; layers accumulate into the system prompt.
   A session keeps its saved prompt until Reload or New session.
 
-HOOKS
-  app_start, app_exit, session_start, session_close, first_message, user_message,
-  turn_start, turn_end, bash_start, bash_end, model_request_start,
-  model_request_end, error. Each event maps to a shell command or command list.
-  Hooks receive ZEL_EVENT and relevant ZEL_* event data (see README.md).
-  A hook has a 10-second timeout. Successful nonempty stdout enters model context
-  at a safe request boundary; it never starts a new turn. Closing output, stderr,
-  and failures go to Tracing. Hooks and Bash share a head/tail output budget:
-  4096 bytes keeps the first 2048 + marker + last 2048; zero is unlimited.
+OUTPUT
+  Bash output uses a head/tail budget: 4096 bytes keeps the first 2048 + marker
+  + last 2048; zero is unlimited.
 
 ENVIRONMENT
   ZEL_HOME        State directory, default ~/.zel: zel.db, ZEL.md, locks/, run/,
                   attachments/, tasks/, and events/.
   ZEL_CONFIG      Explicit instruction file; set by --config, inherited by tools.
-  ZEL_SESSION_ID  Active session ID, exported to Bash and hooks.
-  ZEL_PARENT      Root session ID of the whole tree, exported to Bash and hooks.
+  ZEL_SESSION_ID  Active session ID, exported to Bash.
+  ZEL_PARENT      Root session ID of the whole tree, exported to Bash.
   ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
-  ZEL_MODE        tui or headless for hooks.
   VISUAL, EDITOR  External editor fallback, after the UI preference; default nvim.
 
 INTERFACE
@@ -82,7 +72,7 @@ INTERFACE
   Chat shows only user messages, answers, and the working indicator.
 
 SECURITY
-  Commands and hooks execute with your user permissions and network access;
+  Commands execute with your user permissions and network access;
   this is not a sandbox. API keys support {{$VARIABLE}} environment references.
   Zel uses fresh data and does not migrate or read Dashy configuration.
   The TUI emits OSC 7501 terminal status reports.

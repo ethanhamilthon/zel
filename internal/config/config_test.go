@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -28,14 +27,7 @@ func TestInitProject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := DefaultSettings()
-			if err := mergeConfig(&s, path); err != nil {
-				t.Fatal(err)
-			}
-			if s.Name != filepath.Base(dir) || AccentColors[s.Color] == "" {
-				t.Fatalf("invalid metadata: %+v", s)
-			}
-			if !strings.HasSuffix(string(before), "---\n\n"+instructions) {
+			if string(before) != instructions {
 				t.Fatalf("instructions not preserved: %q", before)
 			}
 			if created, err := InitProject(dir); err != nil || created {

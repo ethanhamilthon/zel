@@ -1403,7 +1403,7 @@ func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
 	}
 }
 
-func TestSingleAccentAndProjectMetadata(t *testing.T) {
+func TestSingleAccent(t *testing.T) {
 	applyTheme(map[string]string{"accent": "#80b3ad"})
 	for _, color := range []string{string(inputBlue), string(cyan), string(assistantColor), string(infoColor), string(warnColor)} {
 		if color != "#80b3ad" {
@@ -1413,18 +1413,7 @@ func TestSingleAccentAndProjectMetadata(t *testing.T) {
 	if string(errorColor) == string(inputBlue) || string(queueColor) == string(inputBlue) {
 		t.Fatal("error red or neutral queued pulse lost")
 	}
-	defer applyTheme(nil)
-	if len(core.AccentColors) != 20 {
-		t.Fatal("expected 20 accents")
-	}
-	rows := infoRows(core.Info{Name: "Project", Description: "Description", Color: "teal"})
-	var text string
-	for _, row := range rows {
-		text += row.label + "\n"
-	}
-	if !strings.Contains(text, "Project\nDescription\nColor: teal") {
-		t.Fatalf("project metadata missing: %s", text)
-	}
+	applyTheme(nil)
 }
 
 func TestFilesEditorRestoresBrowserWithoutChangingDraft(t *testing.T) {

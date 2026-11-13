@@ -15,7 +15,7 @@ var termOut io.Writer
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // termState reports turn progress to the terminal through OSC 9;4 progress,
-// the window title. Desktop notifications are left to hooks.
+// the window title.
 type termState struct {
 	state, title string // state: idle, working, done or error
 	frame        int

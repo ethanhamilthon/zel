@@ -11,7 +11,6 @@ const (
 	ShellTimeout    = 120
 	ShellMaxTimeout = 600
 	ShellOutput     = 8192
-	HookTimeout     = 10
 )
 
 var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -38,14 +37,6 @@ type UI struct {
 // SystemBlock is a Markdown body from one project instruction layer.
 type SystemBlock struct{ Name, Value string }
 
-// Hook is a command subscribed to a project lifecycle event.
-type Hook struct {
-	Name   string
-	Events []string
-	Run    string
-	Dir    string
-}
-
 // Settings is the effective configuration: the layers of ConfigPaths merged in
 // order, plus the session's model selection.
 type Settings struct {
@@ -56,8 +47,6 @@ type Settings struct {
 	UI                        UI
 	Providers                 map[string]Provider
 	System                    []SystemBlock `json:"-"`
-	Hooks                     []Hook        `json:"-"`
-	Name, Description, Color  string        `json:"-"`
 }
 
 func DefaultSettings() Settings {
@@ -118,13 +107,3 @@ func Validate(s Settings) error {
 	}
 	return nil
 }
-
-var AccentColors = map[string]string{
-	"terracotta": "#d97757", "rose": "#c98798", "dusty-pink": "#c59baa", "mauve": "#b69ab8",
-	"lavender": "#a79bc8", "violet": "#a18bc0", "slate": "#8e9db5", "blue": "#82a5c6",
-	"sky": "#8ab6c9", "teal": "#80b3ad", "sage": "#9bb49a", "olive": "#acb18b",
-	"moss": "#93a382", "sand": "#c6b38c", "ochre": "#c4a46d", "amber": "#c9a179",
-	"peach": "#d3a28e", "clay": "#b88e7c", "copper": "#bd937c", "plum": "#ab8fa6",
-}
-
-var HookEvents = []string{"app_start", "app_exit", "session_start", "session_close", "first_message", "user_message", "turn_start", "turn_end", "bash_start", "bash_end", "model_request_start", "model_request_end", "error"}

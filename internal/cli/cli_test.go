@@ -131,15 +131,12 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 				t.Fatal(err)
 			}
 			config := filepath.Join(t.TempDir(), "instructions.md")
-			if err := os.WriteFile(config, []byte("---\nhooks:\n  app_start: |\n    printf '%s/%s/%s/%s' \"$ZEL_MODE\" \"$ZEL_PROVIDER\" \"$ZEL_MODEL\" \"$ZEL_EFFORT\" > hook-values\n---\nheadless config"), 0600); err != nil {
+			if err := os.WriteFile(config, []byte("headless config"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			cwd, _ := os.Getwd()
 			out := &headlessOutput{first: func(id string) {
 				session = id
-				if _, err := os.Stat(filepath.Join(filepath.Dir(config), "hook-values")); !os.IsNotExist(err) {
-					t.Errorf("startup hooks ran before session ID: %v", err)
-				}
 				// The ID must already be readable, without acquiring or changing the session.
 				if _, err := core.ReadSession(cwd, id); err != nil {
 					t.Errorf("session not persisted before stdout: %v", err)
@@ -147,10 +144,6 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			}}
 			var diagnostics strings.Builder
 			err := Run(ctx, []string{"-p", "hello", "--provider", "p", "--model", "override", "--effort", "high", "--config", config}, strings.NewReader(""), out, &diagnostics, Options{})
-			hook, hookErr := os.ReadFile(filepath.Join(filepath.Dir(config), "hook-values"))
-			if hookErr != nil || string(hook) != "headless/p/override/high" {
-				t.Fatalf("startup hook overrides: %q err=%v", hook, hookErr)
-			}
 			if !requested || session == "" {
 				t.Fatalf("request=%v session=%q err=%v", requested, session, err)
 			}

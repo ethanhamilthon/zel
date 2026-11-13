@@ -51,7 +51,6 @@ func fail(code, format string, args ...any) error {
 // Info describes the current session for the TUI information page.
 type Info struct {
 	Session, Title, Project, DB string
-	Name, Description, Color    string
 	Provider, Model, Effort     string
 	Configs                     []string // config layers that exist, in merge order
 	Messages, Requests, Tasks   int      // user messages, model requests with usage, running tasks

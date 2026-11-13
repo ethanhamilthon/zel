@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"zel/internal/core"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"zel/internal/core"
 )
 
 func (m model) menuView() string {

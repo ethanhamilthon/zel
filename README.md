@@ -39,7 +39,7 @@ Effort defaults to `medium`.
 Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
-Settings controls the external editor, Bash/hook output budget, Bash timeout,
+Settings controls the external editor, Bash output budget, Bash timeout,
 and reasoning summaries. Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
@@ -47,109 +47,36 @@ environment variable with `{{$VARIABLE}}`.
 
 ## Project instructions: ZEL.md
 
-Run `zel init` in a project folder to create `ZEL.md`. It uses the folder name,
-a random supported color, and the exact contents of a local `AGENTS.md` as the
-instruction body when present (otherwise empty). An existing `ZEL.md` is never
+Run `zel init` in a project folder to create `ZEL.md` from the exact contents of
+a local `AGENTS.md` when present (otherwise empty). An existing `ZEL.md` is never
 overwritten. This command does not require a provider or create a session.
 
-```markdown
----
-name: My project
-description: A short project description
-color: terracotta
-hooks:
-  app_start: "./start.sh"
-  bash_end:
-    - "./check.sh"
-    - "./report.sh"
----
-You are a coding assistant for this project.
-Read code first. Keep changes focused and verify your work.
-```
-
-The YAML front matter is optional; the Markdown body is the system prompt.
-Unknown front-matter fields, invalid colors, and unknown hook events are errors.
-Layers load in order:
+`ZEL.md` is plain Markdown: the whole file is the system prompt. Layers load in
+order and accumulate:
 
 1. `$ZEL_HOME/ZEL.md` (default `~/.zel/ZEL.md`)
 2. Every `ZEL.md` from the filesystem root down to the working directory
 3. `--config FILE`, when supplied (must exist)
 
-Bodies and hooks accumulate in layer order. Later `name`, `description`, and
-`color` fields override earlier values. Hook commands run relative to the file
-that defines them. Metadata appears in Info; the main menu header is
-`zel VERSION/NAME` (or `/Menu` without a project name).
-
 A session saves its prompt snapshot. Reload rebuilds it; while a turn is active,
 the prompt change is deferred until that turn finishes. New sessions reread layers.
 
-### Colors
-
-One accent is used throughout the application, alongside neutral shades and red
-for errors. The default is `terracotta`. The 20 supported names are:
-
-`terracotta`, `rose`, `dusty-pink`, `mauve`, `lavender`, `violet`, `slate`, `blue`,
-`sky`, `teal`, `sage`, `olive`, `moss`, `sand`, `ochre`, `amber`, `peach`, `clay`,
-`copper`, `plum`.
-
-## Hooks
-
-Each event accepts a shell command or a list of commands:
-
-- `app_start`, `app_exit`
-- `session_start`, `session_close`
-- `first_message`, `user_message`
-- `turn_start`, `turn_end`
-- `bash_start`, `bash_end`
-- `model_request_start`, `model_request_end`
-- `error`
-
-`session_start` also fires on resume. `session_close` fires on session switches
-and app exit. `first_message` fires only once per session, not on each resume.
-`user_message` includes messages accepted as steering, but not system notices.
-
-Every hook receives `ZEL_EVENT`, `ZEL_SESSION_ID`, `ZEL_CWD`, `ZEL_HOME`,
-`ZEL_MODE`, `ZEL_PROVIDER`, `ZEL_MODEL`, `ZEL_EFFORT`, and
-`ZEL_CONTEXT_TOKENS`. A session's helper socket is available as `ZEL_ENDPOINT`.
-Event-specific variables:
-
-| Event | Additional variables |
-|---|---|
-| `first_message`, `user_message` | `ZEL_MESSAGE` |
-| `turn_start` | `ZEL_MESSAGE`, `ZEL_TURN_SOURCE` (`user` or `notice`) |
-| `turn_end` | `ZEL_TURN_STATUS`, `ZEL_TURN_DURATION_MS` |
-| `bash_start` | `ZEL_COMMAND` |
-| `bash_end` | `ZEL_COMMAND`, `ZEL_OUTPUT`, `ZEL_EXIT_CODE`, `ZEL_DURATION_MS` |
-| `model_request_end` | `ZEL_DURATION_MS`, `ZEL_ERROR` on failure |
-| `error` | `ZEL_ERROR` |
-
-Only necessary event data is added, not the full history or provider secrets.
-Like ordinary shell commands, hooks still inherit the user's environment.
-
-Hooks run sequentially in layer order, with a 10-second timeout per command.
-Successful, nonempty stdout is added to model context at the next safe request
-boundary. Pre-request hooks finish before the request; output during a turn is
-steering for a subsequent request. Output left after a turn waits for the next
-user-triggered turn. **Hook output never starts a turn by itself.** Closing hook
-output goes only to Tracing; shutdown waits for closing hooks within their timeouts.
-Hook errors and stderr go to Tracing without failing the turn.
-
 ### Output limits
 
-Bash and hook stdout use the same byte budget and head/tail truncation. With
+Bash output uses a byte budget with head/tail truncation. With
 4096 bytes configured, Zel retains the first 2048 bytes, a truncation marker,
 and the last 2048 bytes. The marker is additional to the retained-byte budget.
 Output within the limit is unchanged. Zero means unlimited; the default is
-8192 bytes. Hook stderr is bounded in the same way.
+8192 bytes.
 
 ## Chat, Tracing, and files
 
 Chat shows user messages, agent messages, and the working indicator. Tools,
-thoughts, hook output, errors, and other events belong in Tracing; there are no
+thoughts, errors, and other events belong in Tracing; there are no
 visibility toggles. Info, Tracing, and Tasks refresh while open.
 
 Tracing search accepts a leading exact type, optionally followed by search text:
-`:user`, `:assistant fix tests`, `:bash go test`, `:hook`, `:error`. Every displayed
+`:user`, `:assistant fix tests`, `:bash go test`, `:error`. Every displayed
 entry type is supported; ordinary search works without a prefix.
 
 Files browses the working directory, including hidden files, `.` and `..`.
@@ -212,7 +139,7 @@ resumed from the TUI. A snapshot includes committed items, not live stream delta
 `--provider`, `--model` and `--effort` override saved defaults for this headless
 session only; they never change defaults for later sessions. `--config` keeps its
 usual highest-priority instruction layer. Headless mode reuses the normal agent,
-tools, hooks and session store; it is not an interactive request protocol.
+tools and session store; it is not an interactive request protocol.
 
 `zel tasks` manages background commands, `zel view` queues images, and `zel models`
 checks providers (including `--json` output). Run `zel --help` for details.
@@ -234,7 +161,7 @@ until the turn ends. New/resume asks before stopping running background tasks;
 provider deletion asks before deleting the provider and its saved API key.
 
 Zel executes commands with your user permissions and network access, not inside
-a sandbox. Review project hooks before trusting an unfamiliar `ZEL.md`.
+a sandbox.
 
 ## Contributing
 

@@ -28,24 +28,24 @@ func TestLoadConfigLayers(t *testing.T) {
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(home, "ZEL.md"), "---\nname: Global\ncolor: sage\nhooks:\n  turn_start: echo global\n---\nGlobal prompt")
-	writeFile(t, filepath.Join(root, "projects", "ZEL.md"), "---\ndescription: Parent description\nhooks:\n  turn_start: echo parent\n---\nParent prompt")
-	writeFile(t, filepath.Join(dir, "ZEL.md"), "---\nname: Project\nhooks:\n  turn_start: [echo local, echo other]\n---\nLocal prompt")
+	writeFile(t, filepath.Join(home, "ZEL.md"), "Global prompt")
+	writeFile(t, filepath.Join(root, "projects", "ZEL.md"), "Parent prompt")
+	writeFile(t, filepath.Join(dir, "ZEL.md"), "Local prompt")
 	flagged := filepath.Join(root, "override.md")
-	writeFile(t, flagged, "---\ncolor: blue\n---\nFlag prompt")
+	writeFile(t, flagged, "Flag prompt")
 	t.Setenv("ZEL_CONFIG", flagged)
 	loaded, err := LoadConfig(home, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "Project" || loaded.Description != "Parent description" || loaded.Color != "blue" || loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.Editor != "nvim --clean" {
+	if loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.Editor != "nvim --clean" {
 		t.Fatalf("loaded %+v", loaded)
 	}
 	var prompts []string
 	for _, b := range loaded.System {
 		prompts = append(prompts, b.Value)
 	}
-	if strings.Join(prompts, "|") != "Global prompt|Parent prompt|Local prompt|Flag prompt" || len(loaded.Hooks) != 4 {
+	if strings.Join(prompts, "|") != "Global prompt|Parent prompt|Local prompt|Flag prompt" {
 		t.Fatalf("layers %+v", loaded)
 	}
 	if Redact(loaded, "key sk-secret") != "key [redacted]" {
@@ -55,7 +55,7 @@ func TestLoadConfigLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := LoadConfig(home, dir)
-	if err != nil || len(again.System) != 4 || len(again.Hooks) != 4 {
+	if err != nil || len(again.System) != 4 {
 		t.Fatalf("project state was persisted: %+v %v", again, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "config.toml")); !os.IsNotExist(err) {
@@ -64,16 +64,6 @@ func TestLoadConfigLayers(t *testing.T) {
 	t.Setenv("ZEL_CONFIG", filepath.Join(root, "missing.md"))
 	if _, err := LoadConfig(home, dir); err == nil {
 		t.Fatal("missing explicit file accepted")
-	}
-}
-
-func TestLoadConfigRejectsMalformedFrontMatter(t *testing.T) {
-	for _, text := range []string{"---\nmodle: x\n---\n", "---\ncolor: unknown\n---\n", "---\nhooks:\n  unknown: echo hi\n---\n", "---\nname: x", "---\nhooks: []\n---\n", "---\nhooks:\n  turn_start: ''\n---\n"} {
-		home, dir := t.TempDir(), t.TempDir()
-		writeFile(t, filepath.Join(dir, "ZEL.md"), text)
-		if _, err := LoadConfig(home, dir); err == nil {
-			t.Fatalf("accepted %q", text)
-		}
 	}
 }
 
@@ -326,150 +316,6 @@ func TestEditorConfigurationRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHookOutputIsBoundedAndFailuresAreTraceOnly(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	a.cfg.mu.Lock()
-	base := a.cfg.base
-	base.ShellOutput = 4096
-	base.Hooks = []Hook{
-		{Name: "large", Events: []string{"turn_start"}, Run: "printf '%02048d' 0 | tr '0' 'A'; printf '%03000d' 0 | tr '0' 'X'; printf '%02048d' 0 | tr '0' 'Z'"},
-		{Name: "failed", Events: []string{"turn_start"}, Run: "echo rejected; echo stderr-message >&2; exit 7"},
-		{Name: "empty", Events: []string{"turn_start"}, Run: "printf '   '"},
-	}
-	if err := a.applyLocked(base); err != nil {
-		t.Fatal(err)
-	}
-	a.cfg.mu.Unlock()
-	a.fire("turn_start", nil)
-	output := a.takePasted()
-	if len(output) != 1 || !strings.Contains(output[0], strings.Repeat("A", 2048)+"\n[output truncated:") || !strings.Contains(output[0], "first 2048 + last 2048 kept)") || !strings.Contains(output[0], strings.Repeat("Z", 2048)+"\n</hook-output>") || strings.Contains(output[0], "XXXX") {
-		t.Fatalf("output: %q", output)
-	}
-	var trace string
-	for _, e := range a.Trace() {
-		trace += e.Kind + ":" + e.Text + "\n"
-	}
-	if !strings.Contains(trace, "stderr-message") || !strings.Contains(trace, "failed: exit status 7") {
-		t.Fatalf("trace: %s", trace)
-	}
-	if len(a.takePasted()) != 0 {
-		t.Fatal("output consumed twice")
-	}
-}
-
-func TestHookLifecycleAndTurnBoundaries(t *testing.T) {
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		if n == 1 {
-			return bashReply("c1", "printf bash-output")
-		}
-		return textReply("done")
-	}}
-	var logPath string
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		logPath = filepath.Join(dir, "events.txt")
-		var hooks strings.Builder
-		for _, event := range HookEvents {
-			hooks.WriteString("  " + event + ": './hook.sh'\n")
-		}
-		writeFile(t, filepath.Join(dir, "ZEL.md"), "---\nhooks:\n"+hooks.String()+"---\nProject instructions")
-		writeFile(t, filepath.Join(dir, "hook.sh"), `#!/bin/sh
-printf '%s:%s:%s:%s\n' "$ZEL_EVENT" "$ZEL_SESSION_ID" "$ZEL_MESSAGE" "$ZEL_COMMAND" >> events.txt
-case "$ZEL_EVENT" in
- turn_start) echo before-turn ;;
- model_request_start) echo before-request ;;
- bash_end) printf 'after-bash:%s\n' "$ZEL_OUTPUT" ;;
- turn_end) echo after-turn ;;
- app_exit|session_close) echo closing-only ;;
-esac
-`)
-		if err := os.Chmod(filepath.Join(dir, "hook.sh"), 0700); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if _, err := turn(t, a, "first"); err != nil {
-		t.Fatal(err)
-	}
-	if len(fp.requests()) != 2 {
-		t.Fatal("hook output triggered an additional request")
-	}
-	reqs := fp.requests()
-	if !strings.Contains(reqs[0], "before-turn") || !strings.Contains(reqs[0], "before-request") || strings.Contains(reqs[0], "after-turn") || !strings.Contains(reqs[1], "after-bash:bash-output") {
-		t.Fatalf("requests: %v", reqs)
-	}
-	if _, err := turn(t, a, "second"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(fp.requests()[2], "after-turn") {
-		t.Fatal("turn-end output not delivered on next user turn")
-	}
-	id := a.SessionID()
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Resume(id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := turn(t, a, "resumed"); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(fp.requests()[3], "closing-only") {
-		t.Fatal("closing output reached model")
-	}
-	a.Close()
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for event, want := range map[string]int{"first_message:": 1, "user_message:": 3, "app_start:": 1, "app_exit:": 1, "session_start:": 3, "session_close:": 3, "bash_start:": 1, "bash_end:": 1} {
-		count := 0
-		for _, line := range strings.Split(text, "\n") {
-			if strings.HasPrefix(line, event) {
-				count++
-			}
-		}
-		if count != want {
-			t.Fatalf("%s count %d want %d\n%s", event, count, want, text)
-		}
-	}
-	if !strings.Contains(text, "user_message:"+id+":first:") {
-		t.Fatalf("missing event environment: %s", text)
-	}
-}
-
-func TestHookTimeoutKillsProcessGroup(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	a.cfg.mu.Lock()
-	base := a.cfg.base
-	base.Hooks = []Hook{{Name: "timeout", Events: []string{"app_exit"}, Run: "sleep 60 & wait"}}
-	if err := a.applyLocked(base); err != nil {
-		t.Fatal(err)
-	}
-	a.cfg.mu.Unlock()
-	started := time.Now()
-	a.fire("app_exit", nil)
-	elapsed := time.Since(started)
-	if elapsed < 9*time.Second || elapsed > 13*time.Second {
-		t.Fatalf("timeout took %s", elapsed)
-	}
-	if len(a.takePasted()) != 0 {
-		t.Fatal("closing hook output queued")
-	}
-	base.Hooks = nil
-	a.cfg.mu.Lock()
-	_ = a.applyLocked(base)
-	a.cfg.mu.Unlock()
-	var errors string
-	for _, e := range a.Trace() {
-		if e.Kind == "error" {
-			errors += e.Text
-		}
-	}
-	if !strings.Contains(errors, "Hook timeout failed") {
-		t.Fatalf("timeout not traced: %s", errors)
-	}
-}
-
 func TestTraceMergesSourcesChronologically(t *testing.T) {
 	t.Setenv("ZEL_HOME", t.TempDir())
 	a, err := New(t.TempDir(), Options{})
@@ -546,8 +392,8 @@ func TestPackageBoundaries(t *testing.T) {
 	allowed := map[string]map[string]bool{
 		"entities": {}, "config": {},
 		"provider": {"entities": true}, "store": {"entities": true}, "shell": {"entities": true},
-		"hooks": {"config": true, "shell": true}, "agent": {"entities": true},
-		"tui": {"core": true, "entities": true}, "cli": {"core": true, "entities": true},
+		"agent": {"entities": true},
+		"tui":   {"core": true, "entities": true}, "cli": {"core": true, "entities": true},
 	}
 	for name, dependencies := range allowed {
 		files, err := filepath.Glob(filepath.Join(root, name, "*.go"))

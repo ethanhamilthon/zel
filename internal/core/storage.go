@@ -123,7 +123,6 @@ func (a *Runtime) CustomTitle() string { return a.title }
 
 func (a *Runtime) Rename(name string) error {
 	a.title = strings.Join(strings.Fields(name), " ")
-	a.fire("session_title_change", nil)
 	if !a.HasSavedSession() {
 		return nil
 	}
@@ -171,8 +170,7 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 	return result
 }
 
-// ReadSession reads a persisted snapshot without acquiring session ownership or
-// running hooks. It works while another process is running the session.
+// ReadSession reads a persisted snapshot without acquiring session ownership. It works while another process is running the session.
 func ReadSession(cwd, id string) ([]Record, error) {
 	if !validSessionID(id) {
 		return nil, fmt.Errorf("invalid session ID: %s", id)

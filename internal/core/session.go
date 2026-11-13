@@ -75,10 +75,6 @@ func (a *Runtime) StopNotifications() bool {
 func (a *Runtime) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
 
 func (a *Runtime) Close() {
-	if a.hooks != nil && a.db != nil {
-		a.fire("session_close", nil)
-		a.fire("app_exit", nil)
-	}
 	a.release()
 	if a.db != nil {
 		a.db.Close()
@@ -112,7 +108,7 @@ func (a *Runtime) changeSession(id string) error {
 		return err
 	}
 	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell,
-		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, hooks: a.hooks}
+		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}}
 	if err := next.loadConfig(a.Shell.Dir); err != nil {
 		return err
 	}
@@ -132,11 +128,8 @@ func (a *Runtime) changeSession(id string) error {
 			return err
 		}
 	}
-	a.fire("session_close", nil)
-	a.takePasted() // Do not carry output from the previous session.
 	a.release()
 	*a = *next
-	a.fire("session_start", nil)
 	return nil
 }
 

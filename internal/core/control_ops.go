@@ -239,7 +239,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	c.view(func() {
 		s := c.a.Settings()
-		info = Info{Name: s.Name, Description: s.Description, Color: s.Color, Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: s.DBPath,
+		info = Info{Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: s.DBPath,
 			Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: c.a.ConfigFiles(),
 			Messages: c.a.UserMessages(), Tasks: c.a.RunningTasks(), Context: c.a.ContextTokens()}
 		info.Usage, info.Requests = c.a.SessionUsage()
