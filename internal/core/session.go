@@ -90,7 +90,7 @@ func (a *Runtime) Reload() error {
 	if err := a.loadConfig(a.Shell.Dir); err != nil {
 		return err
 	}
-	a.loadLua()
+	a.reloadLua()
 	previous, frozen := a.prompt, a.promptFrozen
 	a.promptFrozen = false
 	if _, err := a.instructions(context.Background()); err != nil {

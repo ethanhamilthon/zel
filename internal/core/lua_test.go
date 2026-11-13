@@ -180,3 +180,32 @@ func TestBrokenInitLuaDoesNotStopTheSession(t *testing.T) {
 		t.Fatal("the built-in section is missing")
 	}
 }
+
+func TestReloadKeepsOldSnapshotOnBrokenInitLua(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	var path string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		path = filepath.Join(dir, ".zel", "init.lua")
+		writeFile(t, path, `require("zel").instructions("GOOD")`)
+	})
+	writeFile(t, path, `require("zel").instructions("NEW"); error("boom")`)
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn(t, a, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if req := fp.requests()[0]; !strings.Contains(req, "GOOD") || strings.Contains(req, "NEW") {
+		t.Fatalf("old snapshot lost: %s", req)
+	}
+	writeFile(t, path, `require("zel").instructions("FIXED")`)
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn(t, a, "again"); err != nil {
+		t.Fatal(err)
+	}
+	if req := fp.requests()[1]; !strings.Contains(req, "FIXED") {
+		t.Fatalf("reload did not apply: %s", req)
+	}
+}

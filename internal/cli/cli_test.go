@@ -10,13 +10,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"zel/internal/core"
 	"zel/internal/store"
@@ -359,5 +363,101 @@ func TestUpdateReplacesBinaryWithVerifiedRelease(t *testing.T) {
 	}
 	if newerVersion("0.10.0", "0.9.9") >= 0 || newerVersion("0.3.7", "0.4.0") <= 0 {
 		t.Fatal("version order")
+	}
+}
+
+// A parent `zel -p` run with an init.lua plugin function and a subagent: the whole
+// path through the lua tool, the host API, agents.run and the child's report.
+func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the zel binary")
+	}
+	bin := t.TempDir()
+	build := exec.Command("go", "build", "-o", filepath.Join(bin, "zel"), "../..")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	home := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	t.Setenv("ZEL_CONFIG", "")
+	var mu sync.Mutex
+	var prompts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		var body struct {
+			Instructions string
+			Input        []json.RawMessage
+		}
+		_ = json.Unmarshal(data, &body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		reply := func(item string) {
+			fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[%s]}}\n\n", item)
+		}
+		text := func(s string) {
+			item, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": s}}})
+			reply(string(item))
+		}
+		var first, lastOutput string
+		for _, in := range body.Input {
+			var m struct {
+				Role, Type, Output string
+				Content            json.RawMessage
+			}
+			_ = json.Unmarshal(in, &m)
+			if m.Role == "user" && first == "" {
+				_ = json.Unmarshal(m.Content, &first)
+			}
+			if m.Type == "function_call_output" {
+				lastOutput = m.Output
+			}
+		}
+		mu.Lock()
+		prompts = append(prompts, first)
+		mu.Unlock()
+		switch {
+		case first == "child task":
+			text("child answer")
+		case lastOutput != "":
+			text("parent final: " + lastOutput)
+		default:
+			if !strings.Contains(body.Instructions, "proj.hello(who: string)") || !strings.Contains(body.Instructions, "Project rule: be brief") {
+				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
+			}
+			code := "local r = agents.run{prompt = 'child task'}\nprint(r.ok, r.answer)\nprint(proj.hello('world'))\nstate.set('seen', 1, 'project')"
+			args, _ := json.Marshal(map[string]string{"code": code})
+			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": string(args)})
+			reply(string(item))
+		}
+	}))
+	defer server.Close()
+	settings := core.DefaultSettings()
+	settings.Provider, settings.Model = "p", "m"
+	settings.Providers["p"] = core.Provider{BaseURL: server.URL}
+	if err := core.WriteConfig(home, settings); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initLua := `local zel = require("zel")
+zel.instructions("Project rule: be brief")
+zel.fn{name = "proj.hello", summary = "greet", params = {{"who", "string"}}, run = function(who) return "hello " .. who end}`
+	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, diagnostics strings.Builder
+	if err := Run(context.Background(), []string{"-p", "parent"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
+		t.Fatalf("run: %v\n%s", err, diagnostics.String())
+	}
+	if !strings.Contains(out.String(), "parent final:") || !strings.Contains(out.String(), "true\tchild answer") || !strings.Contains(out.String(), "hello world") {
+		t.Fatalf("output: %s", out.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(prompts, "child task") {
+		t.Fatalf("the child never ran: %q", prompts)
 	}
 }

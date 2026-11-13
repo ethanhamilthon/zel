@@ -65,6 +65,18 @@ func (a *Runtime) loadLua() {
 	a.lua.set(luart.LoadConfig(luaEnv{a}, a.luaSources()))
 }
 
+// reloadLua builds a new config VM for Reload. If a layer fails to load the old
+// snapshot stays, so a typo in init.lua cannot take the plugins away mid-session.
+func (a *Runtime) reloadLua() {
+	next := luart.LoadConfig(luaEnv{a}, a.luaSources())
+	if old := a.lua.get(); old != nil && len(next.LoadErrs) > 0 {
+		next.Close()
+		a.notify("Reload failed: the previous init.lua snapshot stays")
+		return
+	}
+	a.lua.set(next)
+}
+
 // LuaDefaults returns the merged zel.defaults.
 func (a *Runtime) LuaDefaults() luart.Defaults {
 	if cfg := a.lua.get(); cfg != nil {
