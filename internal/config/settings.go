@@ -36,11 +36,8 @@ type UI struct {
 	Accent    string // accent color; empty selects the default
 }
 
-// SystemBlock is a Markdown body from one project instruction layer.
-type SystemBlock struct{ Name, Value string }
-
-// Settings is the effective configuration: the layers of ConfigPaths merged in
-// order, plus the session's model selection.
+// Settings is the effective configuration: stored preferences plus the session's
+// model selection. Instructions and plugins live in init.lua layers (LuaLayers).
 type Settings struct {
 	DBPath                    string `json:"-"`
 	Provider, Model, Effort   string
@@ -49,7 +46,6 @@ type Settings struct {
 	CompactionThreshold       int
 	UI                        UI
 	Providers                 map[string]Provider
-	System                    []SystemBlock `json:"-"`
 }
 
 func DefaultSettings() Settings {

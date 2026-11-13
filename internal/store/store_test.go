@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"zel/internal/entities"
 )
@@ -63,5 +64,39 @@ func TestSessionRoundTripAndExistingDatabase(t *testing.T) {
 	}
 	if err := db.RenameSession("unknown", "renamed"); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound for unknown session, got %v", err)
+	}
+}
+
+func TestKV(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "zel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, ok, err := db.KVGet("s", "a"); ok || err != nil {
+		t.Fatalf("missing key: %v %v", ok, err)
+	}
+	for _, kv := range [][3]string{{"s", "b", "2"}, {"s", "a1", `"x"`}, {"s", "a2", "3"}, {"p", "a1", "9"}} {
+		if err := db.KVSet(kv[0], kv[1], kv[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.KVSet("s", "b", "22")
+	if v, ok, _ := db.KVGet("s", "b"); !ok || v != "22" {
+		t.Fatalf("overwrite: %q", v)
+	}
+	if keys, _ := db.KVList("s", "a"); !reflect.DeepEqual(keys, []string{"a1", "a2"}) {
+		t.Fatalf("list: %v", keys)
+	}
+	if keys, _ := db.KVList("s", ""); len(keys) != 3 {
+		t.Fatalf("list all: %v", keys)
+	}
+	if n, _ := db.KVSize("s"); n != len("b22")+len(`a1"x"`)+len("a23") {
+		t.Fatalf("size: %d", n)
+	}
+	db.KVDelete("s", "b")
+	db.KVDeleteScope("p")
+	if n, _ := db.KVSize("p"); n != 0 {
+		t.Fatal("scope not cleared")
 	}
 }

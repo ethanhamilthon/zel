@@ -1,0 +1,307 @@
+package core
+
+import (
+	"context"
+	_ "embed"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"zel/internal/luart"
+	"zel/internal/shell"
+)
+
+//go:embed lua.md
+var luaMD string
+
+// LuaToolDescription is the description of the one tool the model gets.
+var LuaToolDescription = strings.TrimSpace(luaMD)
+
+// MaxAgentDepth bounds nested agents.spawn so a runaway prompt cannot fork forever.
+const MaxAgentDepth = 3
+
+// luaHolder keeps the config VM of init.lua layers. It is shared by pointer so a
+// session switch and Reload see the same value.
+type luaHolder struct {
+	mu     sync.RWMutex
+	cfg    *luart.Config
+	root   string
+	notice func(string)
+}
+
+func (h *luaHolder) get() *luart.Config {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.cfg
+}
+
+func (h *luaHolder) set(cfg *luart.Config) {
+	h.mu.Lock()
+	old := h.cfg
+	h.cfg = cfg
+	h.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+}
+
+// luaSources are the init.lua files of this session, in load order.
+func (a *Runtime) luaSources() []luart.Source {
+	var sources []luart.Source
+	for _, l := range LuaLayers(a.home, a.Shell.Dir) {
+		sources = append(sources, luart.Source{Name: l.Name, Path: l.Path})
+	}
+	return sources
+}
+
+// loadLua runs the init.lua layers into a fresh config VM: the snapshot of this
+// session. A layer that fails to load is skipped with a notice.
+func (a *Runtime) loadLua() {
+	a.lua.set(luart.LoadConfig(luaEnv{a}, a.luaSources()))
+}
+
+// LuaDefaults returns the merged zel.defaults.
+func (a *Runtime) LuaDefaults() luart.Defaults {
+	if cfg := a.lua.get(); cfg != nil {
+		return cfg.Defaults()
+	}
+	return luart.Defaults{}
+}
+
+// SetNoticeHandler routes notices raised from Lua (log.notice, load errors) to the UI.
+func (a *Runtime) SetNoticeHandler(fn func(string)) {
+	a.lua.mu.Lock()
+	a.lua.notice = fn
+	a.lua.mu.Unlock()
+}
+
+func (a *Runtime) notify(msg string) {
+	a.LogEvent("notice", msg)
+	a.lua.mu.RLock()
+	fn := a.lua.notice
+	a.lua.mu.RUnlock()
+	if fn != nil {
+		fn(msg)
+	}
+}
+
+// runLua executes one lua tool call.
+func (a *Runtime) runLua(ctx context.Context, code string) luart.Result {
+	s := a.Settings()
+	runner := &luart.Runner{Env: luaEnv{a}, Cfg: a.lua.get(),
+		Timeout: time.Duration(s.ShellTimeout) * time.Second, OutputLimit: s.ShellOutput}
+	return runner.Run(ctx, code)
+}
+
+// bgDone lets bg_done hooks rewrite or drop the result message of a finished job.
+func (a *Runtime) bgDone(kind, id string, result map[string]any) (string, bool) {
+	cfg := a.lua.get()
+	if cfg == nil || !cfg.HasHook("bg_done") {
+		return "", false
+	}
+	return cfg.BgDone(context.Background(), kind, id, result)
+}
+
+// luaEnv adapts the runtime to the host API of the Lua runtime.
+type luaEnv struct{ a *Runtime }
+
+func (e luaEnv) Info() luart.SessionInfo {
+	a := e.a
+	s := a.Settings()
+	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
+	cwd := a.Shell.Dir
+	info := luart.SessionInfo{ID: a.id, Cwd: cwd, Root: a.projectRoot(), Parent: ParentSession(), Depth: depth,
+		Model: s.Model, Effort: s.Effort, Home: a.home, TmpDir: filepath.Join(os.TempDir(), "zel-"+a.id)}
+	info.LuaPath = []string{filepath.Join(a.home, "lua")}
+	for d := filepath.Clean(cwd); ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, ".zel")); err == nil {
+			info.LuaPath = append(info.LuaPath, filepath.Join(d, ".zel", "lua"))
+			break
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	return info
+}
+
+// projectRoot is the git root of the session directory, else the directory itself.
+func (a *Runtime) projectRoot() string {
+	h := a.lua
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.root == "" {
+		h.root = a.Shell.Dir
+		cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+		cmd.Dir = a.Shell.Dir
+		if out, err := cmd.Output(); err == nil {
+			if root := strings.TrimSpace(string(out)); root != "" {
+				h.root = root
+			}
+		}
+	}
+	return h.root
+}
+
+func (e luaEnv) ShellEnv() map[string]string {
+	env := e.a.shellEnv()
+	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
+	env["ZEL_DEPTH"] = strconv.Itoa(depth)
+	return env
+}
+
+func (e luaEnv) State() luart.StateStore { return kvState{e.a} }
+
+func (e luaEnv) SpawnTask(cmd string, o luart.TaskOpts) (luart.Job, error) {
+	if e.a.tasks == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+	j, err := e.a.tasks.spawn(cmd, startOpts{kind: "task", name: o.Name, cwd: o.Cwd, env: o.Env, timeout: o.Timeout, waited: o.Waited})
+	if err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+func (e luaEnv) SpawnAgent(o luart.AgentOpts) (luart.Job, error) {
+	a := e.a
+	if a.tasks == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
+	if depth+1 > MaxAgentDepth {
+		return nil, fmt.Errorf("agents are nested too deeply (max depth %d)", MaxAgentDepth)
+	}
+	reports := filepath.Join(a.home, "reports")
+	if err := os.MkdirAll(reports, 0o700); err != nil {
+		return nil, err
+	}
+	report := filepath.Join(reports, fmt.Sprintf("%s-%d.json", a.id, time.Now().UnixNano()))
+	command := `zel -p "$ZEL_AGENT_PROMPT"`
+	for _, f := range [][2]string{{"--model", o.Model}, {"--effort", o.Effort}, {"--provider", o.Provider}} {
+		if f[1] != "" {
+			command += " " + f[0] + " " + shellQuote(f[1])
+		}
+	}
+	model := o.Model
+	if model == "" {
+		model = a.Settings().Model
+	}
+	env := map[string]string{"ZEL_AGENT_PROMPT": o.Prompt, "ZEL_DEPTH": strconv.Itoa(depth + 1), "ZEL_REPORT": report}
+	j, err := a.tasks.spawn(command, startOpts{kind: "agent", prompt: o.Prompt, model: model, cwd: o.Cwd, env: env, timeout: o.Timeout, waited: o.Waited, report: report})
+	if err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
+func (e luaEnv) GetJob(kind, id string) (luart.Job, bool) {
+	t := e.a.tasks
+	if t == nil {
+		return nil, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	j, ok := t.jobs[id]
+	if !ok || j.kind != kind {
+		return nil, false
+	}
+	return j, true
+}
+
+func (e luaEnv) ListJobs(kind string) []luart.JobInfo {
+	t := e.a.tasks
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	ids := append([]string(nil), t.order...)
+	jobs := make([]*job, 0, len(ids))
+	for _, id := range ids {
+		if j := t.jobs[id]; j != nil && j.kind == kind {
+			jobs = append(jobs, j)
+		}
+	}
+	t.mu.Unlock()
+	out := make([]luart.JobInfo, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, luart.JobInfo{ID: j.id, Kind: j.kind, Name: j.name, Cmd: j.cmd, Model: j.model, State: j.Status(), Prompt: j.prompt})
+	}
+	return out
+}
+
+// View attaches an image to the next model request, like `zel view`.
+func (e luaEnv) View(path string) error {
+	a := e.a
+	image, err := CaptureImageCopy(path, filepath.Join(a.home, "attachments"))
+	if err != nil {
+		return err
+	}
+	if !a.slots.reserve(1) {
+		return fmt.Errorf("at most %d new images per model request", MaxPendingImages)
+	}
+	if !a.queue.Push(Input{Text: "<view>\nImage queued by view().\n</view>", Images: []shell.Image{image}, Notice: true}) {
+		a.slots.release(1)
+		return fmt.Errorf("input queue is full")
+	}
+	return nil
+}
+
+func (e luaEnv) Notice(msg string) { e.a.notify(msg) }
+
+func (e luaEnv) Log(level, msg string) { e.a.LogEvent("lua-"+level, msg) }
+
+func (e luaEnv) Rename(name string) error { return e.a.Rename(name) }
+
+// kvState stores Lua state in the database: "session" per session, "project" per git root.
+type kvState struct{ a *Runtime }
+
+func (s kvState) scope(scope string) string {
+	if scope == "project" {
+		return "project:" + s.a.projectRoot()
+	}
+	return "session:" + s.a.id
+}
+
+func (s kvState) Get(scope, key string) (string, bool, error) {
+	return s.a.db.KVGet(s.scope(scope), key)
+}
+func (s kvState) Set(scope, key, value string) error { return s.a.db.KVSet(s.scope(scope), key, value) }
+func (s kvState) Delete(scope, key string) error     { return s.a.db.KVDelete(s.scope(scope), key) }
+func (s kvState) List(scope, prefix string) ([]string, error) {
+	return s.a.db.KVList(s.scope(scope), prefix)
+}
+func (s kvState) Size(scope string) (int, error) { return s.a.db.KVSize(s.scope(scope)) }
+
+// sessionStart runs the session_start hooks once per started or resumed session.
+func (a *Runtime) sessionStart() {
+	if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_start") {
+		cfg.SessionStart(context.Background())
+	}
+}
+
+// hookInput lets message hooks rewrite what the user typed.
+func (a *Runtime) hookInput(ctx context.Context, input Input) Input {
+	cfg := a.lua.get()
+	if input.Notice || cfg == nil || !cfg.HasHook("message") || input.Text == "" {
+		return input
+	}
+	input.Text = cfg.Message(ctx, input.Text)
+	return input
+}
+
+// turnEnd runs the turn_end hooks; a returned text becomes a new user message.
+func (a *Runtime) turnEnd(ctx context.Context) string {
+	cfg := a.lua.get()
+	if cfg == nil || !cfg.HasHook("turn_end") {
+		return ""
+	}
+	return cfg.TurnEnd(ctx, a.FinalText())
+}

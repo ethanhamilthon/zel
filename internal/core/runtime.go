@@ -3,7 +3,6 @@ package core
 import (
 	"cmp"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,18 +14,14 @@ import (
 	"unicode/utf8"
 	"zel/internal/agent"
 	"zel/internal/entities"
+	"zel/internal/luart"
 	"zel/internal/provider"
 	"zel/internal/store"
 
 	"zel/internal/shell"
 )
 
-var BashToolDescription = strings.TrimSpace(bashMD)
-
-//go:embed bash.md
-var bashMD string
-
-var codeField = regexp.MustCompile(`"command"\s*:\s*"`)
+var codeField = regexp.MustCompile(`"code"\s*:\s*"`)
 
 func partialCode(arguments string) string {
 	loc := codeField.FindStringIndex(arguments)
@@ -81,7 +76,7 @@ type Runtime struct {
 	queue               *Steering
 	slots               *imageSlots
 	tasks               *tasks
-	currentToolSubagent *SubagentRun
+	lua                 *luaHolder
 }
 
 func (a *Runtime) Home() string { return a.home }
@@ -94,7 +89,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{opts: opts, home: home, histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}}
+	a := &Runtime{opts: opts, home: home, histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}}
 	a.Shell.Env = a.shellEnv
 	if err := a.loadConfig(dir); err != nil {
 		return nil, err
@@ -106,9 +101,13 @@ func New(dir string, opts Options) (*Runtime, error) {
 		a.Close()
 		return nil, err
 	}
-	if opts.Provider != "" || opts.Model != "" || opts.Effort != "" {
+	a.loadLua()
+	// Initial selection: CLI flags, then zel.defaults, then the stored preferences.
+	defaults := a.LuaDefaults()
+	provider, model, effort := cmp.Or(opts.Provider, defaults.Provider), cmp.Or(opts.Model, defaults.Model), cmp.Or(opts.Effort, defaults.Effort)
+	if provider != "" || model != "" || effort != "" {
 		s := a.Settings()
-		if err := a.ConfigureSession(context.Background(), cmp.Or(opts.Provider, s.Provider), cmp.Or(opts.Model, s.Model), cmp.Or(opts.Effort, s.Effort)); err != nil {
+		if err := a.ConfigureSession(context.Background(), cmp.Or(provider, s.Provider), cmp.Or(model, s.Model), cmp.Or(effort, s.Effort)); err != nil {
 			a.release()
 			a.db.Close()
 			return nil, err
@@ -121,6 +120,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 			return nil, err
 		}
 	}
+	a.sessionStart()
 	return a, nil
 }
 
@@ -223,71 +223,26 @@ func parseCall(item json.RawMessage) (call functionCall, err error) {
 	return call, err
 }
 
-func callOutput(callID string, result shell.Result) json.RawMessage {
-	return raw(map[string]any{"type": "function_call_output", "call_id": callID, "output": string(raw(result))})
+func callOutput(callID, output string) json.RawMessage {
+	return raw(map[string]any{"type": "function_call_output", "call_id": callID, "output": output})
 }
 
-func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) (result shell.Result) {
-	var args struct {
-		Command string `json:"command"`
-		Timeout *int64 `json:"timeout"`
-	}
-	err := json.Unmarshal([]byte(arguments), &args)
+// runTool executes a lua tool call and returns the text the model sees. Messages
+// the user types meanwhile stay queued until the call ends.
+func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) string {
 	if ctx.Err() != nil {
-		return shell.Result{Output: ctx.Err().Error(), ExitCode: 130, Error: true}
+		return "error: lua: " + luart.ECANCELED + ": the call was cancelled"
 	}
-	if a.queue.hasTyped() {
-		return shell.Result{Output: "Skipped: the user sent a new message before this call started. Read it first; run the command again if it is still needed."}
+	if name != "lua" {
+		return "error: unknown tool: " + name
 	}
-	if name != "bash" {
-		return shell.Result{Output: "Unknown tool: " + name, Error: true}
+	var args struct {
+		Code string `json:"code"`
 	}
-	settings := a.Settings()
-	timeout, limit := time.Duration(settings.ShellTimeout)*time.Second, settings.ShellOutput
-	if err == nil && args.Timeout != nil {
-		if *args.Timeout <= 0 || *args.Timeout > ShellMaxTimeout {
-			err = fmt.Errorf("timeout must be 1..%d seconds", ShellMaxTimeout)
-		} else {
-			timeout = time.Duration(*args.Timeout) * time.Second
-		}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return "error: lua: " + luart.EINVAL + ": the tool input must be Lua code (" + err.Error() + ")"
 	}
-	if err != nil {
-		return shell.Result{Output: err.Error(), ExitCode: 2, Error: true}
-	}
-	var detach <-chan struct{}
-	if a.tasks != nil {
-		a.queue.drainTyped()
-		detach = a.queue.typedSignal()
-	}
-	shellStarted := time.Now()
-	if strings.Contains(args.Command, "zel -p") {
-		a.histMu.Lock()
-		a.currentToolSubagent = &SubagentRun{
-			ID:      callID,
-			Parent:  a.rootID(),
-			Started: shellStarted,
-			Command: args.Command,
-		}
-		a.histMu.Unlock()
-		defer func() {
-			a.histMu.Lock()
-			a.currentToolSubagent = nil
-			a.histMu.Unlock()
-		}()
-	}
-	result, bg := a.Shell.Run(ctx, args.Command, timeout, limit, detach)
-	if bg == nil {
-		return result
-	}
-	id, err := a.tasks.adopt(args.Command, bg)
-	if err != nil {
-		_ = bg.Cmd.Cancel()
-		_ = bg.Wait()
-		return shell.Result{Output: result.Output + "\n[zel: stopped; could not move it to the background: " + err.Error() + "]\n", ExitCode: 130, Error: true}
-	}
-	emit(TurnEvent{Kind: "notice", Text: "Command moved to the background as task " + id + "."})
-	return shell.Result{Output: fmt.Sprintf("The user sent a new message, so this command moved to the background as task %s and keeps running. "+
-		"Its result arrives as <task-result id=%q> when it ends; check it with: zel tasks status %s\n\nOutput so far:\n%s", id, id, id, cmp.Or(result.Output, "(none)"))}
+	return a.runLua(ctx, args.Code).Output
 }
 
 func (a *Runtime) itemID(index int64) string {
@@ -310,7 +265,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 		}
 	}
 	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: a.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
-		Tools: []provider.Tool{{Name: "bash", Description: BashToolDescription, Parameters: bashParameters(settings.ShellTimeout)}}}
+		Tools: []provider.Tool{{Name: "lua", Description: LuaToolDescription, Parameters: luaParameters(), Freeform: "code"}}}
 	started := time.Now()
 	a.histMu.Lock()
 	a.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(a.History))}
@@ -330,7 +285,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 			} else {
 				arguments[event.OutputIndex] = event.Arguments
 			}
-			if names[event.OutputIndex] == "bash" {
+			if names[event.OutputIndex] == "lua" {
 				emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: a.itemID(event.OutputIndex), Final: true})
 			}
 		case "response.output_item.added", "response.output_item.done":
@@ -342,7 +297,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 				if item.Arguments != "" {
 					arguments[event.OutputIndex] = item.Arguments
 				}
-				if item.Name == "bash" {
+				if item.Name == "lua" {
 					emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: a.itemID(event.OutputIndex), Final: true})
 					return nil
 				}
@@ -444,17 +399,11 @@ func (a *Runtime) FinalText() string {
 
 func (a *Runtime) SessionID() string { return a.id }
 
-func bashParameters(defaultTimeout int) map[string]any {
+func luaParameters() map[string]any {
 	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"command": map[string]any{"type": "string"},
-			"timeout": map[string]any{
-				"type":        []string{"integer", "null"},
-				"description": fmt.Sprintf("seconds, default %d, maximum %d", defaultTimeout, ShellMaxTimeout),
-			},
-		},
-		"required":             []string{"command", "timeout"},
+		"type":                 "object",
+		"properties":           map[string]any{"code": map[string]any{"type": "string", "description": "Lua source; optional first line --! timeout=N"}},
+		"required":             []string{"code"},
 		"additionalProperties": false,
 	}
 }

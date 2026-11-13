@@ -215,7 +215,7 @@ func RecordsForItem(item json.RawMessage) []Record {
 }
 
 func IsNotice(text string) bool {
-	return strings.HasPrefix(text, "<task-result ") || strings.HasPrefix(text, "<view>")
+	return strings.HasPrefix(text, "<task-result ") || strings.HasPrefix(text, "<agent-result ") || strings.HasPrefix(text, "<view>")
 }
 
 const OriginalImage = "\nOriginal image (for crops): "

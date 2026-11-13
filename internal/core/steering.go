@@ -208,3 +208,16 @@ func (s *Steering) noticeCountLocked() int {
 	}
 	return n
 }
+
+// RemoveNotice drops a queued notice with exactly this text, if it is still queued.
+func (s *Steering) RemoveNotice(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, in := range s.pending {
+		if in.Notice && in.Text == text {
+			s.pending = append(s.pending[:i], s.pending[i+1:]...)
+			return true
+		}
+	}
+	return false
+}

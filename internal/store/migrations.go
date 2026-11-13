@@ -40,6 +40,12 @@ var migrations = []string{
 		PRIMARY KEY (session, id)
 	);`,
 	`ALTER TABLE items ADD COLUMN meta TEXT NOT NULL DEFAULT '';`,
+	`CREATE TABLE kv (
+		scope TEXT NOT NULL,
+		key   TEXT NOT NULL,
+		value TEXT NOT NULL,
+		PRIMARY KEY (scope, key)
+	) WITHOUT ROWID;`,
 }
 
 func migrate(db *sql.DB) error {

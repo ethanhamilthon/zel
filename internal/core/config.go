@@ -5,7 +5,7 @@ import "zel/internal/config"
 type Settings = config.Settings
 type Provider = config.Provider
 type UI = config.UI
-type SystemBlock = config.SystemBlock
+type Layer = config.Layer
 
 const ShellTimeout = config.ShellTimeout
 const ShellMaxTimeout = config.ShellMaxTimeout
@@ -17,7 +17,7 @@ var Efforts = config.Efforts
 var DefaultSettings = config.DefaultSettings
 var Redact = config.Redact
 var FlagConfig = config.FlagConfig
-var ConfigPaths = config.ConfigPaths
+var LuaLayers = config.LuaLayers
 var ZelHome = config.ZelHome
 var ResolvePath = config.ResolvePath
 var DisplayPath = config.DisplayPath

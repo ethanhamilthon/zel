@@ -90,6 +90,7 @@ func (a *Runtime) Reload() error {
 	if err := a.loadConfig(a.Shell.Dir); err != nil {
 		return err
 	}
+	a.loadLua()
 	previous, frozen := a.prompt, a.promptFrozen
 	a.promptFrozen = false
 	if _, err := a.instructions(context.Background()); err != nil {
@@ -104,11 +105,12 @@ func (a *Runtime) changeSession(id string) error {
 		if err := a.loadConfig(a.Shell.Dir); err != nil {
 			return err
 		}
+		a.loadLua()
 		_, err := a.instructions(context.Background())
 		return err
 	}
 	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell,
-		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}}
+		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, lua: &luaHolder{notice: a.lua.notice}}
 	if err := next.loadConfig(a.Shell.Dir); err != nil {
 		return err
 	}
@@ -122,6 +124,7 @@ func (a *Runtime) changeSession(id string) error {
 		next.release()
 		return err
 	}
+	next.loadLua()
 	if a.HasSavedSession() {
 		if err = a.Save(); err != nil {
 			next.release()
@@ -129,7 +132,9 @@ func (a *Runtime) changeSession(id string) error {
 		}
 	}
 	a.release()
+	a.lua.set(nil)
 	*a = *next
+	a.sessionStart()
 	return nil
 }
 

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"zel/internal/shell"
 	"zel/internal/store"
 )
 
@@ -168,7 +167,7 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 			continue
 		}
 		outputs[id] = true
-		result = append(result, callOutput(id, shell.Result{Output: "Tool execution was interrupted; its effects and result are unknown. It was not rerun.", Error: true}))
+		result = append(result, callOutput(id, "error: tool execution was interrupted; its effects and result are unknown. It was not rerun."))
 	}
 	return result
 }

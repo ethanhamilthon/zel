@@ -2,13 +2,10 @@ package config
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strings"
 )
 
 var envReference = regexp.MustCompile(`\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}`)
@@ -36,34 +33,46 @@ func flagConfigPath(dir string) (string, error) {
 	}
 	return filepath.Clean(path), nil
 }
-func ConfigPaths(home, dir string) []string {
-	return configPaths(home, dir, FlagConfig(dir))
+
+// Layer is one init.lua file: the global one, the project one or the one given with --config.
+type Layer struct{ Name, Path string }
+
+// LuaLayers lists the init.lua files that apply to dir, in load order: the global
+// ~/.zel/init.lua, the nearest .zel/init.lua found walking up from dir, then the
+// --config file. Files that do not exist are still listed except the first two.
+func LuaLayers(home, dir string) []Layer {
+	return luaLayers(home, dir, FlagConfig(dir))
 }
 
-func configPaths(home, dir, flagged string) []string {
-	var local []string
+func luaLayers(home, dir, flagged string) []Layer {
+	var layers []Layer
+	seen := map[string]bool{}
+	add := func(name, path string, mustExist bool) {
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		if _, err := os.Stat(path); err != nil && !mustExist {
+			return
+		}
+		seen[path] = true
+		layers = append(layers, Layer{name, path})
+	}
+	add("global", filepath.Join(home, "init.lua"), false)
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		local = append(local, filepath.Join(d, "ZEL.md"))
+		candidate := filepath.Join(d, ".zel", "init.lua")
+		if _, err := os.Stat(candidate); err == nil {
+			add("project", candidate, false)
+			break
+		}
 		if filepath.Dir(d) == d {
 			break
 		}
 	}
-	slices.Reverse(local)
-	paths := append([]string{filepath.Join(home, "ZEL.md")}, local...)
 	if flagged != "" {
-		paths = append(paths, flagged)
+		add("config", flagged, true)
 	}
-	seen := map[string]bool{}
-	var unique []string
-	for i := len(paths) - 1; i >= 0; i-- {
-		path := filepath.Clean(paths[i])
-		if !seen[path] {
-			unique = append(unique, path)
-			seen[path] = true
-		}
-	}
-	slices.Reverse(unique)
-	return unique
+	return layers
 }
 
 func Load(home, dir string, preferences []byte) (Settings, error) {
@@ -78,13 +87,12 @@ func Load(home, dir string, preferences []byte) (Settings, error) {
 	if err != nil {
 		return s, err
 	}
-	for _, path := range configPaths(home, dir, flagged) {
-		err := mergeConfig(&s, path)
-		if errors.Is(err, os.ErrNotExist) && path != flagged {
-			continue
+	if flagged != "" {
+		if filepath.Ext(flagged) != ".lua" {
+			return s, fmt.Errorf("--config %s: only .lua files are supported", flagged)
 		}
-		if err != nil {
-			return s, err
+		if _, err := os.Stat(flagged); err != nil {
+			return s, fmt.Errorf("--config: %w", err)
 		}
 	}
 	if s.Effort == "" {
@@ -95,15 +103,4 @@ func Load(home, dir string, preferences []byte) (Settings, error) {
 		s.Providers[name] = p
 	}
 	return s, Validate(s)
-}
-
-func mergeConfig(s *Settings, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if body := strings.ReplaceAll(string(data), "\r\n", "\n"); strings.TrimSpace(body) != "" {
-		s.System = append(s.System, SystemBlock{Name: path, Value: body})
-	}
-	return nil
 }

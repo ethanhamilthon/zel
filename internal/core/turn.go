@@ -47,8 +47,8 @@ func (h *turnHost) CommitResponse(items []json.RawMessage) error {
 func (h *turnHost) Execute(ctx context.Context, call entities.ToolCall) error {
 	a, emit := h.a, h.emit
 	started := time.Now()
-	result := a.runTool(ctx, call.CallID, call.Name, call.Arguments, emit)
-	output := callOutput(call.CallID, result)
+	output0 := a.runTool(ctx, call.CallID, call.Name, call.Arguments, emit)
+	output := callOutput(call.CallID, output0)
 	a.histMu.Lock()
 	a.History = append(a.History, output)
 	a.histMu.Unlock()

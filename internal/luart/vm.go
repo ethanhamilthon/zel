@@ -96,8 +96,10 @@ type Result struct {
 
 // Runner executes tool calls.
 type Runner struct {
-	Env Env
-	Cfg *Config // optional: plugins and hooks
+	Env         Env
+	Cfg         *Config       // optional: plugins and hooks
+	Timeout     time.Duration // default call timeout (zero: DefaultTimeout)
+	OutputLimit int           // default output budget in bytes (zero: DefaultOutputLimit)
 }
 
 // Run executes one tool call in a fresh Lua state.
@@ -113,11 +115,17 @@ func (r *Runner) Run(ctx context.Context, input string) Result {
 	timeout := call.Timeout
 	if timeout == 0 {
 		timeout = DefaultTimeout
+		if r.Timeout > 0 {
+			timeout = min(r.Timeout, MaxTimeout)
+		}
 		if defaults.Timeout > 0 {
 			timeout = min(time.Duration(defaults.Timeout)*time.Second, MaxTimeout)
 		}
 	}
 	limit := DefaultOutputLimit
+	if r.OutputLimit > 0 {
+		limit = r.OutputLimit
+	}
 	if defaults.OutputLimit > 0 {
 		limit = defaults.OutputLimit
 	}

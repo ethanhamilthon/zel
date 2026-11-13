@@ -36,37 +36,72 @@ type tasks struct {
 	wg                sync.WaitGroup
 	report            func(string)
 	steps             map[string]int
+	jobs              map[string]*job
+	order             []string
+	hook              func(kind, id string, result map[string]any) (text string, drop bool)
 }
 
 func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
 	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}}
+		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}, jobs: map[string]*job{}}
 }
 
 func (t *tasks) run(command string) (string, error) {
-	if strings.TrimSpace(command) == "" {
-		return "", errors.New("tasks run requires a command")
+	j, err := t.spawn(command, startOpts{})
+	if err != nil {
+		return "", err
 	}
-	return t.start(command, func(file io.Writer) (*exec.Cmd, func() error, error) {
-		cmd := shell.Command(context.Background(), t.dir, t.env, command)
+	return j.id, nil
+}
+
+// startOpts describe a background job: a plain task or a subagent.
+type startOpts struct {
+	kind, name, prompt, model, report string
+	cwd                               string
+	env                               map[string]string
+	timeout                           time.Duration
+	waited                            bool // the caller waits: no result message is queued
+}
+
+// spawn runs command in the background as a task or subagent job.
+func (t *tasks) spawn(command string, o startOpts) (*job, error) {
+	if strings.TrimSpace(command) == "" {
+		return nil, errors.New("tasks run requires a command")
+	}
+	dir := t.dir
+	if o.cwd != "" {
+		dir = o.cwd
+	}
+	var j *job
+	_, err := t.start(command, o, func(file io.Writer, jb *job) (*exec.Cmd, func() error, error) {
+		j = jb
+		env := map[string]string{}
+		for k, v := range t.env {
+			env[k] = v
+		}
+		for k, v := range o.env {
+			env[k] = v
+		}
+		cmd := shell.Command(context.Background(), dir, env, command)
 		cmd.Stdout, cmd.Stderr = file, file
 		if err := cmd.Start(); err != nil {
 			return nil, nil, err
 		}
 		return cmd, func() error { return shell.Reap(cmd) }, nil
 	})
+	return j, err
 }
 
 func (t *tasks) adopt(command string, bg *shell.Background) (string, error) {
-	return t.start(command, func(file io.Writer) (*exec.Cmd, func() error, error) {
+	return t.start(command, startOpts{}, func(file io.Writer, _ *job) (*exec.Cmd, func() error, error) {
 		bg.Redirect(file)
 		return bg.Cmd, bg.Wait, nil
 	})
 }
 
-func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() error, error)) (string, error) {
+func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) (*exec.Cmd, func() error, error)) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -82,7 +117,13 @@ func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() 
 	if err := t.db.TaskCount(t.session, &n); err != nil {
 		return "", err
 	}
+	if o.kind == "" {
+		o.kind = "task"
+	}
 	id := fmt.Sprintf("t%d", n+1)
+	if o.kind == "agent" {
+		id = fmt.Sprintf("a%d", n+1)
+	}
 	logPath := filepath.Join(t.log, t.session+"-"+id+".log")
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
@@ -93,22 +134,40 @@ func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() 
 		file.Close()
 		return "", err
 	}
-	cmd, wait, err := launch(&taskLog{file: file})
+	j := &job{t: t, id: id, kind: o.kind, name: o.name, cmd: command, prompt: o.prompt, model: o.model, log: logPath,
+		report: o.report, started: started, waited: o.waited, done: make(chan struct{}), status: "running"}
+	cmd, wait, err := launch(&taskLog{file: file}, j)
 	if err != nil {
 		file.Close()
 		return "", errors.Join(err, t.finish(id, "failed", nil))
 	}
 	t.running[id] = cmd
+	t.jobs[id] = j
+	t.order = append(t.order, id)
+	if o.timeout > 0 {
+		timer := time.AfterFunc(o.timeout, func() {
+			t.mu.Lock()
+			j.timedOut = true
+			t.mu.Unlock()
+			_ = cmd.Cancel()
+		})
+		j.timer = timer
+	}
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
 		err := wait()
 		file.Close()
+		if j.timer != nil {
+			j.timer.Stop()
+		}
 		t.mu.Lock()
-		stopped := t.stopped[id]
+		stopped, timedOut := t.stopped[id], j.timedOut
 		t.mu.Unlock()
 		status, code := "done", cmd.ProcessState.ExitCode()
 		switch {
+		case timedOut:
+			status = "timeout"
 		case stopped:
 			status = "stopped"
 		case err != nil || code != 0:
@@ -119,10 +178,21 @@ func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() 
 			exit = nil
 		}
 		persistErr := t.finish(id, status, exit)
-		result := Input{Text: taskResult(id, command, status, exit, time.Since(started), logPath), Notice: true}
+		took := time.Since(started)
+		result := j.complete(status, code, took)
+		text := j.noticeText(result, status, exit, took)
+		drop := false
+		if t.hook != nil {
+			if rewritten, d := t.hook(j.kind, id, result); d {
+				drop = true
+			} else if rewritten != "" {
+				text = rewritten
+			}
+		}
+		notice := Input{Text: text, Notice: true}
 		if persistErr != nil {
 			warning := "Task " + id + " completion could not be persisted; saved status may be stale: " + persistErr.Error()
-			result.Text += "\n" + warning
+			notice.Text += "\n" + warning
 			if t.report != nil {
 				t.report(warning)
 			}
@@ -130,11 +200,13 @@ func (t *tasks) start(command string, launch func(io.Writer) (*exec.Cmd, func() 
 		// The result is queued before the task stops counting as running, so a waiting
 		// consumer cannot observe neither a task nor its result.
 		t.mu.Lock()
-		if !t.closed {
-			t.queue.PushNotice(result)
+		if !t.closed && !drop && !j.waited {
+			t.queue.PushNotice(notice)
+			j.pushed = notice.Text
 		}
 		delete(t.running, id)
 		t.mu.Unlock()
+		close(j.done)
 	}()
 	return id, nil
 }
@@ -315,11 +387,6 @@ func (a *Runtime) ActiveSubagents() []SubagentRun {
 			}
 		}
 	}
-	a.histMu.RLock()
-	if a.currentToolSubagent != nil {
-		launched = append(launched, *a.currentToolSubagent)
-	}
-	a.histMu.RUnlock()
 	slices.SortFunc(registered, byStart)
 	slices.SortFunc(launched, byStart)
 	list := registered

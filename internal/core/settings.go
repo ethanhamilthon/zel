@@ -56,9 +56,9 @@ func (a *Runtime) Project() string { return a.project }
 // ConfigFiles are the config layers that exist, in merge order.
 func (a *Runtime) ConfigFiles() []string {
 	var files []string
-	for _, path := range ConfigPaths(a.home, a.Shell.Dir) {
-		if _, err := os.Stat(path); err == nil {
-			files = append(files, path)
+	for _, layer := range LuaLayers(a.home, a.Shell.Dir) {
+		if _, err := os.Stat(layer.Path); err == nil {
+			files = append(files, layer.Path)
 		}
 	}
 	return files
