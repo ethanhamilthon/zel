@@ -34,15 +34,13 @@ const (
 	menuProvider
 	menuForm
 	menuSettings
-	menuFiles
 	menuConfirm
-	menuCreate
 )
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
 	menuTasks: "Menu/Tasks", menuTracing: "Menu/Tracing",
-	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuFiles: "Menu/Files", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help", menuCreate: "Menu/Files/New",
+	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
 }
 
 type menuRow struct{ label, detail string }
@@ -50,9 +48,9 @@ type menuRow struct{ label, detail string }
 var mainRows = []menuRow{
 	{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
 	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
-	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "New Color or Prompt"}, {"Help", "Keyboard shortcuts"},
-	{"Quit", "Exit, Ctrl+Q"}, {"Editor", "Edit input, Ctrl+E"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Editor, output, timeouts"}, {"Files", "Browse files, Ctrl+F"},
+	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
+	{"Quit", "Exit, Ctrl+Q"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts"},
 	{"Copy", "Agent answer to input, Ctrl+Y"},
 }
 
@@ -68,8 +66,6 @@ type menuListCache struct {
 type menuState struct {
 	listCache       *menuListCache
 	form            *formState
-	directory       string
-	files           []fileItem
 	providerNames   []string
 	direct          bool // opened by a shortcut, not through Menu
 	traceIndex      int

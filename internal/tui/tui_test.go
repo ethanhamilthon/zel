@@ -408,20 +408,6 @@ func TestFuzzySearchAcceptance(t *testing.T) {
 		t.Fatalf("main menu must match 'res' prefix: %v", rows)
 	}
 
-	// 3. Files menu: fuzzy matching
-	m.menu = &menuState{
-		page:  menuFiles,
-		files: []fileItem{{"..", true}, {"gpt-5.1.txt", false}, {"menu_search.go", false}},
-		query: "gpt5",
-	}
-	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "gpt-5.1.txt" {
-		t.Fatalf("files menu must match 'gpt5' fuzzily, got %v", rows)
-	}
-	m.menu.query, m.menu.listCache = "msgo", nil
-	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "menu_search.go" {
-		t.Fatalf("files menu must match 'msgo' fuzzily, got %v", rows)
-	}
-
 	// 4. File autocomplete completion: fuzzy
 	if got := filterFileCompletions([]string{"nested/main.go", "gpt-5.1.go", "main.go"}, "gpt5"); !reflect.DeepEqual(got, []string{"gpt-5.1.go"}) {
 		t.Fatalf("file completions must match 'gpt5' fuzzily, got %v", got)
@@ -930,19 +916,9 @@ func TestTraceEntryUpdateDisablesMouseOnEveryExit(t *testing.T) {
 	}
 }
 
-func TestMenuBodyRoomKeepsFilesFooterAndTraceLimit(t *testing.T) {
+func TestMenuBodyRoomKeepsTraceLimit(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 80, 30
-	m.menu = &menuState{page: menuFiles}
-	wantFilesRoom := max(1, m.height-1-m.menuBodyStart())
-	if got := m.menuBodyRoom(); got != wantFilesRoom {
-		t.Fatalf("Files body room = %d, want %d with footer row reserved", got, wantFilesRoom)
-	}
-	lines := strings.Split(ansi.Strip(m.menuView()), "\n")
-	if got := strings.TrimSpace(lines[len(lines)-1]); got != "Ctrl+A: New file or directory" {
-		t.Fatalf("Files footer = %q", got)
-	}
-
 	m.menu = &menuState{
 		page: menuText, parent: menuTracing, traceIndex: 0,
 		trace: []core.TraceEntry{{Kind: "user", Text: strings.Repeat("line\n", 30)}},
@@ -1010,7 +986,7 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 	if m.menuTop() != want {
 		t.Fatalf("top %d, want %d", m.menuTop(), want)
 	}
-	for _, page := range []menuPage{menuModel, menuResume, menuTracing, menuInfo, menuFiles} {
+	for _, page := range []menuPage{menuModel, menuResume, menuTracing, menuInfo} {
 		next, _ := m.openMenuPage(page)
 		m = next.(model)
 		m.menu.query = "typed search"
@@ -1102,36 +1078,6 @@ func TestInputHasNoLineLimitAndUsesAvailableScreen(t *testing.T) {
 	}
 }
 
-func TestExternalEditorReturnsSavedDraft(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "editor.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n[ \"$(cat \"$1\")\" = original ] || exit 4\nprintf 'edited\\ntext' > \"$1\"\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("VISUAL", "sh "+script)
-	m := bareModel(t, dir)
-	m.setComposer("original")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var p *tea.Program
-	var editorErr error
-	p = tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(strings.NewReader("\x05")), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
-		if e, ok := msg.(editorFinished); ok {
-			editorErr = e.err
-			go p.Send(tea.QuitMsg{})
-		}
-		return msg
-	}))
-	result, err := p.Run()
-	if err != nil || editorErr != nil {
-		t.Fatalf("run: %v; editor: %v", err, editorErr)
-	}
-	got := result.(model)
-	if got.input.Value() != "edited\ntext" || got.ctl.Status().Busy {
-		t.Fatalf("editor did not restore draft: %q", got.input.Value())
-	}
-}
-
 func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 	m, _ := freshModel(t)
 	t.Cleanup(m.ctl.Close)
@@ -1200,36 +1146,6 @@ func TestDurationUsesSharedClockFormat(t *testing.T) {
 		if got := formatDuration(tc.duration); got != tc.want {
 			t.Errorf("%v: %q, want %q", tc.duration, got, tc.want)
 		}
-	}
-}
-
-func TestEditorReleasesKeyboardProtocol(t *testing.T) {
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := os.Stdout
-	os.Stdout = writer
-	defer func() { os.Stdout = old; reader.Close(); writer.Close() }()
-	keyboard := keyboardProtocol{enabled: true}
-	current := model{editorActive: true}
-	message := tea.KeyMsg{Type: tea.KeyCtrlE}
-	keyboard.filter(current, message)
-	if keyboard.enabled {
-		t.Fatal("Zel keyboard protocol left active for editor")
-	}
-	keyboard.filter(current, editorFinished{})
-	if keyboard.enabled {
-		t.Fatal("protocol restored before editor completion was processed")
-	}
-	keyboard.filter(model{}, redraw{})
-	if !keyboard.enabled {
-		t.Fatal("keyboard protocol not restored after editor")
-	}
-	writer.Close()
-	data, err := io.ReadAll(reader)
-	if err != nil || string(data) != "\x1b[<u\x1b[>5u" {
-		t.Fatalf("keyboard handoff: %q, %v", data, err)
 	}
 }
 
@@ -1312,13 +1228,13 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 		t.Fatal("invalid provider URL accepted")
 	}
 	m.menu.page = menuSettings
-	m.openSettingForm(1)
+	m.openSettingForm(0)
 	m.menu.form.input.SetValue("4096")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuSettings || m.ctl.Settings().ShellOutput != 4096 {
 		t.Fatal("output preference not saved")
 	}
-	m.openSettingForm(2)
+	m.openSettingForm(1)
 	m.menu.form.input.SetValue("0")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuForm || m.menu.form.err == "" {
@@ -1364,45 +1280,6 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 	}
 }
 
-func TestFilesBrowserIncludesHiddenAndNavigates(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"a.txt", ".hidden"} {
-		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Mkdir(filepath.Join(dir, "folder"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	m := bareModel(t, dir)
-	m.menu = &menuState{page: menuFiles}
-	m.applyDirectory(m.readDirectory(dir)().(directoryResult))
-	var names []string
-	for _, f := range m.menu.files {
-		names = append(names, f.name)
-	}
-	if strings.Join(names, ",") != "..,folder,.hidden,a.txt" {
-		t.Fatalf("files (current-directory entry should be omitted): %v", names)
-	}
-	m.menu.query = "folder"
-	next, cmd := m.menuActivate()
-	m = next.(model)
-	m.applyDirectory(cmd().(directoryResult))
-	if m.menu.directory != filepath.Join(dir, "folder") || m.menu.query != "" {
-		t.Fatal("filtered directory navigation failed")
-	}
-	m.menu.selected = 0
-	next, cmd = m.menuActivate()
-	m = next.(model)
-	if cmd == nil {
-		t.Fatal("parent directory activation returned no request")
-	}
-	m.applyDirectory(cmd().(directoryResult))
-	if m.menu.directory != dir {
-		t.Fatal("parent navigation failed")
-	}
-}
-
 func TestSingleAccent(t *testing.T) {
 	applyTheme(map[string]string{"accent": "#80b3ad"})
 	for _, color := range []string{string(inputBlue), string(cyan), string(assistantColor), string(infoColor), string(warnColor)} {
@@ -1416,50 +1293,8 @@ func TestSingleAccent(t *testing.T) {
 	applyTheme(nil)
 }
 
-func TestFilesEditorRestoresBrowserWithoutChangingDraft(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "editor.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf edited > \"$1\"\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "file.txt")
-	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("VISUAL", "sh "+script)
-	m := bareModel(t, dir)
-	m.setComposer("draft")
-	m.menu = &menuState{page: menuFiles}
-	m.applyDirectory(m.readDirectory(dir)().(directoryResult))
-	for i, f := range m.menu.files {
-		if f.name == "file.txt" {
-			m.menu.selected = i
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var program *tea.Program
-	var editorErr error
-	program = tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(strings.NewReader("\r")), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
-		if e, ok := msg.(fileEditorFinished); ok {
-			editorErr = e.err
-			go program.Send(tea.QuitMsg{})
-		}
-		return msg
-	}))
-	next, err := program.Run()
-	if err != nil || editorErr != nil {
-		t.Fatalf("program %v editor %v", err, editorErr)
-	}
-	result := next.(model)
-	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "edited" || result.menu == nil || result.menu.page != menuFiles || result.input.Value() != "draft" {
-		t.Fatal("file editing did not restore browser and preserve draft")
-	}
-}
-
 func TestStopAndQuitShortcuts(t *testing.T) {
-	for _, page := range []menuPage{-1, menuMain, menuFiles, menuForm} {
+	for _, page := range []menuPage{-1, menuMain, menuForm} {
 		for _, k := range []tea.KeyType{tea.KeyCtrlC, tea.KeyCtrlD, tea.KeyCtrlQ} {
 			m := bareModel(t, t.TempDir())
 			if page == menuForm {
@@ -1483,7 +1318,7 @@ func TestStopAndQuitShortcuts(t *testing.T) {
 			}
 		}
 	}
-	for _, page := range []menuPage{-1, menuMain, menuFiles, menuForm} {
+	for _, page := range []menuPage{-1, menuMain, menuForm} {
 		m, _ := busyModel(t)
 		if page == menuForm {
 			m.openMenu()
@@ -1513,47 +1348,17 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 	want := []menuRow{
 		{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
 		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
-		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "New Color or Prompt"}, {"Help", "Keyboard shortcuts"},
-		{"Quit", "Exit, Ctrl+Q"}, {"Editor", "Edit input, Ctrl+E"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Editor, output, timeouts"}, {"Files", "Browse files, Ctrl+F"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
+		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
+		{"Settings", "Output, timeouts"}, {"Copy", "Agent answer to input, Ctrl+Y"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)
 	}
 	m.width, m.height = 80, 30
 	lines := m.pageLines("", m.menuWidth())
-	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 5 more items") {
+	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 3 more items") {
 		t.Fatalf("main menu overflow hint = %q", lines)
-	}
-}
-
-func TestFileCreationShortcutAndHint(t *testing.T) {
-	dir := t.TempDir()
-	m := bareModel(t, dir)
-	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlF})
-	plain := ansi.Strip(m.menuView())
-	lines := strings.Split(plain, "\n")
-	if got := strings.TrimSpace(lines[len(lines)-1]); got != "Ctrl+A: New file or directory" {
-		t.Fatalf("Files bottom hint = %q", got)
-	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlA})
-	if m.menu.page != menuCreate {
-		t.Fatalf("Ctrl+A opened page %v, want create prompt", m.menu.page)
-	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("notes.txt")})
-	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
-		t.Fatalf("new file was not created: %v", err)
-	}
-	if m.menu.page != menuFiles {
-		t.Fatalf("create returned to page %v, want Files", m.menu.page)
-	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlA})
-	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("docs/")})
-	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	info, err := os.Stat(filepath.Join(dir, "docs"))
-	if err != nil || !info.IsDir() {
-		t.Fatalf("new directory missing or not a directory: %v", err)
 	}
 }
 
@@ -1565,36 +1370,6 @@ func TestAutocompleteSelectionUsesArrow(t *testing.T) {
 	rows := strings.Split(ansi.Strip(strings.Join(m.timelineRows(0), "\n")), "\n")
 	if len(rows) < 2 || strings.TrimSpace(rows[len(rows)-2]) != "@second <" || strings.TrimSpace(rows[len(rows)-3]) != "@first" {
 		t.Fatalf("completion selection should place the menu-style arrow after the selected label: %q", rows)
-	}
-}
-
-func TestFilesSearchInputAndCacheRefresh(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"target", "other"} {
-		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	m := bareModel(t, dir)
-	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlF})
-	if m.menu == nil || m.menu.page != menuFiles || !m.menu.direct {
-		t.Fatal("Ctrl+F did not open Files")
-	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("TARGET")})
-	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "target" {
-		t.Fatalf("typed search: %v", rows)
-	}
-	cache := m.menu.listCache
-	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
-	if m.menu.listCache != cache {
-		t.Fatal("cursor movement rebuilt the file list")
-	}
-	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.menu.directory != filepath.Join(dir, "target") || m.menu.query != "" {
-		t.Fatal("filtered action opened wrong directory")
-	}
-	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != ".." {
-		t.Fatalf("current-directory entry should be omitted: %v", rows)
 	}
 }
 
@@ -2118,29 +1893,6 @@ func TestComposerSpacingDependsOnTimelineContent(t *testing.T) {
 	assertComposer(false, "draft in empty session")
 }
 
-func TestDirectoryResultsIgnoreStaleResponses(t *testing.T) {
-	dir := t.TempDir()
-	m := bareModel(t, dir)
-	m.menu = &menuState{page: menuFiles}
-	old := m.readDirectory(dir)
-	current := m.readDirectory(dir)
-	m.applyDirectory(old().(directoryResult))
-	if m.menu.status != "Loading…" || len(m.menu.files) != 0 {
-		t.Fatal("stale response applied")
-	}
-	m.applyDirectory(current().(directoryResult))
-	if m.menu.status != "" || len(m.menu.files) < 1 {
-		t.Fatal("current response ignored")
-	}
-	old = m.readDirectory(dir)
-	m = m.closeMenu()
-	m.menu = &menuState{page: menuFiles}
-	m.applyDirectory(old().(directoryResult))
-	if len(m.menu.files) != 0 {
-		t.Fatal("closed browser response applied to new menu")
-	}
-}
-
 func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 	q := newEventQueue()
 	defer q.Close()
@@ -2447,7 +2199,7 @@ func TestSlashMenu(t *testing.T) {
 		})
 	}
 	m := bareModel(t, "/project")
-	m.menu = &menuState{page: menuSettings, selected: 4}
+	m.menu = &menuState{page: menuSettings, selected: 3}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.ctl.Settings().UI.SlashMenu {
 		t.Fatal("setting not disabled")
@@ -2533,22 +2285,6 @@ func TestInfoRowsDisplayHomePaths(t *testing.T) {
 		if strings.Contains(text, absolute) {
 			t.Errorf("Info rows leaked home path %q", absolute)
 		}
-	}
-}
-
-func TestHomePathsInFileBrowser(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	root, err := fileCompletionRoot(t.TempDir(), "~/projects/")
-	if err != nil || root != filepath.Join(home, "projects") {
-		t.Fatalf("home-relative completion root = %q, %v", root, err)
-	}
-
-	m := model{menu: &menuState{page: menuFiles, directory: filepath.Join(home, "projects", "zel")}, width: 100}
-	title, _ := m.menuHead()
-	if title != "Menu/Files ~/projects/zel" {
-		t.Fatalf("file browser title = %q", title)
 	}
 }
 

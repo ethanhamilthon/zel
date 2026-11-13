@@ -39,7 +39,7 @@ Effort defaults to `medium`.
 Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
-Settings controls the external editor, Bash output budget, Bash timeout,
+Settings controls the Bash output budget, Bash timeout,
 and reasoning summaries. Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
@@ -69,7 +69,7 @@ and the last 2048 bytes. The marker is additional to the retained-byte budget.
 Output within the limit is unchanged. Zero means unlimited; the default is
 8192 bytes.
 
-## Chat, Tracing, and files
+## Chat and Tracing
 
 Chat shows user messages, agent messages, and the working indicator. Tools,
 thoughts, errors, and other events belong in Tracing; there are no
@@ -79,11 +79,7 @@ Tracing search accepts a leading exact type, optionally followed by search text:
 `:user`, `:assistant fix tests`, `:bash go test`, `:error`. Every displayed
 entry type is supported; ordinary search works without a prefix.
 
-Files browses the working directory, including hidden files, `.` and `..`.
-Directories come first. Enter descends into a directory or opens a regular file
-in the external editor. Search filters the current listing. Esc returns to Menu.
-The chosen editor, then `$VISUAL`, then `$EDITOR`, is used, defaulting to `nvim`.
-The editor shares the terminal and returns to Files when it closes.
+Typing `@` in the composer completes file paths, one directory at a time.
 
 ### Shortcuts
 
@@ -103,12 +99,10 @@ and your terminal's link-opening gesture for links.
 - Ctrl+N: New session
 - Ctrl+I: Info
 - Ctrl+T: Tracing
-- Ctrl+F: Files
 - Ctrl+Q: Save and quit
 - Ctrl+Y: Copy the last answer as plain text (also available in Menu → Copy answer)
 - Ctrl+D: Stop the active turn (does not exit)
 - Ctrl+C: reserved for terminal copying; never stops the active turn
-- Ctrl+E: edit the draft externally; saving restores it without sending
 - Esc: back; shortcut-opened pages return directly to chat
 - Tracing merges history, tasks and notices/errors chronologically (tasks use their
   start time); it opens at the latest entry. Enter opens it full screen

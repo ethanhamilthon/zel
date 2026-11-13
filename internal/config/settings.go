@@ -29,7 +29,6 @@ type Provider struct {
 
 // UI holds application display preferences.
 type UI struct {
-	Editor    string
 	SlashMenu bool
 	Theme     map[string]string `json:"-"`
 }

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -18,7 +17,6 @@ func (m *model) openMenu() tea.Cmd {
 }
 
 func (m model) closeMenu() model {
-	m.directoryGen++
 	m.menu = nil
 	m.refresh(false)
 	return m
@@ -32,10 +30,6 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 	}
 	if mu.page == menuConfirm {
 		mu.page, mu.selected = mu.parent, 0
-		return m, nil
-	}
-	if mu.page == menuCreate {
-		mu.page, mu.name, mu.status = menuFiles, "", ""
 		return m, nil
 	}
 	if mu.direct {
@@ -111,9 +105,6 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.String() {
 	case "ctrl+a":
 		switch mu.page {
-		case menuFiles:
-			mu.page, mu.name, mu.status, mu.selected = menuCreate, "", "", 0
-			return m, nil
 		case menuProviders:
 			m.openProviderForm("", false)
 			return m, nil
@@ -146,7 +137,7 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.menuActivate()
 	default:
 		switch mu.page {
-		case menuRename, menuCreate:
+		case menuRename:
 			editText(&mu.name, v)
 		default:
 			if searchableMenu(mu.page) {
@@ -250,16 +241,11 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			m.openText("Menu/Help", help())
 			return m, nil
 		case 10:
-			return m.editInput()
-		case 11:
 			m.openProviders()
-		case 12:
+		case 11:
 			open(menuSettings)
-		case 14:
+		case 12:
 			return m.closeMenu().copyAnswer()
-		case 13:
-			open(menuFiles)
-			return m, m.readDirectory(m.cwd)
 		case 9:
 			m = m.closeMenu()
 			return m.quit()
@@ -298,9 +284,9 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.performSwitch(mu.target)
 		}
 	case menuSettings:
-		if index == 3 || index == 4 {
+		if index == 2 || index == 3 {
 			settings := m.ctl.Settings()
-			if index == 3 {
+			if index == 2 {
 				settings.ReasoningSummary = !settings.ReasoningSummary
 			} else {
 				settings.UI.SlashMenu = !settings.UI.SlashMenu
@@ -310,16 +296,6 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.openSettingForm(index)
-		}
-	case menuFiles:
-		if index < len(mu.files) {
-			f := mu.files[index]
-			path := filepath.Join(mu.directory, f.name)
-			if f.dir {
-				return m, m.readDirectory(path)
-			} else {
-				return m.editFile(path)
-			}
 		}
 	case menuResume:
 		if index < len(mu.sessions) {
@@ -363,8 +339,6 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 	case menuRename:
 		m = m.closeMenu()
 		return m.submit(m.ctl.Rename(strings.TrimSpace(mu.name)))
-	case menuCreate:
-		return m.createFileOrDirectory()
 	}
 	return m, nil
 }
@@ -383,7 +357,7 @@ func (m model) openMenuPage(page menuPage) (tea.Model, tea.Cmd) {
 	if m.menu != nil && m.menu.page == page {
 		return m.closeMenu(), nil
 	}
-	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6, menuFiles: 13}[page]}
+	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6}[page]}
 	next, cmd := m.menuActivate()
 	result := next.(model)
 	if result.menu != nil {

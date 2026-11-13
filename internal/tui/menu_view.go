@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"zel/internal/core"
-
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -31,9 +29,7 @@ func (m model) menuView() string {
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
 	hint := ""
-	if m.menu.page == menuFiles {
-		hint = "Ctrl+A: New file or directory"
-	} else if m.menu.page == menuProviders {
+	if m.menu.page == menuProviders {
 		hint = "Ctrl+A: Add provider"
 	}
 	if hint != "" {
@@ -75,7 +71,7 @@ func (m model) menuBodyStart() int {
 
 func (m model) menuBodyRoom() int {
 	bottom := 0
-	if m.menu.page == menuFiles || m.menu.page == menuProviders {
+	if m.menu.page == menuProviders {
 		bottom = 1
 	}
 	room := max(1, m.height-bottom-m.menuBodyStart())
@@ -98,7 +94,7 @@ func (m model) menuTop() int {
 	if body > maxListItems {
 		body = maxListItems + 1
 	}
-	if m.menu.page == menuRename || m.menu.page == menuCreate {
+	if m.menu.page == menuRename {
 		body++
 	}
 	if m.menu.page == menuText || m.menu.page == menuInfo {
@@ -109,7 +105,7 @@ func (m model) menuTop() int {
 		}
 	}
 	height := m.height
-	if m.menu.page == menuFiles || m.menu.page == menuProviders {
+	if m.menu.page == menuProviders {
 		height--
 	}
 	return max(0, (height-header-body)/2)
@@ -120,12 +116,9 @@ func (m model) menuWidth() int { return max(10, min(menuWidth, m.width-4)) }
 // menuHead is the header of the current page: its path on the left, the shortcut
 // that opens it on the right.
 func (m model) menuHead() (title, shortcut string) {
-	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T", menuFiles: "Ctrl+F"}[m.menu.page]
+	title, shortcut = menuTitles[m.menu.page], map[menuPage]string{menuMain: "Ctrl+K", menuModel: "Ctrl+M", menuResume: "Ctrl+R", menuInfo: "Ctrl+I", menuTracing: "Ctrl+T"}[m.menu.page]
 	if m.menu.page == menuMain {
 		title = "zel " + strings.TrimPrefix(Version, "v")
-	}
-	if m.menu.page == menuFiles {
-		title = "Menu/Files " + core.DisplayPath(m.menu.directory)
 	}
 	if m.menu.page == menuText {
 		title = m.menu.title

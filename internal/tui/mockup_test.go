@@ -168,9 +168,8 @@ func TestMockupFrames(t *testing.T) {
 	down := func(n int) []tea.KeyType { return slices.Repeat([]tea.KeyType{tea.KeyDown}, n) }
 	save("06-menu", menu(chat().m))
 	save("10-info", menu(chat().m, append(down(6), tea.KeyEnter)...))
-	save("10-providers", menu(chat().m, append(down(11), tea.KeyEnter)...))
-	save("10-settings", menu(chat().m, append(down(12), tea.KeyEnter)...))
-	save("10-files", menu(chat().m, append(down(13), tea.KeyEnter)...))
+	save("10-providers", menu(chat().m, append(down(10), tea.KeyEnter)...))
+	save("10-settings", menu(chat().m, append(down(11), tea.KeyEnter)...))
 	f = chat()
 	for _, p := range []string{"README.md", "go.mod", "main.go", "Makefile", "docs/PLAN.md", "internal/core/control_controller.go", "internal/tui/ui.go", "internal/agent/agent.go"} {
 		path := filepath.Join(f.project, p)
@@ -468,12 +467,8 @@ func settle(m model) model {
 }
 
 func key(m model, k tea.KeyMsg) model {
-	next, cmd := m.Update(k)
-	result := next.(model)
-	if cmd != nil && result.menu != nil && result.menu.page == menuFiles && result.menu.status == "Loading…" {
-		result.applyDirectory(cmd().(directoryResult))
-	}
-	return settle(result)
+	next, _ := m.Update(k)
+	return settle(next.(model))
 }
 
 func agentEvent(e core.TurnEvent) core.Event { return core.Event{Kind: "agent", Agent: &e} }
@@ -545,7 +540,6 @@ var mockFrames = map[string]mockInfo{
 	"09-multiline-input":  {"Composer", "Long input", "The composer grows with its text."},
 	"10-providers":        {"Settings", "Menu: Providers", "Add, edit, and remove providers stored in SQLite."},
 	"10-settings":         {"Settings", "Menu: Settings", "Application preferences stored in SQLite."},
-	"10-files":            {"Files", "Menu: Files", "Browse directories, hidden entries, and edit files."},
 	"10-info":             {"Model & sessions", "Menu: Info", "Live session, model, configuration layers and context usage."},
 	"10-model":            {"Model & sessions", "Menu: Model", "Models across providers."},
 	"10-model-effort":     {"Model & sessions", "Menu: Effort", "Reasoning effort for the chosen model."},

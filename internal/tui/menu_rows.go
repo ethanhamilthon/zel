@@ -11,13 +11,10 @@ import (
 
 func (m model) rawMenuRows() []menuRow {
 	mu := m.menu
-	if mu.page != menuFiles && mu.page != menuTracing {
+	if mu.page != menuTracing {
 		return m.buildMenuRows()
 	}
-	count := len(mu.files)
-	if mu.page == menuTracing {
-		count = len(mu.trace)
-	}
+	count := len(mu.trace)
 	if c := mu.listCache; c != nil && c.page == mu.page && c.count == count {
 		return c.rows
 	}
@@ -42,14 +39,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Editor", s.UI.Editor}, {"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}}
-	case menuFiles:
-		for _, f := range mu.files {
-			rows = append(rows, menuRow{f.name, map[bool]string{false: "file", true: "directory"}[f.dir]})
-		}
-		if len(rows) == 0 {
-			rows = []menuRow{{"Unable to read directory", mu.status}}
-		}
+		rows = []menuRow{{"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Bash timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}}
 	case menuResume:
 		for _, s := range mu.sessions {
 			rows = append(rows, menuRow{sessionTitle(s), sessionTime(s.Updated)})
@@ -105,12 +95,6 @@ func (m model) buildMenuRows() []menuRow {
 		rows = mu.info
 	case menuRename:
 		rows = []menuRow{{mu.name + "▏", "empty = default title"}}
-	case menuCreate:
-		detail := "end with / for directory"
-		if mu.status != "" {
-			detail = mu.status
-		}
-		rows = []menuRow{{mu.name + "▏", detail}}
 	}
 	if mu.page == menuModel {
 		rows = append(rows, menuRow{"Retry model listing", ""}, menuRow{"Enter model manually", ""})

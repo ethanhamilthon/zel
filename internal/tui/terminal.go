@@ -153,13 +153,6 @@ func (k *keyboardProtocol) close() {
 	}
 }
 func (k *keyboardProtocol) filter(current tea.Model, msg tea.Msg) tea.Msg {
-	// ExecProcess releases Bubble Tea's terminal modes, but knows nothing about
-	// our Kitty keyboard protocol. Pop it before the editor takes over; the
-	// editor negotiates its own keyboard mode. Re-enable it after returning.
-	if m, ok := current.(model); ok && m.editorActive {
-		k.close()
-		return msg
-	}
 	if _, quit := msg.(tea.QuitMsg); quit {
 		k.close()
 	} else if !k.enabled {

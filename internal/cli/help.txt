@@ -60,14 +60,13 @@ ENVIRONMENT
   ZEL_SESSION_ID  Active session ID, exported to Bash.
   ZEL_PARENT      Root session ID of the whole tree, exported to Bash.
   ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
-  VISUAL, EDITOR  External editor fallback, after the UI preference; default nvim.
 
 INTERFACE
   Ctrl+K Menu, Ctrl+M Models, Ctrl+R Resume, Ctrl+I Info, Ctrl+T Tracing,
-  Ctrl+F Files, Ctrl+Q Quit, Ctrl+E external draft editor. Esc dismisses UI; Ctrl+D stops the active turn. Ctrl+Y copies the last answer as plain text (Menu: Copy answer). Selection and copying use terminal shortcuts (Cmd+C / Ctrl+C); mouse reporting is disabled. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
+  Ctrl+Q Quit. Esc dismisses UI; Ctrl+D stops the active turn. Ctrl+Y copies the last answer as plain text (Menu: Copy answer). Selection and copying use terminal shortcuts (Cmd+C / Ctrl+C); mouse reporting is disabled. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
   Onboarding: Tab / Shift+Tab switch steps, Left / Right move the cursor,
   Enter advances. Navigation hints appear at the bottom of the screen.
-  Files includes hidden files, . and ..; Enter opens directories or edits files.
+  @ in the composer completes file paths.
   Tracing search supports :user text, :bash text, and every other entry type.
   Chat shows only user messages, answers, and the working indicator.
 

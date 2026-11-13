@@ -10,7 +10,7 @@ import (
 )
 
 func searchableMenu(page menuPage) bool {
-	return page == menuMain || page == menuResume || page == menuModel || page == menuEffort || page == menuTracing || page == menuProviders || page == menuFiles
+	return page == menuMain || page == menuResume || page == menuModel || page == menuEffort || page == menuTracing || page == menuProviders
 }
 
 func menuLabelMatches(label, query string) bool {

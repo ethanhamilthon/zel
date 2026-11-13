@@ -23,7 +23,6 @@ func TestLoadConfigLayers(t *testing.T) {
 	settings := DefaultSettings()
 	settings.Provider, settings.Model = "p", "m"
 	settings.Providers["p"] = Provider{BaseURL: "http://127.0.0.1:1/v1", APIKey: "{{$ZEL_TEST_KEY}}"}
-	settings.UI.Editor = "nvim --clean"
 	settings.UI.SlashMenu = false
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
@@ -38,7 +37,7 @@ func TestLoadConfigLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.Editor != "nvim --clean" {
+	if loaded.Providers["p"].APIKey != "sk-secret" || loaded.UI.SlashMenu {
 		t.Fatalf("loaded %+v", loaded)
 	}
 	var prompts []string
@@ -293,26 +292,6 @@ func TestTraceListsHistoryTasksAndEvents(t *testing.T) {
 	}
 	if logs[0] != "boom\nsecond line" || logs[1] != "task finished" {
 		t.Fatalf("event text %q", logs)
-	}
-}
-
-func TestEditorConfigurationRoundTrip(t *testing.T) {
-	home := t.TempDir()
-	settings := DefaultSettings()
-	settings.UI.Editor = "nvim --clean"
-	settings.UI.SlashMenu = false
-	if err := WriteConfig(home, settings); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadConfig(home, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.UI.SlashMenu {
-		t.Fatal("disabled slash menu was not persisted")
-	}
-	if loaded.UI.Editor != settings.UI.Editor {
-		t.Fatalf("editor %q, want %q", loaded.UI.Editor, settings.UI.Editor)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 )
 
 const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, rename, info, reload, quit)\n" +
-	"Ctrl+N: new session · Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing · Ctrl+F: files · Ctrl+E: editor (Ctrl+M/I require Kitty keyboard protocol)\n" +
+	"Ctrl+N: new session · Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing (Ctrl+M/I require Kitty keyboard protocol)\n" +
 	"Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline\n" +
 	"Sending while zel works: a running command moves to the background (menu: Tasks) and the model reads your message next\n" +
 	"Clipboard: Ctrl+V (Cmd+V when forwarded)\n" +

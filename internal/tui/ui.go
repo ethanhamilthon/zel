@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -29,7 +28,6 @@ type renderedEntry struct {
 	rows     []string
 }
 type model struct {
-	editorActive              bool
 	ctl                       *core.Controller
 	term                      termState
 	events                    *eventQueue
@@ -53,7 +51,6 @@ type model struct {
 	inputValue                string
 	inputWidth, inputHeight   int
 	inputTop                  int
-	directoryGen              uint64
 	layoutValue               string
 	layoutWidth               int
 	layout                    []composerRow
@@ -276,32 +273,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.refresh(true)
 		return m, nil
-	case directoryResult:
-		m.applyDirectory(v)
-		return m, nil
-	case fileEditorFinished:
-		m.editorActive = false
-		if v.err != nil {
-			return m.reject(v.err)
-		}
-		if m.menu != nil && m.menu.page == menuFiles {
-			return m, m.readDirectory(m.menu.directory)
-		}
-		m.refresh(true)
-		return m, nil
-	case editorFinished:
-		m.editorActive = false
-		if v.err != nil {
-			os.Remove(v.path)
-			return m.reject(v.err)
-		}
-		if m.input.Value() != v.original {
-			return m.reject(fmt.Errorf("Draft changed while Editor was open; saved text kept at %s", v.path))
-		}
-		os.Remove(v.path)
-		m.setComposer(v.text)
-		m.refresh(true)
-		return m, nil
 	case menuTick:
 		m.refreshMenu()
 		return m, menuPulse()
@@ -379,12 +350,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.pasteClipboard()
-		}
-		if v.String() == "ctrl+e" {
-			return m.editInput()
-		}
-		if v.String() == "ctrl+f" {
-			return m.openMenuPage(menuFiles)
 		}
 		if v.String() == "ctrl+t" {
 			return m.openMenuPage(menuTracing)

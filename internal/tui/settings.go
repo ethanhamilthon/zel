@@ -48,8 +48,8 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
-	labels := []string{"Editor", "Output limit in bytes (0 = unlimited)", "Bash timeout in seconds (1–600)"}
-	values := []string{s.UI.Editor, strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout)}
+	labels := []string{"Output limit in bytes (0 = unlimited)", "Bash timeout in seconds (1–600)"}
+	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout)}
 	m.startForm(&formState{kind: "setting", setting: index, fields: []string{labels[index]}, values: []string{values[index]}})
 }
 func (m *model) openManualModel() {
@@ -158,19 +158,15 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 		}
 		s.Providers[name] = core.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[0]}
 	case "setting":
+		n, err := strconv.Atoi(f.values[0])
+		if err != nil {
+			f.err = "Enter a whole number"
+			return m, nil
+		}
 		if f.setting == 0 {
-			s.UI.Editor = f.values[0]
+			s.ShellOutput = n
 		} else {
-			n, err := strconv.Atoi(f.values[0])
-			if err != nil {
-				f.err = "Enter a whole number"
-				return m, nil
-			}
-			if f.setting == 1 {
-				s.ShellOutput = n
-			} else {
-				s.ShellTimeout = n
-			}
+			s.ShellTimeout = n
 		}
 	case "model":
 		if _, ok := s.Providers[f.values[0]]; !ok {
