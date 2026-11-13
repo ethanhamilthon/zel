@@ -2412,7 +2412,8 @@ func TestSubagentIndicatorFromBackgroundTask(t *testing.T) {
 		t.Fatalf("non-zel task showed subagent indicator: %q", got)
 	}
 
-	taskID, err := core.RunTask(m.cwd, sessionID, "zel -p 'run test'")
+	// Keep the task alive even where no zel binary is on PATH.
+	taskID, err := core.RunTask(m.cwd, sessionID, "sleep 30; zel -p 'run test'")
 	if err != nil {
 		t.Fatal(err)
 	}
