@@ -74,6 +74,8 @@ type Runtime struct {
 	promptFrozen        bool
 	title               string
 	lastRequest         Metadata
+	requestedLen        int        // History length when lastRequest was sent
+	compacted           compaction // latest automatic compaction boundaries
 	imageWarnings       []Record
 	sock                *sessionSocket
 	queue               *Steering
@@ -312,6 +314,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	started := time.Now()
 	a.histMu.Lock()
 	a.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(a.History))}
+	a.requestedLen = len(a.History)
 	a.histMu.Unlock()
 	a.slots.sent()
 	var completed []json.RawMessage
@@ -411,7 +414,12 @@ func (a *Runtime) ContextTokens() int64 {
 	a.histMu.RLock()
 	defer a.histMu.RUnlock()
 	if a.lastRequest.ContextInput != nil {
-		return *a.lastRequest.ContextInput
+		// Items added since that request (tool outputs, steering) are estimated.
+		var added []json.RawMessage
+		if a.requestedLen <= len(a.History) {
+			added = a.History[a.requestedLen:]
+		}
+		return *a.lastRequest.ContextInput + estimateTokens(added)
 	}
 	return estimateTokens(a.requestInput()) + int64(len(a.prompt))/tokenBytes
 }

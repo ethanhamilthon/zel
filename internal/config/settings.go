@@ -11,6 +11,9 @@ const (
 	ShellTimeout    = 120
 	ShellMaxTimeout = 600
 	ShellOutput     = 8192
+	// CompactionThreshold is the default context size, in tokens, that triggers
+	// automatic compaction; zero disables it.
+	CompactionThreshold = 400000
 )
 
 var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -43,13 +46,14 @@ type Settings struct {
 	Provider, Model, Effort   string
 	ReasoningSummary          bool
 	ShellOutput, ShellTimeout int
+	CompactionThreshold       int
 	UI                        UI
 	Providers                 map[string]Provider
 	System                    []SystemBlock `json:"-"`
 }
 
 func DefaultSettings() Settings {
-	return Settings{Effort: "medium", ReasoningSummary: true, ShellOutput: ShellOutput, ShellTimeout: ShellTimeout,
+	return Settings{Effort: "medium", ReasoningSummary: true, ShellOutput: ShellOutput, ShellTimeout: ShellTimeout, CompactionThreshold: CompactionThreshold,
 		UI: UI{SlashMenu: true, Theme: map[string]string{}}, Providers: map[string]Provider{}}
 }
 
@@ -82,6 +86,9 @@ func Validate(s Settings) error {
 	}
 	if s.ShellTimeout < 1 || s.ShellTimeout > ShellMaxTimeout {
 		return fmt.Errorf("shell_timeout must be 1..%d seconds", ShellMaxTimeout)
+	}
+	if s.CompactionThreshold < 0 {
+		return fmt.Errorf("compaction threshold must be >= 0 tokens (0 = off)")
 	}
 	if !slices.Contains(Efforts, s.Effort) {
 		return fmt.Errorf("unsupported effort %q", s.Effort)

@@ -48,8 +48,8 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
-	labels := []string{"Output limit in bytes (0 = unlimited)", "Bash timeout in seconds (1–600)"}
-	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout)}
+	labels := []string{"Output limit in bytes (0 = unlimited)", "Bash timeout in seconds (1–600)", "Auto compaction threshold in tokens (0 = off)"}
+	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout), strconv.Itoa(s.CompactionThreshold)}
 	m.startForm(&formState{kind: "setting", setting: index, fields: []string{labels[index]}, values: []string{values[index]}})
 }
 func (m *model) openManualModel() {
@@ -163,10 +163,13 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 			f.err = "Enter a whole number"
 			return m, nil
 		}
-		if f.setting == 0 {
+		switch f.setting {
+		case 0:
 			s.ShellOutput = n
-		} else {
+		case 1:
 			s.ShellTimeout = n
+		default:
+			s.CompactionThreshold = n
 		}
 	case "model":
 		if _, ok := s.Providers[f.values[0]]; !ok {

@@ -284,9 +284,9 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.performSwitch(mu.target)
 		}
 	case menuSettings:
-		if index == 2 || index == 3 {
+		if index == 3 || index == 4 {
 			settings := m.ctl.Settings()
-			if index == 2 {
+			if index == 3 {
 				settings.ReasoningSummary = !settings.ReasoningSummary
 			} else {
 				settings.UI.SlashMenu = !settings.UI.SlashMenu

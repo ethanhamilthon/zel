@@ -183,6 +183,8 @@ func RecordsForItem(item json.RawMessage) []Record {
 		if len(texts) > 0 {
 			return []Record{{Kind: "reasoning", Text: strings.Join(texts, "\n")}}
 		}
+	case v.Type == "compaction":
+		return []Record{{Kind: "compaction", Text: "Context compacted"}}
 	case v.Type == "function_call":
 		var args struct{ Command string }
 		_ = json.Unmarshal([]byte(v.Arguments), &args)

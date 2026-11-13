@@ -50,7 +50,7 @@ var mainRows = []menuRow{
 	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts, compaction"},
 	{"Copy", "Agent answer to input, Ctrl+Y"},
 }
 

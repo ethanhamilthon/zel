@@ -36,7 +36,7 @@ func traceContext(e core.TraceEntry) string {
 
 var traceColors = map[string]lipgloss.Color{
 	"system": darkGray, "user": inputBlue, "assistant": lipgloss.Color("#ffffff"), "agent": lipgloss.Color("#ffffff"),
-	"bash": codeGray, "notice": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
+	"bash": codeGray, "notice": lipgloss.Color("#808080"), "compaction": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
 	"output": lipgloss.Color("#404040"), "error": errorColor,
 }
 

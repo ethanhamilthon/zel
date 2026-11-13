@@ -49,9 +49,17 @@ func instructionSnapshot(item json.RawMessage) (string, bool) {
 func (a *Runtime) requestInput() []json.RawMessage {
 	a.histMu.RLock()
 	defer a.histMu.RUnlock()
-	input := make([]json.RawMessage, 0, len(a.History))
-	for _, item := range a.History {
-		if _, snapshot := instructionSnapshot(item); !snapshot {
+	input := make([]json.RawMessage, 0, len(a.History)+1)
+	marked := a.compacted.Drop == 0
+	for i, item := range a.History {
+		if sent, _ := historyItem(item); !sent {
+			continue
+		}
+		if !marked && i >= a.compacted.Drop {
+			input = append(input, raw(map[string]any{"role": "user", "content": compactionNotice}))
+			marked = true
+		}
+		if item, ok := a.compactedInput(i, item); ok {
 			input = append(input, item)
 		}
 	}

@@ -24,7 +24,8 @@ func (h *fakeHost) AcceptSteering() bool {
 	}
 	return false
 }
-func (h *fakeHost) Save() error { h.log = append(h.log, "save"); return nil }
+func (h *fakeHost) Save() error    { h.log = append(h.log, "save"); return nil }
+func (h *fakeHost) Compact() error { h.log = append(h.log, "compact"); return nil }
 func (h *fakeHost) Request(context.Context) ([]json.RawMessage, error) {
 	h.log = append(h.log, "request")
 	h.requests++
@@ -50,7 +51,7 @@ func TestRunCommitsCallsBeforeExecution(t *testing.T) {
 	if err := Run(context.Background(), h); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"steer", "save", "request", "commit", "execute:c1", "steer", "steer", "save", "request", "commit", "steer"}
+	want := []string{"steer", "save", "request", "commit", "execute:c1", "compact", "steer", "steer", "save", "request", "commit", "steer"}
 	if !reflect.DeepEqual(h.log, want) {
 		t.Fatalf("log=%v", h.log)
 	}

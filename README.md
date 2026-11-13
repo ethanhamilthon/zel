@@ -39,7 +39,7 @@ Effort defaults to `medium`.
 Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
-Settings controls the Bash output budget, Bash timeout,
+Settings controls the Bash output budget, Bash timeout, auto compaction,
 and reasoning summaries. Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
@@ -68,6 +68,17 @@ Bash output uses a byte budget with head/tail truncation. With
 and the last 2048 bytes. The marker is additional to the retained-byte budget.
 Output within the limit is unchanged. Zero means unlimited; the default is
 8192 bytes.
+
+### Auto compaction
+
+When the context reaches the compaction threshold (default 400000 tokens; 0
+turns it off), Zel compacts it between model steps, after the step's commands
+finish. Counting back from the latest message, the last quarter of the
+threshold is sent unchanged; the next quarter keeps its commands but cuts their
+outputs to the first line; anything older keeps only user and assistant
+messages, at whole-turn boundaries, with a marker telling the model where the
+compaction happened. Saved history is never rewritten, so Tracing still shows
+everything, and the chat shows a "context compacted" divider.
 
 ## Chat and Tracing
 

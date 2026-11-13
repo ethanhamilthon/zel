@@ -13,6 +13,8 @@ type Host interface {
 	Request(context.Context) ([]json.RawMessage, error)
 	CommitResponse([]json.RawMessage) error
 	Execute(context.Context, entities.ToolCall) error
+	// Compact may shrink the context once all outputs of a step are committed.
+	Compact() error
 }
 
 func Run(ctx context.Context, host Host) error {
@@ -50,6 +52,11 @@ func Run(ctx context.Context, host Host) error {
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if calls > 0 {
+			if err := host.Compact(); err != nil {
+				return err
+			}
 		}
 		if steered := host.AcceptSteering(); calls == 0 && !steered {
 			return nil

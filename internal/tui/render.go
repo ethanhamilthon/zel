@@ -68,6 +68,10 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	switch e.Kind {
 	case "user":
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, darkGray)
+	case "compaction":
+		label := " context compacted "
+		side := max(0, width-lipgloss.Width(label)) / 2
+		return paint(strings.Repeat("─", side)+label+strings.Repeat("─", side), width, lipgloss.NoColor{}, darkGray)
 	case "assistant":
 	default:
 		return ""
@@ -156,7 +160,7 @@ func (m *model) timelineRows(budget time.Duration) []string {
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		e := m.entries[i]
 		limit := 0
-		if e.Kind == "assistant" || e.Kind == "user" {
+		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" {
 			limit = -1
 		}
 		cached := &m.cache[i]

@@ -1350,7 +1350,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread ZEL.md prompt"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Output, timeouts"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+		{"Settings", "Output, timeouts, compaction"}, {"Copy", "Agent answer to input, Ctrl+Y"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)
@@ -2199,7 +2199,7 @@ func TestSlashMenu(t *testing.T) {
 		})
 	}
 	m := bareModel(t, "/project")
-	m.menu = &menuState{page: menuSettings, selected: 3}
+	m.menu = &menuState{page: menuSettings, selected: 4}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.ctl.Settings().UI.SlashMenu {
 		t.Fatal("setting not disabled")

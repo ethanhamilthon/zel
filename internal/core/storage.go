@@ -75,12 +75,15 @@ func (a *Runtime) readSession() error {
 	if err != nil {
 		return err
 	}
-	a.History, a.itemMeta, a.imageWarnings = nil, nil, nil
+	a.History, a.itemMeta, a.imageWarnings, a.compacted = nil, nil, nil, compaction{}
 	for _, item := range items {
 		a.History = append(a.History, item.Data)
 		a.imageWarnings = append(a.imageWarnings, missingOriginalImages(item.Data)...)
 		if prompt, ok := instructionSnapshot(item.Data); ok {
 			a.prompt, a.promptFrozen = prompt, true
+		}
+		if c, ok := compactionSnapshot(item.Data); ok {
+			a.compacted = c
 		}
 		if item.Meta != nil {
 			a.setItemMeta(len(a.History)-1, *item.Meta)

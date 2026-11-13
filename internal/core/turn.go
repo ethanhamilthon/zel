@@ -16,6 +16,7 @@ type turnHost struct {
 
 func (h *turnHost) AcceptSteering() bool { return h.accept() }
 func (h *turnHost) Save() error          { return h.a.saveHistory() }
+func (h *turnHost) Compact() error       { return h.a.compact(h.emit) }
 func (h *turnHost) Request(ctx context.Context) ([]json.RawMessage, error) {
 	return h.a.request(ctx, h.emit)
 }

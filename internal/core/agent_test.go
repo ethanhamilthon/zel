@@ -1181,3 +1181,89 @@ func TestSubagentCommittedStepsAndModel(t *testing.T) {
 		t.Fatalf("incorrect persisted progress: %+v", run)
 	}
 }
+
+func TestCompactionZones(t *testing.T) {
+	big := func(id string) json.RawMessage {
+		return callOutput(id, shell.Result{Output: "first line of " + id + "\n" + strings.Repeat("x", 4000), ExitCode: 3})
+	}
+	call := func(id string) json.RawMessage {
+		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "bash", "arguments": `{"command":"ls"}`})
+	}
+	reply := func(text string) json.RawMessage {
+		return raw(map[string]any{"type": "message", "role": "assistant", "id": "msg_" + text, "content": []any{map[string]any{"type": "output_text", "text": text}}})
+	}
+	history := []json.RawMessage{
+		raw(map[string]string{"type": "instructions", "text": "prompt"}),
+		raw(map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": "first"}, map[string]any{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}}}),
+		raw(map[string]any{"type": "reasoning", "summary": []any{}}),
+		call("c1"), big("c1"), reply("done1"),
+		raw(map[string]any{"role": "user", "content": "second"}),
+		call("c2"), big("c2"), reply("done2"),
+		raw(map[string]any{"role": "user", "content": "third"}),
+		call("c3"), big("c3"),
+	}
+	threshold := 4 * estimateTokens(history[12:13])
+	bounds, changed := compactionBounds(history, threshold, compaction{})
+	if !changed || bounds != (compaction{Prune: 12, Drop: 6}) {
+		t.Fatalf("bounds = %+v changed=%v", bounds, changed)
+	}
+	if _, again := compactionBounds(history, threshold, bounds); again {
+		t.Fatal("unchanged bounds reported as a new compaction")
+	}
+	a := &Runtime{histMu: &sync.RWMutex{}, History: history, compacted: bounds}
+	var sent []string
+	for _, item := range a.requestInput() {
+		sent = append(sent, string(item))
+	}
+	body := strings.Join(sent, "\n")
+	for _, gone := range []string{`"c1"`, `"type":"reasoning"`, "input_image", "msg_done1", `"prompt"`} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("%s survived compaction:\n%s", gone, body)
+		}
+	}
+	if !strings.Contains(sent[0], "first") || !strings.Contains(sent[1], "done1") || !strings.Contains(sent[2], "context-compacted") || !strings.Contains(sent[3], "second") {
+		t.Fatalf("conversation or marker out of order:\n%s", body)
+	}
+	if !strings.Contains(sent[5], `first line of c2\\n[tool output pruned]`) || !strings.Contains(sent[5], `exit_code\":3`) || strings.Contains(sent[5], "xxx") {
+		t.Fatalf("middle output not pruned: %s", sent[5])
+	}
+	if sent[len(sent)-1] != string(history[12]) {
+		t.Fatal("fresh output changed")
+	}
+}
+
+func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if n == 2 {
+			return bashReply("c1", "seq 1 300")
+		}
+		return textReply("ok")
+	}}
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		s, err := LoadConfig(home, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.CompactionThreshold = 100
+		if err := WriteConfig(home, s); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, text := range []string{"one", "two"} {
+		if _, err := turn(t, a, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requests := fp.requests()
+	if len(requests) != 3 || !strings.Contains(requests[2], "context-compacted") || strings.Contains(requests[1], "context-compacted") {
+		t.Fatalf("compaction marker not sent after the tool step: %d requests", len(requests))
+	}
+	if !slices.ContainsFunc(a.Records(), func(r Record) bool { return r.Kind == "compaction" }) {
+		t.Fatal("compaction not recorded")
+	}
+	want := a.compacted
+	a.compacted = compaction{}
+	if err := a.readSession(); err != nil || a.compacted != want || want.Drop == 0 {
+		t.Fatalf("resumed bounds %+v, want %+v (%v)", a.compacted, want, err)
+	}
+}
