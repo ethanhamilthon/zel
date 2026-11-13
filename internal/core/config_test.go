@@ -77,6 +77,19 @@ func TestProjectPromptBuildsTheRequest(t *testing.T) {
 	}
 }
 
+func TestProjectPromptRunsBashBlocks(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	prompt := "Branch:\n```bash\necho main\n```\nKeep ```bash inline```.\n```bash\nexit 3\n```\n```sh\necho no\n```"
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) { writeFile(t, filepath.Join(dir, "ZEL.md"), prompt) })
+	if _, err := turn(t, a, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	want := `"instructions":"Branch:\nmain\nKeep ` + "```bash inline```" + `.\n\n[zel: exit status 3]\n` + "```sh" + `\necho no\n` + "```" + `"`
+	if !strings.Contains(fp.requests()[0], want) {
+		t.Fatalf("request: %s\nwant: %s", fp.requests()[0], want)
+	}
+}
+
 func TestSessionSelectionRollback(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
 	original := a.Settings()

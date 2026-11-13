@@ -58,6 +58,12 @@ order and accumulate:
 2. Every `ZEL.md` from the filesystem root down to the working directory
 3. `--config FILE`, when supplied (must exist)
 
+A fenced `` ```bash `` block is run when the prompt is built, in the working
+directory with a 30 second limit, and its output replaces the block. For example,
+`` ```bash `` / `git status --short` / `` ``` `` puts the current status into the
+prompt. These commands run without confirmation, so only use `ZEL.md` files you
+trust.
+
 A session saves its prompt snapshot. Reload rebuilds it; while a turn is active,
 the prompt change is deferred until that turn finishes. New sessions reread layers.
 
