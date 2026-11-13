@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,4 +251,36 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 	if a.lua.get().LoadErrs != nil {
 		t.Fatalf("load errors: %v", a.lua.get().LoadErrs)
 	}
+}
+
+func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		return luaReply("c1", "local h = tasks.spawn('sleep 30', {name='bg'})\nfs.write('spawned', h.id)\nsleep(20)")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- a.Run(ctx, "go", func(TurnEvent) {}) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(a.Shell.Dir, "spawned")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the call never started")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel did not end the call")
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("too slow")
+	}
+	if a.RunningTasks() != 1 {
+		t.Fatalf("the spawned task did not survive: %d running", a.RunningTasks())
+	}
+	_ = a.StopTask("t1")
 }

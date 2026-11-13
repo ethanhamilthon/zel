@@ -180,6 +180,15 @@ func (e luaEnv) SpawnTask(cmd string, o luart.TaskOpts) (luart.Job, error) {
 	return j, nil
 }
 
+// zelBinary is the executable children of agents.spawn run: this very binary when
+// it is called zel (so a child always matches its parent), else zel from PATH.
+func zelBinary() string {
+	if exe, err := os.Executable(); err == nil && filepath.Base(exe) == "zel" {
+		return exe
+	}
+	return "zel"
+}
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func (e luaEnv) SpawnAgent(o luart.AgentOpts) (luart.Job, error) {
@@ -196,7 +205,7 @@ func (e luaEnv) SpawnAgent(o luart.AgentOpts) (luart.Job, error) {
 		return nil, err
 	}
 	report := filepath.Join(reports, fmt.Sprintf("%s-%d.json", a.id, time.Now().UnixNano()))
-	command := `zel -p "$ZEL_AGENT_PROMPT"`
+	command := shellQuote(zelBinary()) + ` -p "$ZEL_AGENT_PROMPT"`
 	for _, f := range [][2]string{{"--model", o.Model}, {"--effort", o.Effort}, {"--provider", o.Provider}} {
 		if f[1] != "" {
 			command += " " + f[0] + " " + shellQuote(f[1])
