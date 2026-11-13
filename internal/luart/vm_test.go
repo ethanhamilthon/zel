@@ -2,6 +2,9 @@ package luart
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,6 +220,29 @@ func TestMiscHost(t *testing.T) {
 		t.Fatalf("%+v", env)
 	}
 	if !strings.HasPrefix(r.Output, `["s1","m",2,`) {
+		t.Fatalf("%q", r.Output)
+	}
+}
+
+func TestWeb(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("X-Echo", r.Method)
+		if r.URL.Path == "/missing" {
+			w.WriteHeader(404)
+		}
+		_, _ = w.Write([]byte(r.Method + ":" + string(body)))
+	}))
+	defer srv.Close()
+	env := newEnv(t)
+	r := run(t, env, nil, `
+local g = web.get("`+srv.URL+`/x")
+local p = web.post("`+srv.URL+`/x", {json = {a = 1}})
+local m = web.get("`+srv.URL+`/missing")
+local bad = web.get("http://127.0.0.1:1/")
+local q = web.request{url = "`+srv.URL+`/y", method = "PUT", body = "zz", headers = {["X-A"] = "b"}}
+print(g.ok, g.status, g.body, p.body, m.ok, m.status, bad.ok, bad.status, q.body)`)
+	if r.IsError || r.Output != "true\t200\tGET:\t"+`POST:{"a":1}`+"\tfalse\t404\tfalse\t0\tPUT:zz" {
 		t.Fatalf("%q", r.Output)
 	}
 }

@@ -257,3 +257,18 @@ zel.check(pkg?: string="./...") -> {ok:boolean, failures:string[]}  -- gofmt + v
 --   pkg: go package pattern
 --   e.g. local r = zel.check("./internal/agent/...")
 ```
+
+## 7. Implementation notes (deviations and details of 0.5.0)
+- Cancelling: the TUI has no Esc-cancel for a running turn; **Ctrl+D** (stop the active turn) cancels the running
+  call (`ECANCELED`). Background tasks and agents keep running, as designed.
+- `turn_end` may continue a turn at most 3 times (`inject`), so a hook that always injects cannot loop forever.
+- A queued user message is also passed through `message` hooks when it is accepted into the history.
+- `agents.spawn` starts a child `zel -p PROMPT` (env `ZEL_DEPTH`+1, parent session via `ZEL_PARENT`, answer file
+  `ZEL_REPORT`). Nesting is capped at depth 3. The child is visible in the task panel like any task.
+- `ZEL_REPORT` is cleared for everything else, so `sh("zel -p ...")` does not overwrite a parent's report.
+- Reload with a broken layer keeps the previous snapshot completely (not layer by layer) and raises a notice;
+  the first load at session start skips only the broken layer.
+- Tracing kind of a call is `lua` (search `:lua text`). The output-limit and timeout settings in the UI control the lua tool
+  (`--! timeout=N` caps at 600).
+- `ZEL.md` is neither read nor migrated; the repository itself uses `.zel/init.lua` + `AGENTS.md`.
+- Ready-made examples (global config, web plugin, project config) are in `docs/examples/` and covered by tests.

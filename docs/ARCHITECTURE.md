@@ -9,12 +9,13 @@ No provider or database is opened for standalone helpers such as `zel init`.
 | Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
 | `entities` | Shared input, attachments, tool calls, records, usage, model choices and domain events | None |
-| `config` | Defaults, validation, preference decoding, instruction layering, paths and project initialization | None |
+| `config` | Defaults, validation, preference decoding, init.lua layer discovery, paths and project initialization | None |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | SQLite opening, migrations, preferences, session/item transactions and task records | `entities` |
 | `shell` | Command execution, process groups, cancellation, bounded output and image capture | `entities` |
-| `agent` | One model/tool loop, steering checkpoints and cancellation boundaries | `entities` |
-| `core` | Runtime assembly, sessions, controller, queues, task lifecycle, persistence and application events | Backend packages |
+| `luart` | The Lua runtime (gopher-lua): per-call VM, host API (`sh`, `fs`, `web`, `json`, `state`, handles), the init.lua config VM with `zel.*`, hooks and system-prompt rendering. Talks to the application only through its `Env` interface | `shell` |
+| `agent` | One model/tool loop, steering checkpoints, turn-end hook and cancellation boundaries | `entities` |
+| `core` | Runtime assembly, sessions, controller, queues, jobs (tasks and subagents), key-value state, persistence and application events; implements `luart.Env` | Backend packages, `luart` |
 | `cli` | Argument parsing, helper commands, output and headless execution | `core`, `entities` |
 | `tui` | Display state, composer, menus, input events and rendering | `core`, `entities` |
 
@@ -43,8 +44,8 @@ Transient requests retry at most three times with bounded delays. Once a respons
 event has been delivered, a failed stream is not transparently replayed. Waiting for
 a retry respects context cancellation.
 
-`config.Load` receives persisted preference bytes from `core`, then merges the
-existing instruction layers. `config` never opens the database or imports runtime
+`config.Load` receives persisted preference bytes from `core` and finds the
+init.lua layers; `core` runs them in `luart`. `config` never opens the database or imports runtime
 types. Session model overrides and mutable execution state remain in `core`.
 
 All SQL lives in `store`. Existing database paths, migrations, saved history,
@@ -54,5 +55,18 @@ configuration formats and helper protocols are retained.
 
 Run `make test` for formatting, vet and race-enabled tests. Package-boundary tests
 also enforce frontend isolation, independent configuration/domain packages and the
-production-code budget of fewer than 10,000 Go lines (including blank lines and
+production-code budget of fewer than 15,500 Go lines (including blank lines and
 comments, excluding tests).
+
+## The lua tool
+
+The model sees one tool, `lua`. `provider` normalizes its transport (free-form
+custom tool on Responses, JSON `{code}` elsewhere) so history always holds a
+function call with `{"code": ...}`. `core.runTool` hands the code to a fresh
+`luart` VM per call; the host API reaches the application through `luart.Env`
+(shell environment, key-value state in `store`, jobs, images, notices). Tasks and
+subagents are jobs on the same machinery: `agents.spawn` starts a child
+`zel -p` with `ZEL_REPORT`, `ZEL_DEPTH` and the parent session, and the child
+writes its answer to the report file. init.lua layers are run once per session in
+a long-lived config VM (snapshot); hooks and plugin functions live there. See
+[lua-api.md](lua-api.md).
