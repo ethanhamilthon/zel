@@ -1,9 +1,10 @@
 #!/bin/sh
 # Install the latest zel release.
-# Usage: curl -fsSL ZEL_REPO=owner/repository sh scripts/install.sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/install.sh | sh
+# Optional: ZEL_VERSION=v0.4.0, ZEL_BINDIR=~/.local/bin, ZEL_REPO=owner/repository
 set -eu
 
-repo="${ZEL_REPO:?Set ZEL_REPO to the GitHub repository hosting Zel releases}"
+repo="${ZEL_REPO:-ethanhamilthon/zel}"
 bindir="${ZEL_BINDIR:-$HOME/.local/bin}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

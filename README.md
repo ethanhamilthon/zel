@@ -3,7 +3,17 @@
 A focused terminal coding agent with one tool: Bash. You control the system
 prompt through project Markdown, providers and preferences through the UI.
 
-## Build and run
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/install.sh | sh
+```
+
+Installs the latest release for macOS or Linux (arm64/amd64) into
+`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.4.0`).
+`zel update` later replaces the binary with the latest GitHub release.
+
+## Build from source
 
 ```sh
 make install     # installs ~/.local/bin/zel
@@ -13,8 +23,6 @@ make test        # formatting, vet, race tests
 ```
 
 Add `~/.local/bin` to `PATH`. Go 1.27.3+ and Make are required.
-The repository has no remote configured yet. The optional release installer
-requires `ZEL_REPO=owner/repository` pointing to a repository with Zel releases.
 
 Zel uses fresh data in `~/.zel` (override with `ZEL_HOME`). It does not read,
 modify, or migrate Dashy data. There is no `setup` command or TOML configuration.
