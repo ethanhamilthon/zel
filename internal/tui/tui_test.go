@@ -664,6 +664,9 @@ func TestQueuedComposerEditWithdrawsUntilEnter(t *testing.T) {
 	if m.input.Value() != "queued instruction" || m.pendingSteer == 0 || len(m.ctl.Status().Queued) != 1 {
 		t.Fatalf("queued draft disappeared: %q, %v", m.input.Value(), m.ctl.Status().Queued)
 	}
+	if !strings.HasSuffix(ansi.Strip(m.workingBlock()), " · queued\n\n") {
+		t.Fatalf("working indicator does not mention the queue: %q", ansi.Strip(m.workingBlock()))
+	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = key(m, tea.KeyMsg{Type: tea.KeyLeft})
 	if len(m.ctl.Status().Queued) != 1 || m.pendingSteer == 0 {

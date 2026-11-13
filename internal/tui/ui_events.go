@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -93,6 +94,12 @@ func (m model) workingBlock() string {
 		parts = append(parts, "cancelling")
 	} else {
 		parts = append(parts, formatSteps(m.turnSteps()))
+	}
+	switch queued := len(status.Queued); {
+	case queued == 1:
+		parts = append(parts, "queued")
+	case queued > 1:
+		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
 	text := ansi.Truncate(strings.Join(parts, " · "), max(1, m.width-2), "…")
