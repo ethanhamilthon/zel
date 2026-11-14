@@ -5,6 +5,13 @@ commands, files, HTTP, background tasks and subagents are plain functions in it.
 You extend the agent in Lua too, with `~/.zel/init.lua` and `./.zel/init.lua`;
 providers and preferences live in the UI.
 
+> **0.5.2 changes the Lua API again.** The Lua VM now keeps globals between
+> calls, the call timeout is 30 s, output is no longer truncated (`slice()` and
+> `fs.patch` are new), `tasks.spawn` takes a Lua function (shell commands and
+> `tasks.run` / `zel tasks` are gone), finished jobs arrive as short
+> `<notification>` messages, and only four hooks remain: `session_start`,
+> `session_end`, `message`, `turn_end`.
+>
 > **0.5.1 changes the Lua API.** The Lua call timeout is fixed at 10 s (no
 > `--! timeout=N`), job handles and the global `wait_all` are replaced by
 > `tasks.*` / `agents.*` functions taking a job ID, and `zel view` / `zel tasks run|stop`
@@ -58,17 +65,23 @@ environment variable with `{{$VARIABLE}}`.
 ## The lua tool
 
 The model has exactly one tool, `lua`. Its input is raw Lua code. Each Lua
-invocation has a fixed 10-second timeout that cannot be changed; long work belongs in
+invocation has a fixed 30-second timeout that cannot be changed; long work belongs in
 `tasks.spawn` / `agents.spawn` and is checked in later calls.
 Providers with free-form tools (OpenAI Responses) get the code as raw text, the
 others a JSON `{"code": "..."}`; both are normalized to the same call.
 
-Every call gets a fresh Lua state: globals do not survive, only `state.get/set/list`
-does (scope `session` or `project`, stored in `zel.db`). Output is whatever the
-code `print()`s plus the returned value. Everything blocks, except
-`tasks.spawn` and `agents.spawn`, which return a job ID for work that continues in
-the background (`tasks.wait/wait_all/result/status/tail/stop` and the same under `agents`); unclaimed results arrive later as `<task-result>` or
-`<agent-result>` messages. Messages you type during a call are queued until the
+The session has one Lua VM: globals and functions defined by one call are there
+in the next. It is reset when the session changes, init.lua reloads or a call
+times out, and the next output says so once; `state.get/set/list` outlives it
+(scope `session` or `project`, stored in `zel.db`). Output is whatever the
+code `print()`s plus the returned value, never truncated, so the model filters
+in Lua: `local a = fs.read("bigfile.md"); print(slice(a, 100, 10))`. Everything
+blocks, except `tasks.spawn(fn)` and `agents.spawn`, which return a job ID for
+work that continues in the background (`tasks.wait/wait_all/result/status/tail/stop`
+and the same under `agents`). A task is a Lua function that runs in its own VM
+with copies of what it captured; subagents cannot start subagents. The agent
+wakes up only for your messages and notifications: unclaimed results arrive as
+`<notification>t1 finished</notification>` and the model fetches the details. Messages you type during a call are queued until the
 call ends; Ctrl+D (stop the turn) cancels the running call; background work keeps running.
 
 Host API: `sh`, `fs.*`, `web.request/get/post`, `json`, `tasks.*`, `agents.*`,
@@ -100,7 +113,7 @@ zel.fn{                                                   -- a function for the 
   params = {{"pkg", "string?", "go package pattern", default = "./..."}},
   run = function(pkg) return sh("go vet " .. pkg).out end,
 }
-zel.on("turn_end", function(ev) end)  -- also session_start, message, before_call, after_call, bg_done
+zel.on("turn_end", function(ev) end)  -- also session_start, session_end, message; returned text becomes a notification
 ```
 
 Registered functions are rendered into the system prompt (signature, summary,
@@ -115,11 +128,10 @@ deferred until it ends, and a broken file keeps the previous snapshot.
 
 ### Output limits
 
-Lua call output uses a byte budget with head/tail truncation. With
-4096 bytes configured, Zel retains the first 2048 bytes, a truncation marker,
-and the last 2048 bytes (`sh().out` inside Lua is not truncated by it). The marker is additional to the retained-byte budget.
-Output within the limit is unchanged. Zero means unlimited; the default is
-8192 bytes.
+Lua call output is not truncated; the model is told to filter and slice in
+Lua. Only a 1 MiB safety cap (head and tail kept, with a marker) protects memory
+and the context; `sh().out` keeps up to 8 MiB, `fs.read` refuses files over
+16 MiB. The TUI bounds what it lays out on its own.
 
 ### Auto compaction
 
@@ -198,10 +210,10 @@ session only; they never change defaults for later sessions. `--config` keeps it
 usual highest-priority instruction layer. Headless mode reuses the normal agent,
 tools and session store; it is not an interactive request protocol.
 
-`zel tasks list|status` inspects a session's background commands and `zel models`
+`zel events` prints the notices a session showed and `zel models`
 checks providers (including `--json` output). Run `zel --help` for details.
 
-Task logs retain the first 8 MiB plus an explicit truncation marker; further
+Task logs (what a task printed) retain the first 8 MiB plus an explicit truncation marker; further
 output is drained without increasing disk usage. Task admission limits running
 tasks plus pending completion notices to 64, so final task results are not dropped.
 Composer input is separately limited to 64 items. Slow UI consumers use a bounded

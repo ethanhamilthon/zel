@@ -2,21 +2,26 @@
 
 0.5 — breaking release: bash tool и ZEL.md удалены.
 
-Принято: только Lua (shell — только `sh()`), свежее окружение на каждый вызов + явный `state`, всё блокирует кроме
+Принято: только Lua (shell — только `sh()`), постоянная main-VM сессии (глобалы живут между вызовами) + явный `state`, всё блокирует кроме
 `tasks.spawn`/`agents.spawn`, сабагенты (`agents.*`) — ядро 0.5, свои функции регистрируются в `init.lua` и сами
 попадают в системный промпт, полное доверие (без песочницы, trust-промптов и политик). Рантайм: gopher-lua (pure Go,
 `SetContext` для таймаута), вся stdlib открыта (`os`, `io` тоже), `package.path` += `~/.zel/lua/?.lua;.zel/lua/?.lua`.
 
 ## 1. Tool и модель вызова
 Модели доступен ровно один tool `lua`; payload — сырой Lua-код (транспорт и опции — ниже).
-- Каждый вызов — новый `LState`: глобалы и `require`-кэш не переживают вызов, между вызовами — только `state.*`.
-- Вывод = `print()` + `return` (таблицы → компактный JSON), бюджет 8192 B head/tail. `sh().out` внутри Lua полный (кап 8 MiB).
-- Таймаут вызова фиксирован: 10 s, не настраивается (0.5.1; раньше 120 s и `--! timeout=N`). Один дедлайн на весь скрипт и вложенные блокирующие вызовы: `sh{timeout}` и `tasks.wait`/`agents.wait` обрезаются до остатка. Долгая работа — `tasks.spawn`/`agents.spawn` и проверка в следующих вызовах; на дедлайне гибнут бесконечные циклы, а фоновые джобы живут дальше.
-- В фоне живут только таски и сабагенты, переживают конец вызова. Незабранный результат приходит сообщением
-  `<task-result id=…>` / `<agent-result id=…>`.
+- VM живёт между вызовами (0.5.2): глобалы, функции и `require`-кэш остаются. VM сбрасывается на `new`, `resume`, reload
+  и после таймаута вызова; следующий вывод один раз начинается с `[lua: fresh VM, <причина>: ...]`. `state.*` переживает и сброс.
+- Четыре роли VM, изолированные друг от друга: config-VM (`init.lua`, хуки, тела плагинов), main-VM (вызовы модели),
+  task-VM (свежая на каждый `tasks.spawn(fn)`, своя горутина), VM сабагента (своя main-VM; `agents.*` там запрещены → `EDENIED`).
+- Вывод = `print()` + `return` (таблицы → компактный JSON), без обрезки (0.5.2; только защитный кап 1 MiB). Фильтровать в Lua:
+  `local a = fs.read("bigfile.md"); print(slice(a, 100, 10))`. `sh().out` внутри Lua полный (кап 8 MiB).
+- Таймаут вызова фиксирован: 30 s, не настраивается (0.5.2; в 0.5.1 — 10 s, раньше 120 s и `--! timeout=N`). Один дедлайн на весь скрипт и вложенные блокирующие вызовы: `sh{timeout}` и `tasks.wait`/`agents.wait` обрезаются до остатка. Долгая работа — `tasks.spawn`/`agents.spawn` и проверка в следующих вызовах; на дедлайне гибнут бесконечные циклы, а фоновые джобы живут дальше.
+- В фоне живут только таски и сабагенты, переживают конец вызова. Незабранный результат приходит
+  уведомлением `<notification>t1 finished</notification>` — только короткий текст, детали модель берёт сама (`tasks.result(id)`).
+  Агент просыпается только от сообщения юзера или уведомления; несколько подряд приходят одним сообщением.
 - Юзер пишет во время вызова → сообщение встаёт в очередь и уходит модели после конца вызова. Вызов не прерывается:
   фоновых тасков тут нет, агент буквально ждёт результат. Esc → отмена (`ECANCELED`), спавненный фон продолжает работать.
-- CLI `zel tasks/view/-p` остаётся для людей, в промпте его нет.
+- CLI `zel -p` остаётся для людей, в промпте его нет (`zel tasks` удалён в 0.5.2).
 
 ### Формат tool-входа (универсальный)
 - Канон один: вызов = текст Lua-кода. Опций нет; первая строка `--!` — обычный Lua-комментарий и дедлайн не меняет.
@@ -25,7 +30,7 @@
 - Новый провайдер = только адаптер транспорта; промпт, хуки (`args = {code}`), логи и сессии от формата не зависят.
 
 ### Модель ошибок
-- Нормальная неудача — значение: `sh`, `web.*`, `tasks.run`, `agents.run`, `tasks.run` дают `ok=false` (+`code`/`status`/`error`).
+- Нормальная неудача — значение: `sh`, `web.*`, `agents.run` дают `ok=false` (+`code`/`status`/`error`).
 - Всё остальное (неверные аргументы, нет файла, лимиты, `check=true`, таймаут вызова) — Lua `error()` строкой вида
   `"<fn>: <CODE>: <msg>"`, ловится `pcall`. Коды: `EINVAL ENOENT ENOMATCH EAMBIG ELIMIT EFAIL EDENIED ETIMEOUT ECANCELED`.
   Пример: `local ok, err = pcall(fs.read, "x")` → `false, "fs.read: ENOENT: x"`; `err:find(": ENOENT:")`.
@@ -36,9 +41,11 @@
 sh(cmd, o?) -> {ok, code, out, timed_out, ms}  -- bash -c, своя process group; out = stdout+stderr; таймаут → 124
   -- o: timeout (s), cwd, env {K=V}, stdin, check (error EFAIL при code~=0)
 -- файлы (пути относительно session.cwd)
-fs.read(path, o?) -> string            -- o: from (строка, 1-based), lines; ENOENT
+fs.read(path) -> string                -- ENOENT; файлы > 16 MiB → ELIMIT
+slice(s, from, count?) -> string       -- строки from..from+count-1 (1-based); from<0 — с конца
 fs.write(path, s, o?) -> nil           -- o: append; родительские папки создаются
 fs.edit(path, old, new, o?) -> n       -- o: all; ENOMATCH (0 совпадений), EAMBIG (>1 без all)
+fs.patch(path, {{old, new}, ...}) -> n -- несколько точных правок атомарно: все или ни одной; {old=, new=, all=} тоже можно
 fs.list(dir) -> {name, dir, size}[]
 fs.glob(pattern) -> string[]           -- "internal/**/*.go"
 fs.grep(re, o?) -> {file, line, text}[] -- o: path, glob, fixed, max (default 200); rg, иначе Go regexp
@@ -49,23 +56,25 @@ web.request{url, method?, headers?, body?, json?, timeout?} -> {ok, status, head
 web.get(url, o?) / web.post(url, o?)   -- сахар; ok = 2xx; сетевая ошибка → ok=false, status=0
 json.encode(v, o?) -> string; json.decode(s) -> value   -- o: indent; decode: EINVAL
 -- фон: tasks и agents — два независимых namespace; общего Handle нет, джоб — строка-ID ("t1", "a1")
-tasks.spawn(cmd, o?) -> id             -- o: name, cwd, env, timeout (s, потом kill)
-tasks.run(cmd, o?) -> TaskResult       -- spawn + wait; в отличие от sh виден в панели тасков, лог сохраняется
+tasks.spawn(fn, o?) -> id              -- Lua-функция в фоне в своей VM, без лимита 30 s; o: name, timeout (s)
+  -- захват копией: upvalue-числа/строки/булевы/таблицы (глубоко)/функции (рекурсивно) копируются в новую VM;
+  -- userdata/корутины → EINVAL при spawn. Изменения внутри не видны снаружи, глобалов main-VM нет.
+  -- print() таска идёт в его лог (tasks.tail), return — в result.value. Отменяется на quit/new/reload.
 -- сабагенты — полноценный дочерний Runtime в этом же процессе (своя сессия, свой контекст), без `zel -p`
 agents.spawn{prompt, model?, effort?, provider?, cwd?, timeout?} -> id
 agents.run{...} -> AgentResult         -- spawn + wait
 -- одинаково в tasks.* и agents.* (ID чужого namespace → ENOENT)
-X.list() -> rows                       -- tasks: {id, name, cmd, state}; agents: {id, model, state, prompt}
+X.list() -> rows                       -- tasks: {id, name, state}; agents: {id, model, state, prompt}
 X.get(id) -> row|nil
 X.status(id) -> "running"|"done"|"failed"|"stopped"|"timeout"
-X.wait(id, timeout?) -> result | nil, "timeout"  -- таймаут ожидания НЕ убивает фон; дедлайн вызова (10 s) → ETIMEOUT
+X.wait(id, timeout?) -> result | nil, "timeout"  -- таймаут ожидания НЕ убивает фон; дедлайн вызова (30 s) → ETIMEOUT
 X.wait_all(ids, timeout?) -> results[] -- по индексам; nil у тех, кто не успел; один общий дедлайн
 X.result(id) -> result|nil             -- без блокировки
 X.tail(id, n?) -> string               -- последние n строк лога (у агента — шаги и финальный ответ)
-X.stop(id) -> nil                      -- task: SIGTERM группе, через 5s SIGKILL; agent: отмена контекста
--- TaskResult  = {id, ok, code, out, log, timed_out, ms}   out = хвост 64 KiB, log = путь к полному логу
+X.stop(id) -> nil                      -- отмена контекста (task и agent)
+-- TaskResult  = {id, ok, value, error?, out, timed_out, ms}   value = return функции, out = хвост 64 KiB напечатанного
 -- AgentResult = {id, ok, answer, session, error?, ms}
--- Результат отдаётся ровно один раз: либо wait/run забирает его, либо приходит сообщением <task-result>/<agent-result>.
+-- Результат отдаётся ровно один раз: либо wait/run забирает его, либо приходит уведомление <notification>t1 finished</notification>.
 -- состояние между вызовами
 state.get(key, scope?) -> value|nil
 state.set(key, value, scope?) -> nil   -- value=nil удаляет
@@ -90,7 +99,7 @@ log.info/warn(msg) -- только Tracing; log.notice(msg) -- уведомле�
 local zel = require("zel")
 zel.instructions(text | {file = "AGENTS.md"})   -- статичный текст промпта
 zel.prompt(function(ctx) return "..." end)       -- динамический кусок, считается на старте сессии и при Reload
-zel.defaults{provider=, model=, effort=, timeout=, output_limit=}  -- CLI-флаги выше
+zel.defaults{provider=, model=, effort=}  -- CLI-флаги выше
 zel.fn{name, summary, params?, returns?, examples?, hidden?, run}  -- функция для агента
 zel.on(event, function(ev, ctx) end)             -- хук
 ```
@@ -124,15 +133,14 @@ zel.fn{
 ## 4. Хуки
 | event | ev | вернуть |
 |---|---|---|
-| `session_start` | `{}` | ничего (побочные эффекты: прогреть кэш, проверить окружение) |
+| `session_start` | `{}` | nil или строку / `{notify = "текст"}` → уведомление (будит агента) |
+| `session_end` | `{reason}` (`quit`/`new`/`resume`) | ничего; на все хуки вместе 5 s |
 | `message` | `{text}` | nil или новую строку текста юзера |
-| `before_call` | `{fn, args}` | nil / `{args = новые}` / `{deny = "причина"}` → в агента летит `error("<fn>: EDENIED: …")` |
-| `after_call` | `{fn, args, result, err, ms}` | nil / `{result = новый}` |
-| `turn_end` | `{answer}` | nil / `{inject = "текст"}` → добавляется user-сообщение, цикл продолжается |
-| `bg_done` | `{kind, id, result}` | nil / `{text = "…"}` (переписать `<task-result>`) / `{drop = true}` |
+| `turn_end` | `{answer}` | nil или строку / `{notify = "текст"}` → уведомление, ход продолжается (не больше 3 раз подряд) |
 
-`before/after_call` — на каждый host- и плагинный вызов (`args` = массив позиционных аргументов) и один раз на весь
-вызов с `fn = "lua"`, `args = {code}`. `ctx = {session, layer}`. Ошибка в хуке → warning в Tracing, считается nil.
+С 0.5.2 хуков ровно четыре: `before_call`, `after_call` и `bg_done` удалены (`zel.on` с ними — ошибка загрузки слоя).
+Всё, что хуки сообщают агенту, приходит в одном формате `<notification>текст</notification>`.
+`ctx = {session, layer}`. Ошибка в хуке → warning в Tracing, считается nil.
 
 ## 5. Слои и слияние
 Порядок: `~/.zel/init.lua` → ближайший `.zel/init.lua` вверх от cwd → `--config FILE` (только `.lua`).
@@ -188,19 +196,24 @@ zel.fn{
 Сгенерированная секция системного промпта (целиком, с встроенной частью):
 ```text
 # Lua
-One tool: lua (raw Lua). Each call has a fixed 10 s timeout that cannot be changed: run long work with tasks.spawn/agents.spawn and check it in later calls. Fresh env per call; only state.* persists. Output = print() + return (JSON), 8 KB head/tail: filter in Lua.
-Errors raise "fn: CODE: msg" (pcall); sh/web/tasks.run/agents.run return ok=false instead. Everything blocks.
-spawn returns a job id (string); unwaited results arrive later as <task-result>/<agent-result>.
+One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn/agents.spawn and check it in later calls.
+The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". state.* outlives the VM.
+Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = fs.read("bigfile.md"); print(slice(a, 100, 10)).
+Errors raise "fn: CODE: msg" (pcall); sh/web/agents.run return ok=false instead. Everything blocks.
+You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (tasks.result(id)).
 ## built-in
 sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check
-fs.read(path, o?) -> string  -- o: from,lines
+fs.read(path) -> string; slice(s, from, count?) -> string  -- lines from..from+count-1; from<0 counts from the end
 fs.write(path, s, o?)  -- o: append
 fs.edit(path, old, new, o?) -> n  -- exact match; o: all
+fs.patch(path, {{old, new}, ...}) -> n  -- several exact edits, all or nothing; an edit may set all=true
 fs.list(dir) -> {name,dir,size}[]; fs.glob(pat) -> string[]; fs.exists(path) -> bool,kind; fs.tmp(name?) -> path
 fs.grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
 web.get(url, o?) / web.post(url, o?) / web.request{url,method,headers,body,json,timeout} -> {ok,status,headers,body,error}
 json.encode(v, o?) / json.decode(s)
-tasks.spawn(cmd, o?) -> id; tasks.run(cmd, o?) -> {ok,code,out,log,timed_out}  -- o: name,cwd,env,timeout
+tasks.spawn(fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; o: name,timeout
+--   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
+--   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
 agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
 tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
 state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
@@ -215,61 +228,59 @@ web.fetch(url: string, max?: integer=20000) -> string  -- page as markdown (traf
 
 ### 6.3 Проект `repos/zel/.zel/init.lua` — инструкции, функция проекта, хуки, state
 ```lua
+-- Copy to ./.zel/init.lua of a Go project: instructions, a project function, hooks, state.
 local zel = require("zel")
 zel.instructions{file = "AGENTS.md"}
 zel.prompt(function() return "git status:\n" .. sh("git status --short").out end)
 
+-- A Lua call lives 30 s, so the slow checks run as one background task.
 zel.fn{
-  name = "zel.check", summary = "gofmt + vet + race tests, returns only failures",
+  name = "zel.check", summary = "start gofmt + vet + race tests in the background, returns the task id",
   params = {{"pkg", "string?", "go package pattern", default = "./..."}},
-  returns = "{ok:boolean, failures:string[]}",
-  examples = {'local r = zel.check("./internal/agent/...")'},
+  returns = "string (task id: read it with tasks.wait(id, 20) or wait for its notification)",
+  examples = {'local id = zel.check("./internal/agent/...")'},
   run = function(pkg)
-    local fails = {}
-    local function add(out, pat)
-      for l in out:gmatch("[^\n]+") do if not pat or l:find(pat) then fails[#fails + 1] = l end end
-    end
-    add(sh("gofmt -l .").out)                                   -- любой вывод = неотформатированный файл
-    local v = sh("go vet " .. pkg); if not v.ok then add(v.out, "%.go:") end
-    local t = sh("go test -race -count=1 " .. pkg, {timeout = 300}); if not t.ok then add(t.out, "FAIL") end
-    state.set("last_check", {ok = #fails == 0, at = os.time()}, "project")
-    return {ok = #fails == 0, failures = fails}
+    pkg = pkg or "./..."
+    local id = tasks.spawn(function()
+      local r = sh('test -z "$(gofmt -l .)" && go vet ' .. pkg .. ' && go test -race -count=1 ' .. pkg)
+      print(r.out)
+      return r.ok
+    end, {name = "check", timeout = 600})
+    state.set("last_check", {id = id, at = os.time()}, "project")
+    return id
   end,
 }
 
-zel.on("before_call", function(ev)
-  if ev.fn == "sh" and ev.args[1]:match("^go test") and not ev.args[1]:find("-race") then
-    ev.args[1] = ev.args[1]:gsub("^go test", "go test -race")
-    return {args = ev.args}
-  end
-end)
 zel.on("turn_end", function()
   if sh("git status --porcelain").out ~= "" then
-    return {inject = "uncommitted changes: run zel.check() and commit per AGENTS.md"}
+    return "uncommitted changes: run zel.check() and commit per AGENTS.md"
   end
 end)
 ```
 Добавит в промпт:
 ```text
 ## project (repos/zel/.zel/init.lua)
-zel.check(pkg?: string="./...") -> {ok:boolean, failures:string[]}  -- gofmt + vet + race tests, returns only failures
+zel.check(pkg?: string="./...") -> string (task id: read it with tasks.wait(id, 20) or wait for its notification)  -- start gofmt + vet + race tests in the background, returns the task id
 --   pkg: go package pattern
---   e.g. local r = zel.check("./internal/agent/...")
+--   e.g. local id = zel.check("./internal/agent/...")
 ```
 
 ## 7. Implementation notes (deviations and details of 0.5.0)
 - Cancelling: the TUI has no Esc-cancel for a running turn; **Ctrl+D** (stop the active turn) cancels the running
   call (`ECANCELED`). Background tasks and agents keep running, as designed.
-- `turn_end` may continue a turn at most 3 times (`inject`), so a hook that always injects cannot loop forever.
+- `turn_end` may continue a turn at most 3 times (returned text → notification), so a hook that always answers cannot loop forever.
 - A queued user message is also passed through `message` hooks when it is accepted into the history.
 - `agents.spawn` runs a child agent inside the application (its own session; no `zel -p` process, no report file, no
-  socket). Nesting is capped at depth 3. The child is visible in the task panel like any task, and closing the parent
+  socket). Subagents cannot start subagents (0.5.2; `agents.*` raises `EDENIED` there, `tasks.*` works). The child is visible in the task panel like any task, and closing the parent
   cancels it. `sh()` still gets `ZEL_SESSION_ID` and `ZEL_DEPTH`.
 - Compatibility (0.5.1): handles and the global `wait_all` are gone (use `tasks.wait(id)` / `agents.wait_all(ids)`);
   `--! timeout=N`, the timeout setting and `zel.defaults{timeout=}` are removed; `zel view` and `zel tasks run|stop`
   are removed (use `view()` and `tasks.*`).
+- Compatibility (0.5.2): `tasks.spawn(cmd)`, `tasks.run` and the `zel tasks` CLI are removed (wrap shell work in
+  `tasks.spawn(function() return sh(cmd) end)`); `fs.read` lost `{from, lines}` (use `slice`); the output-limit
+  setting and `zel.defaults{output_limit=}` are removed; hooks are `session_start`, `session_end`, `message`, `turn_end`.
 - Reload with a broken layer keeps the previous snapshot completely (not layer by layer) and raises a notice;
   the first load at session start skips only the broken layer.
-- Tracing kind of a call is `lua` (search `:lua text`). The output-limit setting in the UI controls the lua tool; the 10 s call timeout is fixed.
+- Tracing kind of a call is `lua` (search `:lua text`). The lua output is not truncated (1 MiB safety cap) and the 30 s call timeout is fixed (0.5.2).
 - `ZEL.md` is neither read nor migrated; the repository itself uses `.zel/init.lua` + `AGENTS.md`.
 - Ready-made examples (global config, web plugin, project config) are in `docs/examples/` and covered by tests.

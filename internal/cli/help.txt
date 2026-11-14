@@ -38,18 +38,20 @@ COMMANDS
 
 INIT.LUA
   The model has one tool: lua (raw Lua code; every
-  invocation has a fixed 10-second timeout). There is no bash tool; shell runs
-  through sh(); subagents (agents.*) run inside the application.
+  invocation has a fixed 30-second timeout; the VM keeps globals between
+  calls). There is no bash tool; shell runs through sh(); background work is
+  tasks.spawn(fn) and subagents (agents.*) run inside the application.
   Config is Lua: ~/.zel/init.lua, then the nearest .zel/init.lua up from the
   working directory, then --config FILE. Layers instruct (zel.instructions,
   zel.prompt), set defaults, register functions (zel.fn) shown in the system
-  prompt, and hook events (session_start, message, before_call, after_call,
-  turn_end, bg_done). Layers are read once per session (and on resume);
+  prompt, and hook events (session_start, session_end, message,
+  turn_end). Layers are read once per session (and on resume);
   Menu > Reload re-reads them. ZEL.md is no longer read. See docs/lua-api.md.
 
 OUTPUT
-  A lua call returns print() output plus the returned value, with a head/tail
-  budget: 8192 bytes keeps the first 4096 + marker + last 4096; zero is unlimited.
+  A lua call returns print() output plus the returned value, not truncated
+  (1 MiB safety cap). Finished background jobs and hook text reach the agent
+  as <notification> messages.
 
 ENVIRONMENT
   ZEL_HOME        State directory, default ~/.zel: zel.db, init.lua, locks/,

@@ -19,7 +19,7 @@ const initTemplate = `local zel = require("zel")
 --   run = function(pkg) local r = sh("go test " .. pkg); return {ok = r.ok, out = r.out} end,
 -- }
 
--- Hooks: session_start, message, before_call, after_call, turn_end, bg_done
+-- Hooks: session_start, session_end, message, turn_end (returned text becomes a <notification>)
 -- zel.on("turn_end", function(ev) end)
 `
 

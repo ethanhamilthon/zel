@@ -21,7 +21,7 @@ zel --help</pre>
 <p>Providers, keys, preferences, defaults, sessions, and tasks live in <code>~/.zel/zel.db</code>. Keys are stored locally, not encrypted. Override the state directory with <code>ZEL_HOME</code>. Zel does not load or migrate old Dashy data. Manage preferences in Settings and providers in Providers. Model-list failures can be retried or bypassed through manual entry.</p>
 <p>Headless mode prints the persisted session ID first, then the final answer and exits. Diagnostics use stderr. Model, provider and effort flags override defaults for this session only. Read committed history with <code>zel session -s ID</code> while running or after exit.</p>
 <h2 id="instructions">The lua tool and init.lua</h2>
-<p>Zel 0.5 is a breaking release: the Bash tool and <code>ZEL.md</code> are gone. The model has one tool, <code>lua</code>; its input is raw Lua code. Each Lua invocation has a fixed 10-second timeout that cannot be changed. Every call gets a fresh Lua state; only <code>state.get/set/list</code> persists. Everything blocks except <code>tasks.spawn</code> and <code>agents.spawn</code>, which return a job ID; <code>tasks.*</code> and <code>agents.*</code> each have <code>wait</code>, <code>wait_all</code>, <code>result</code>, <code>status</code>, <code>tail</code> and <code>stop</code>. Agents run inside the application. Full host API, error model and hook table: <code>docs/lua-api.md</code>.</p>
+<p>Zel 0.5 is a breaking release: the Bash tool and <code>ZEL.md</code> are gone. The model has one tool, <code>lua</code>; its input is raw Lua code. Each Lua invocation has a fixed 30-second timeout that cannot be changed. The session's Lua VM keeps globals and functions between calls until the session changes, init.lua reloads or a call times out; <code>state.get/set/list</code> outlives it. Output is not truncated: filter it in Lua (<code>print(slice(fs.read("big.md"), 100, 10))</code>). Everything blocks except <code>tasks.spawn(fn)</code>, which runs a Lua function in its own VM, and <code>agents.spawn</code>; both return a job ID, and finished jobs nobody waited for arrive as <code>&lt;notification&gt;t1 finished&lt;/notification&gt;</code>; <code>tasks.*</code> and <code>agents.*</code> each have <code>wait</code>, <code>wait_all</code>, <code>result</code>, <code>status</code>, <code>tail</code> and <code>stop</code>. Agents run inside the application. Full host API, error model and hook table: <code>docs/lua-api.md</code>.</p>
 <pre>-- ~/.zel/init.lua, then the nearest .zel/init.lua, then --config FILE
 local zel = require("zel")
 zel.instructions{file = "AGENTS.md"}
@@ -35,13 +35,11 @@ zel.on("turn_end", function(ev) end)</pre>
 <p><code>terracotta, rose, dusty-pink, mauve, lavender, violet, slate, blue, sky, teal, sage, olive, moss, sand, ochre, amber, peach, clay, copper, plum</code></p>
 <h2 id="hooks">Hooks</h2>
 <pre>zel.on(event, function(ev, ctx) ... end)
-session_start   {}                       side effects only
+session_start   {}                       return text (or {notify="text"}) to notify the agent
+session_end     {reason}                 quit / new / resume; 5 s for all hooks
 message         {text}                   return a new user text
-before_call     {fn, args}               return {args=...} or {deny="reason"}
-after_call      {fn, args, result, err, ms}   return {result=...}
-turn_end        {answer}                 return {inject="text"} to continue (at most 3 times per turn)
-bg_done         {kind, id, result}       return {text=...} or {drop=true}</pre>
-<p>Hooks of all layers run, global first; an error in a hook is logged to Tracing and ignored. Lua output (and <code>sh().out</code> inside Lua) is bounded by the output budget setting: a 4096-byte limit retains the first 2048 bytes, a truncation marker, and the last 2048 bytes; zero means unlimited, the default is 8192 bytes.</p>
+turn_end        {answer}                 return text (or {notify="text"}) to continue (at most 3 times per turn)</pre>
+<p>Hooks of all layers run, global first; an error in a hook is logged to Tracing and ignored. Hook text reaches the agent as a <code>&lt;notification&gt;</code>. Lua output has only a 1 MiB safety cap; <code>sh().out</code> keeps up to 8 MiB.</p>
 <h2 id="ui">Interface</h2>
 <table><tr><th>Shortcut</th><th>Action</th></tr><tr><td>Ctrl+K</td><td>Menu</td></tr><tr><td>Ctrl+M</td><td>Models</td></tr><tr><td>Ctrl+R</td><td>Resume</td></tr><tr><td>Ctrl+I</td><td>Info</td></tr><tr><td>Ctrl+T</td><td>Tracing</td></tr><tr><td>Ctrl+F</td><td>Files</td></tr><tr><td>Ctrl+Q</td><td>Save and quit</td></tr><tr><td>Ctrl+Y</td><td>Copy the last answer as plain text (also in Menu)</td></tr><tr><td>Ctrl+D</td><td>Stop the active turn (does not exit)</td></tr><tr><td>Ctrl+E</td><td>External draft editor</td></tr></table>
 <p>Ctrl+M and Ctrl+I require Kitty keyboard protocol support; otherwise use Menu. Chat contains only user messages, answers, and the working indicator. Tracing shows everything else. Search accepts <code>:user text</code>, <code>:lua text</code>, and all displayed entry types.</p>
