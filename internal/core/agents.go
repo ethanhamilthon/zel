@@ -18,15 +18,17 @@ import (
 const MaxAgentDepth = 1
 
 // SubagentRun describes a running child agent. Parent is the root session of
-// the whole agent tree.
+// the whole agent tree. Activity is the foreground host operation the agent is
+// waiting on, "" when none runs.
 type SubagentRun struct {
-	ID      string
-	Parent  string
-	Started time.Time
-	Steps   int
-	Model   string
-	Effort  string
-	Command string
+	ID       string
+	Parent   string
+	Started  time.Time
+	Steps    int
+	Model    string
+	Effort   string
+	Command  string
+	Activity string
 }
 
 // agentTree is the in-memory registry of running agents. A root session and
@@ -62,6 +64,20 @@ func (t *agentTree) remove(id string) {
 	t.notify()
 }
 
+// setActivity updates the activity of one running agent. Only a change notifies.
+func (t *agentTree) setActivity(id, label string) {
+	t.mu.Lock()
+	run := t.runs[id]
+	changed := run != nil && run.Activity != label
+	if changed {
+		run.Activity = label
+	}
+	t.mu.Unlock()
+	if changed {
+		t.notify()
+	}
+}
+
 func (t *agentTree) step(id string) {
 	t.mu.Lock()
 	if run := t.runs[id]; run != nil {
@@ -90,11 +106,13 @@ func (t *agentTree) active(root string) []SubagentRun {
 	return list
 }
 
-// agentLink ties a child runtime to the tree of the session that started it.
+// agentLink ties a child runtime to the tree of the session that started it;
+// id is the key of the child's row in the tree.
 type agentLink struct {
 	tree  *agentTree
 	root  string
 	depth int
+	id    string
 }
 
 // ActiveSubagents lists the running agents of this session tree. It only reads
@@ -172,7 +190,7 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 
 	var outcome agentOutcome
 	opts := Options{Mode: "headless", Provider: o.Provider, Model: o.Model, Effort: o.Effort,
-		link: &agentLink{tree: tree, root: root, depth: a.depth + 1}}
+		link: &agentLink{tree: tree, root: root, depth: a.depth + 1, id: key}}
 	opts.SessionReady = func(c *Runtime) error {
 		if hint := c.Settings().SetupHint(); hint != "" {
 			return errors.New(hint)

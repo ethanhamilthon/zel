@@ -59,6 +59,7 @@ func (c *Controller) Status() (s Status) {
 			s.Busy, s.Cancelling = true, c.active.cancelled
 			s.Started = c.active.started
 			s.Queued = c.a.Queue().Pending()
+			s.Activity = c.a.Activity()
 		}
 	})
 	return s

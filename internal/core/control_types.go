@@ -65,4 +65,5 @@ type Status struct {
 	Queued     []Input
 	Tasks      int
 	Session    string
+	Activity   string // foreground host operation the turn waits on; "" when none
 }

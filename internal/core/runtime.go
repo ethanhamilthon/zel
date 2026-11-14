@@ -74,9 +74,11 @@ type Runtime struct {
 	requestedLen  int        // History length when lastRequest was sent
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
-	tree          *agentTree // running agents of this session tree
-	parentRoot    string     // root session of the tree when this runtime is an agent
-	depth         int        // agent nesting depth
+	tree          *agentTree  // running agents of this session tree
+	parentRoot    string      // root session of the tree when this runtime is an agent
+	depth         int         // agent nesting depth
+	link          *agentLink  // set when this runtime is an agent: its row in the tree
+	acts          *activities // foreground host operations in progress
 	queue         *Steering
 	slots         *imageSlots
 	tasks         *tasks
@@ -95,9 +97,9 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{opts: opts, home: home, tree: newAgentTree(), histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}}
+	a := &Runtime{opts: opts, home: home, tree: newAgentTree(), histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}, acts: &activities{}}
 	if opts.link != nil {
-		a.tree, a.parentRoot, a.depth = opts.link.tree, opts.link.root, opts.link.depth
+		a.tree, a.parentRoot, a.depth, a.link = opts.link.tree, opts.link.root, opts.link.depth, opts.link
 	} else {
 		a.depth, _ = strconv.Atoi(os.Getenv("ZEL_DEPTH"))
 	}

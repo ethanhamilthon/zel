@@ -104,4 +104,8 @@ type Env interface {
 	// Models lists the models of the configured providers. Providers that fail
 	// are reported by name in failures; they do not fail the list.
 	Models(ctx context.Context) (models []ModelInfo, failures map[string]string)
+	// Begin reports a host operation that starts now, with a label that already
+	// hides secrets. The returned end must be called exactly once when it ends,
+	// however it ends. Background operations (tasks) are not foreground activity.
+	Begin(label string, background bool) (end func())
 }

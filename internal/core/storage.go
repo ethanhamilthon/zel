@@ -193,7 +193,7 @@ func ReadSession(cwd, id string) ([]Record, error) {
 		}
 		return nil, err
 	}
-	a := &Runtime{db: db, id: id, histMu: &sync.RWMutex{}}
+	a := &Runtime{db: db, id: id, histMu: &sync.RWMutex{}, acts: &activities{}}
 	if err := a.readSession(); err != nil {
 		return nil, err
 	}

@@ -229,6 +229,14 @@ func (e luaEnv) Models(ctx context.Context) ([]luart.ModelInfo, map[string]strin
 	return nil, nil
 }
 
+// Begin reports a foreground host operation; background work is not shown.
+func (e luaEnv) Begin(label string, background bool) (end func()) {
+	if background {
+		return func() {}
+	}
+	return e.a.beginActivity(label)
+}
+
 func (e luaEnv) Notice(msg string) { e.a.notify(msg) }
 
 func (e luaEnv) Log(level, msg string) { e.a.LogEvent("lua-"+level, msg) }
@@ -285,7 +293,7 @@ func (a *Runtime) hookInput(ctx context.Context, input Input) Input {
 // startSubagent runs the subagent_start hooks of the current snapshot.
 func (h *luaHolder) startSubagent(info map[string]any) {
 	if cfg := h.get(); cfg != nil && cfg.HasHook("subagent_start") {
-		cfg.SubagentStart(context.Background(), info)
+		cfg.SubagentStart(luart.WithBackground(context.Background()), info)
 	}
 }
 
@@ -296,7 +304,7 @@ func (h *luaHolder) endSubagent(info map[string]any, closing bool) {
 	if cfg == nil || !cfg.HasHook("subagent_end") {
 		return
 	}
-	ctx := context.Background()
+	ctx := luart.WithBackground(context.Background())
 	if closing {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, luart.SessionEndTimeout)

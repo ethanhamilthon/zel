@@ -209,7 +209,7 @@ func CodeTask(env Env, cfg *Config, code string) (run TaskFunc, discard func(), 
 func (v *vm) task(fn *lua.LFunction) TaskFunc {
 	return func(ctx context.Context, out io.Writer) (any, error) {
 		defer v.close()
-		v.ctx, v.out = ctx, out
+		v.ctx, v.out = WithBackground(ctx), out
 		v.L.SetContext(ctx)
 		if err := v.L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}); err != nil {
 			if ctx.Err() != nil {

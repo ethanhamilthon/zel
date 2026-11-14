@@ -106,8 +106,8 @@ func (a *Runtime) changeSession(id string) error {
 		_, err := a.instructions(context.Background())
 		return err
 	}
-	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell, tree: a.tree, parentRoot: a.parentRoot, depth: a.depth,
-		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, lua: &luaHolder{notice: a.lua.notice}}
+	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell, tree: a.tree, parentRoot: a.parentRoot, depth: a.depth, link: a.link,
+		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, lua: &luaHolder{notice: a.lua.notice}, acts: &activities{}}
 	if err := next.loadConfig(a.Shell.Dir); err != nil {
 		return err
 	}

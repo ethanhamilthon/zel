@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type memState struct {
@@ -89,6 +90,29 @@ type fakeEnv struct {
 	depth    int
 	models   []ModelInfo
 	failures map[string]string
+	acts     []fakeAct // every operation reported by Begin, in start order
+}
+
+// fakeAct is one reported host operation; ended is set by its end function.
+type fakeAct struct {
+	label      string
+	background bool
+	ended      bool
+}
+
+func (e *fakeEnv) Begin(label string, background bool) func() {
+	e.mu.Lock()
+	idx := len(e.acts)
+	e.acts = append(e.acts, fakeAct{label: label, background: background})
+	e.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.mu.Lock()
+			e.acts[idx].ended = true
+			e.mu.Unlock()
+		})
+	}
 }
 
 func (e *fakeEnv) Models(ctx context.Context) ([]ModelInfo, map[string]string) {
@@ -233,4 +257,70 @@ func (e *fakeEnv) Log(level, msg string)  { e.logs = append(e.logs, level+": "+m
 func (e *fakeEnv) Rename(name string) error {
 	e.renamed = name
 	return nil
+}
+
+func TestHostActivityLabelsAndEnds(t *testing.T) {
+	env := newEnv(t)
+	r := run(t, env, nil, `
+fs.write("notes.txt", "x")
+print(fs.read("notes.txt"))
+print(pcall(fs.read, "missing.txt"))
+sleep(0)
+local id = tasks.spawn(function() sleep(0) return 1 end)
+tasks.wait(id, 5)
+return "ok"`)
+	if r.IsError {
+		t.Fatal(r.Output)
+	}
+	env.mu.Lock()
+	defer env.mu.Unlock()
+	want := []struct {
+		label      string
+		background bool
+	}{
+		{"writing notes.txt", false}, {"reading notes.txt", false}, {"reading missing.txt", false},
+		{"sleeping 0 sec", false}, {"starting task", false}, {"waiting for task t1", false}, {"sleeping 0 sec", true},
+	}
+	if len(env.acts) != len(want) {
+		t.Fatalf("activities = %+v, want %d", env.acts, len(want))
+	}
+	for i, w := range want {
+		got := env.acts[i]
+		if got.label != w.label || got.background != w.background {
+			t.Errorf("activity %d = %+v, want %+v", i, got, w)
+		}
+		if !got.ended {
+			t.Errorf("activity %d %q never ended: a failed or finished call must clear it", i, got.label)
+		}
+	}
+}
+
+func TestScrubLabelHidesSecrets(t *testing.T) {
+	secrets := []string{"abcdef123456", "hunter2hunter2", "sk-live-abcdefghijkl", "ghp_abcdefghijklmnop"}
+	for _, in := range []string{
+		"running bash: curl -H 'Authorization: Bearer abcdef123456' https://example.com",
+		"running bash: echo token=hunter2hunter2",
+		`running bash: API_KEY="sk-live-abcdefghijkl" make`,
+		"running bash: tool --token abcdef123456",
+		"running bash: echo ghp_abcdefghijklmnop",
+	} {
+		got := scrubLabel(in)
+		for _, secret := range secrets {
+			if strings.Contains(got, secret) {
+				t.Errorf("scrubLabel(%q) = %q leaks %q", in, got, secret)
+			}
+		}
+	}
+	if got := safeURL("https://user:pw@example.com/a/b?access=xyz"); got != "https://example.com/a/b?…" {
+		t.Errorf("safeURL = %q", got)
+	}
+	if got := scrubLabel("reading ~/.zel/init.lua"); got != "reading ~/.zel/init.lua" {
+		t.Errorf("plain label changed: %q", got)
+	}
+	if got := scrubLabel("running bash: line one\nline two"); got != "running bash: line one …" {
+		t.Errorf("multi-line label = %q", got)
+	}
+	if got := scrubLabel(strings.Repeat("é", 300)); utf8.RuneCountInString(got) != maxLabel {
+		t.Errorf("long label has %d runes, want %d", utf8.RuneCountInString(got), maxLabel)
+	}
 }

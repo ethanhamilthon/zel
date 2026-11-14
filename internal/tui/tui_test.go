@@ -2745,3 +2745,46 @@ func TestHighlightLuaWrapsAndKeepsText(t *testing.T) {
 		t.Fatalf("%q", plain)
 	}
 }
+
+func TestWorkingIndicatorShowsActivity(t *testing.T) {
+	status := core.Status{Busy: true, Started: time.Now().Add(-69*time.Second - 300*time.Millisecond), Activity: "reading ~/.zel/init.lua"}
+	if got := workingText(status, 4); got != "1m9s · 4 steps · reading ~/.zel/init.lua" {
+		t.Fatalf("working text = %q", got)
+	}
+	if got := ansi.Truncate(workingText(status, 4), 20, "…"); !strings.HasPrefix(got, "1m9s · 4 steps") {
+		t.Fatalf("narrow indicator lost time or steps: %q", got)
+	}
+	status.Activity = ""
+	if got := workingText(status, 4); got != "1m9s · 4 steps" {
+		t.Fatalf("idle indicator = %q: no stale activity", got)
+	}
+	status.Activity, status.Cancelling = "reading ~/.zel/init.lua", true
+	if got := workingText(status, 4); got != "1m9s · cancelling" {
+		t.Fatalf("cancelling indicator = %q", got)
+	}
+}
+
+func TestSubagentRowsShowTheirOwnActivity(t *testing.T) {
+	started := time.Now().Add(-69 * time.Second)
+	m := model{width: 80, subagents: []core.SubagentRun{
+		{ID: "s/a1", Started: started, Steps: 2, Model: "gpt-6-luna", Effort: "low", Activity: "running agent in gpt-6-luna/low"},
+		{ID: "s/a2", Started: started, Steps: 5, Model: "gpt-6-luna", Effort: "low", Activity: "sleeping 20 sec"},
+	}}
+	lines := strings.Split(ansi.Strip(m.subagentBlock()), "\n")
+	var rows []string
+	for _, line := range lines {
+		if strings.Contains(line, "◆") {
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %q", rows)
+	}
+	if !strings.HasSuffix(rows[0], "2 steps · running agent in gpt-6-luna/low") || !strings.HasSuffix(rows[1], "5 steps · sleeping 20 sec") {
+		t.Fatalf("each row must show its own activity: %q", rows)
+	}
+	idle := model{width: 80, subagents: []core.SubagentRun{{Started: started, Steps: 1, Model: "m"}}}
+	if row := ansi.Strip(idle.subagentBlock()); strings.Contains(row, "steps ·") {
+		t.Fatalf("idle row shows an activity: %q", row)
+	}
+}

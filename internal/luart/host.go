@@ -23,11 +23,11 @@ func (v *vm) installHost() {
 	if v.role == roleConfig {
 		v.out = logWriter{v.env}
 	}
-	L.SetGlobal("print", L.NewFunction(v.print))
-	L.SetGlobal("sh", L.NewFunction(v.sh))
-	L.SetGlobal("sleep", L.NewFunction(v.sleep))
-	L.SetGlobal("view", L.NewFunction(v.view))
-	L.SetGlobal("slice", L.NewFunction(slice))
+	L.SetGlobal("print", v.hostFn("print", v.print))
+	L.SetGlobal("sh", v.hostFn("sh", v.sh))
+	L.SetGlobal("sleep", v.hostFn("sleep", v.sleep))
+	L.SetGlobal("view", v.hostFn("view", v.view))
+	L.SetGlobal("slice", v.hostFn("slice", slice))
 	v.table("fs", map[string]lua.LGFunction{
 		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "list": v.fsList, "glob": v.fsGlob,
 		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp, "patch": v.fsPatch,
@@ -57,7 +57,7 @@ func (w logWriter) Write(p []byte) (int, error) {
 func (v *vm) table(name string, fns map[string]lua.LGFunction) {
 	t := v.L.NewTable()
 	for fn, impl := range fns {
-		t.RawSetString(fn, v.L.NewFunction(impl))
+		t.RawSetString(fn, v.hostFn(name+"."+fn, impl))
 	}
 	v.L.SetGlobal(name, t)
 }
@@ -84,8 +84,8 @@ func (v *vm) installSession() {
 		t.RawSetString(k, lua.LString(val))
 	}
 	t.RawSetString("depth", lua.LNumber(info.Depth))
-	t.RawSetString("models", L.NewFunction(v.sessionModels))
-	t.RawSetString("rename", L.NewFunction(func(L *lua.LState) int {
+	t.RawSetString("models", v.hostFn("session.models", v.sessionModels))
+	t.RawSetString("rename", v.hostFn("session.rename", func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if strings.TrimSpace(name) == "" {
 			raise(L, "session.rename", EINVAL, "name is empty")

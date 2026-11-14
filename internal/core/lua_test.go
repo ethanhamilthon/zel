@@ -629,3 +629,62 @@ zel.on("subagent_end", function(ev) sh("true") end)`))
 		t.Fatalf("plugin result missing: %s", out)
 	}
 }
+
+// Overlapping foreground operations keep their own entries: a call ends only
+// its own, the indicator shows the newest one still running, and a background
+// operation never takes over the foreground.
+func TestActivityOverlapAndBackground(t *testing.T) {
+	a := &Runtime{acts: &activities{}}
+	endOuter := a.beginActivity("running review")
+	endInner := a.beginActivity("reading ~/.zel/init.lua")
+	if got := a.Activity(); got != "reading ~/.zel/init.lua" {
+		t.Fatalf("activity = %q, want the newest operation", got)
+	}
+	endInner()
+	endInner() // ending twice is harmless
+	if got := a.Activity(); got != "running review" {
+		t.Fatalf("after the inner end activity = %q", got)
+	}
+	endBackground := luaEnv{a}.Begin("sleeping 60 sec", true)
+	if got := a.Activity(); got != "running review" {
+		t.Fatalf("background work replaced the foreground: %q", got)
+	}
+	endBackground()
+	endOuter()
+	if got := a.Activity(); got != "" {
+		t.Fatalf("activity %q left after every operation ended", got)
+	}
+}
+
+// A subagent publishes its activity on its own row; unchanged labels do not
+// notify again, and a finished subagent leaves no row to update.
+func TestSubagentRowTracksItsOwnActivity(t *testing.T) {
+	tree := newAgentTree()
+	changes := 0
+	tree.changed = func() { changes++ }
+	tree.add(SubagentRun{ID: "s/a1", Parent: "s"})
+	child := &Runtime{tree: tree, acts: &activities{}, link: &agentLink{tree: tree, root: "s", id: "s/a1"}}
+	endFirst := child.beginActivity("reading a.txt")
+	endSecond := child.beginActivity("reading a.txt")
+	rows := tree.active("s")
+	if len(rows) != 1 || rows[0].Activity != "reading a.txt" {
+		t.Fatalf("row = %+v", rows)
+	}
+	before := changes
+	endSecond() // the shown label is still the first one: nothing changed
+	if changes != before {
+		t.Fatalf("an unchanged activity notified again")
+	}
+	endFirst()
+	if got := tree.active("s")[0].Activity; got != "" {
+		t.Fatalf("row kept activity %q after the operations ended", got)
+	}
+	if changes != before+1 {
+		t.Fatalf("changes = %d, want one notification for the cleared activity", changes)
+	}
+	tree.remove("s/a1")
+	child.beginActivity("late") // a finished subagent updates nothing
+	if rows := tree.active("s"); len(rows) != 0 {
+		t.Fatalf("finished subagent came back: %+v", rows)
+	}
+}

@@ -156,7 +156,7 @@ everything, and the chat shows a "context compacted" divider.
 
 ## Chat and Tracing
 
-Chat shows user messages, agent messages, and the working indicator. Tools,
+Chat shows user messages, agent messages, and the working indicator. The indicator shows the Lua host operation the turn waits on (for example `reading ~/.zel/init.lua` or `sleeping 20 sec`), and each running subagent row shows its own; background tasks are not shown there. Labels hide secrets such as tokens and URL queries. Tools,
 thoughts, errors, and other events belong in Tracing; there are no
 visibility toggles. A turn that fails or is stopped with Ctrl+D ends in the chat with a red line of wall-clock time and steps, then the error or "stopped by user". Info, Tracing, and Tasks refresh while open.
 

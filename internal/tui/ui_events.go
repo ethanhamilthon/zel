@@ -106,11 +106,20 @@ func (m model) workingBlock() string {
 			return ""
 		}
 	}
+	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
+	text := ansi.Truncate(workingText(status, m.turnSteps()), max(1, m.width-2), "…")
+	return lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
+}
+
+// workingText is the text of the working indicator: elapsed time, steps (or
+// cancelling), queued input, then the activity of the foreground host operation.
+// The activity goes last, so a narrow terminal cuts it before time and steps.
+func workingText(status core.Status, steps int) string {
 	parts := []string{formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
 		parts = append(parts, "cancelling")
 	} else {
-		parts = append(parts, formatSteps(m.turnSteps()))
+		parts = append(parts, formatSteps(steps))
 	}
 	switch queued := len(status.Queued); {
 	case queued == 1:
@@ -118,9 +127,10 @@ func (m model) workingBlock() string {
 	case queued > 1:
 		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
-	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
-	text := ansi.Truncate(strings.Join(parts, " · "), max(1, m.width-2), "…")
-	return lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
+	if status.Activity != "" && !status.Cancelling {
+		parts = append(parts, status.Activity)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // turnSteps counts the tool calls and thinking blocks of the running turn. The
@@ -166,7 +176,7 @@ func (m model) subagentBlock() string {
 }
 
 // formatSubagentRow renders a single subagent indicator row:
-// [fading agent icon] model/effort · working-time · N steps
+// [fading agent icon] model/effort · working-time · N steps · activity
 func (m model) formatSubagentRow(child SubagentRun) string {
 	elapsed := time.Since(child.Started)
 	var parts []string
@@ -178,6 +188,9 @@ func (m model) formatSubagentRow(child SubagentRun) string {
 		parts = append(parts, label)
 	}
 	parts = append(parts, formatDuration(elapsed), formatSteps(child.Steps))
+	if child.Activity != "" {
+		parts = append(parts, child.Activity)
+	}
 	icon := "◆"
 	pad := max(1, m.width-ansi.StringWidth(icon)-1)
 	text := ansi.Truncate(strings.Join(parts, " · "), pad, "…")

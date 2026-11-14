@@ -363,7 +363,7 @@ func (c *Config) installFns(v *vm) {
 	for _, def := range c.fns {
 		def := def
 		ns, name, dotted := strings.Cut(def.Name, ".")
-		impl := v.L.NewFunction(func(L *lua.LState) int { return c.call(v, def, L) })
+		impl := v.hostFn(def.Name, func(L *lua.LState) int { return c.call(v, def, L) })
 		if !dotted {
 			v.L.SetGlobal(def.Name, impl)
 			continue
