@@ -280,10 +280,14 @@ func (a *Runtime) sessionEnd(reason string) {
 	}
 }
 
-// hookInput lets message hooks rewrite what the user typed.
+// hookInput lets message hooks observe notifications or rewrite what the user typed.
 func (a *Runtime) hookInput(ctx context.Context, input Input) Input {
 	cfg := a.lua.get()
-	if input.Notice || cfg == nil || !cfg.HasHook("message") || input.Text == "" {
+	if cfg == nil || !cfg.HasHook("message") || input.Text == "" {
+		return input
+	}
+	if input.Notice {
+		cfg.Notice(ctx, input.Text)
 		return input
 	}
 	input.Text = cfg.Message(ctx, input.Text)

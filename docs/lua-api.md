@@ -134,7 +134,7 @@ Groups: `## built-in` (fixed text from the binary), then `## <layer> (path)`. Re
 |---|---|---|
 | `session_start` | `{}` | nil or a string / `{notify = "text"}` → notification (wakes the agent) |
 | `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; 5 s for all hooks together |
-| `message` | `{text}` | nil or a new user text string |
+| `message` | `{text, notice?}` | nil or a new user text string; `notice = true` marks a notification, whose text cannot be rewritten |
 | `turn_end` | `{answer}` | nil or a string / `{notify = "text"}` → notification, the turn continues (at most 3 times in a row) |
 | `subagent_start` | `{id, prompt, model, effort, provider, cwd, depth}` | nothing; runs in the background when the subagent begins |
 | `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; once per subagent: `done`/`failed`/`stopped`/`timeout` |
