@@ -72,6 +72,12 @@ type model struct {
 	fileDismissed             bool
 	fileDismissedValue        string
 	fileDismissedCursor       int
+	promptItems               []string // # completions of the token at the cursor
+	promptStart, promptEnd    int
+	promptSelected            int
+	promptSeq                 int
+	promptPending             int // seq of the expansion in flight; 0 when none
+	promptCancel              context.CancelFunc
 	subagents                 []core.SubagentRun
 	frameAt                   time.Time
 	dirty                     bool
@@ -323,6 +329,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pulse()
 		}
 		return m, nil
+	case promptExpanded:
+		return m.finishPrompt(v)
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, v.Width), max(1, v.Height)
 		m.refresh(follow)
@@ -350,6 +358,23 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openMenuPage(menuPage(v))
 	case tea.KeyMsg:
+		if m.promptPending != 0 {
+			switch v.String() {
+			case "ctrl+d":
+				// The composer stays read-only, but Ctrl+D still stops the active turn
+				// and cancels the expansion: a slow completion never holds a turn.
+				m.cancelPrompt()
+				if m.ctl.Status().Busy {
+					m.requestCancel()
+				}
+				m.refresh(true)
+				return m, nil
+			case "ctrl+q":
+				// quit below
+			default:
+				return m, nil // the composer is read-only while a prompt expands
+			}
+		}
 		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+y" && v.String() != "ctrl+q" {
 			return m.formKey(v)
 		}
@@ -424,6 +449,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "tab":
+			if m.hasPromptCompletions() {
+				cmd := m.acceptPromptCompletion()
+				m.refresh(true)
+				return m, cmd
+			}
 			if m.hasFileCompletions() {
 				cmd := m.completeFile(true)
 				m.refresh(true)
@@ -433,6 +463,12 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delta := 1
 			if v.String() == "up" {
 				delta = -1
+			}
+			if m.hasPromptCompletions() {
+				n := len(m.promptItems)
+				m.promptSelected = (m.promptSelected + delta + n) % n
+				m.refresh(true)
+				return m, nil
 			}
 			if m.hasFileCompletions() {
 				n := len(m.fileCompletions)
@@ -460,6 +496,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.pasting {
 				return m.stop("notice", "Clipboard read in progress; wait before submitting.")
 			}
+			if m.hasPromptCompletions() && !m.promptIsComplete() {
+				cmd := m.acceptPromptCompletion()
+				m.refresh(true)
+				return m, cmd
+			}
 			if m.hasFileCompletions() {
 				cmd := m.acceptFileCompletion()
 				m.refresh(true)
@@ -468,6 +509,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := strings.TrimSpace(m.input.Value())
 			if text == "" {
 				return m, nil
+			}
+			if m.ctl.HasPromptTokens(text) {
+				return m.expandPrompt(text)
 			}
 			return m.sendInput(core.Input{Text: text})
 		}
@@ -531,6 +575,7 @@ func (m *model) edit(follow bool, change func() tea.Cmd) tea.Cmd {
 	if changed || moved {
 		m.fileDismissed = false
 		fileCmd = m.checkFileCompletion()
+		m.checkPromptCompletion()
 	}
 	m.refresh(follow || changed)
 	return tea.Batch(cmd, fileCmd)
@@ -552,6 +597,13 @@ func (m model) render() string {
 }
 
 func (m model) sendInput(input core.Input) (tea.Model, tea.Cmd) {
+	return m.deliver(input, m.input.Value())
+}
+
+// deliver sends input to the agent, or queues it while a turn runs. draft is the
+// composer text the input came from: it stays in the composer while the input is
+// queued (editing withdraws it), and is cleared once the agent takes the input.
+func (m model) deliver(input core.Input, draft string) (tea.Model, tea.Cmd) {
 	if m.pendingSteer != 0 {
 		return m, nil
 	}
@@ -561,7 +613,7 @@ func (m model) sendInput(input core.Input) (tea.Model, tea.Cmd) {
 		return m.reject(err)
 	}
 	if slices.ContainsFunc(m.ctl.Status().Queued, func(in core.Input) bool { return in.QueueID == input.QueueID }) {
-		m.pendingSteer, m.pendingText = input.QueueID, m.input.Value()
+		m.pendingSteer, m.pendingText = input.QueueID, draft
 	} else {
 		m.input.Reset()
 	}

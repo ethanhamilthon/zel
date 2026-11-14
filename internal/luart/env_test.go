@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	lua "github.com/yuin/gopher-lua"
 )
 
 type memState struct {
@@ -253,7 +255,11 @@ func (s fakeAgents) Spawn(o AgentOpts) (string, error) {
 }
 func (e *fakeEnv) View(path string) error { e.viewed = append(e.viewed, path); return nil }
 func (e *fakeEnv) Notice(msg string)      { e.notices = append(e.notices, msg) }
-func (e *fakeEnv) Log(level, msg string)  { e.logs = append(e.logs, level+": "+msg) }
+func (e *fakeEnv) Log(level, msg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.logs = append(e.logs, level+": "+msg)
+}
 func (e *fakeEnv) Rename(name string) error {
 	e.renamed = name
 	return nil
@@ -272,55 +278,180 @@ return "ok"`)
 	if r.IsError {
 		t.Fatal(r.Output)
 	}
+	// The main call's operations are sequential; a background task runs beside them,
+	// so its operations are compared as a set.
+	var fg, bg []string
 	env.mu.Lock()
 	defer env.mu.Unlock()
-	want := []struct {
-		label      string
-		background bool
-	}{
-		{"writing notes.txt", false}, {"reading notes.txt", false}, {"reading missing.txt", false},
-		{"sleeping 0 sec", false}, {"starting task", false}, {"waiting for task t1", false}, {"sleeping 0 sec", true},
-	}
-	if len(env.acts) != len(want) {
-		t.Fatalf("activities = %+v, want %d", env.acts, len(want))
-	}
-	for i, w := range want {
-		got := env.acts[i]
-		if got.label != w.label || got.background != w.background {
-			t.Errorf("activity %d = %+v, want %+v", i, got, w)
+	for _, act := range env.acts {
+		if !act.ended {
+			t.Errorf("activity %q never ended: a failed or finished call must clear it", act.label)
 		}
-		if !got.ended {
-			t.Errorf("activity %d %q never ended: a failed or finished call must clear it", i, got.label)
+		if act.background {
+			bg = append(bg, act.label)
+		} else {
+			fg = append(fg, act.label)
 		}
+	}
+	if want := "writing notes.txt|reading notes.txt|reading missing.txt|sleeping 0 sec|starting task|waiting for task t1"; strings.Join(fg, "|") != want {
+		t.Errorf("foreground activities = %q, want %q", strings.Join(fg, "|"), want)
+	}
+	if strings.Join(bg, "|") != "sleeping 0 sec" {
+		t.Errorf("background activities = %q", strings.Join(bg, "|"))
 	}
 }
 
-func TestScrubLabelHidesSecrets(t *testing.T) {
-	secrets := []string{"abcdef123456", "hunter2hunter2", "sk-live-abcdefghijkl", "ghp_abcdefghijklmnop"}
-	for _, in := range []string{
-		"running bash: curl -H 'Authorization: Bearer abcdef123456' https://example.com",
-		"running bash: echo token=hunter2hunter2",
-		`running bash: API_KEY="sk-live-abcdefghijkl" make`,
-		"running bash: tool --token abcdef123456",
-		"running bash: echo ghp_abcdefghijklmnop",
-	} {
-		got := scrubLabel(in)
+// labelOf is the label a host function gets for the given arguments, after the
+// same scrubbing the host applies before reporting it.
+func labelOf(t *testing.T, name string, args ...lua.LValue) string {
+	t.Helper()
+	v := newVM(newEnv(t), nil, roleMain)
+	defer v.close()
+	for _, a := range args {
+		v.L.Push(a)
+	}
+	return scrubLabel(v.describe(name, v.L))
+}
+
+// Credentials on a command line, in a URL or in a flag never reach a label:
+// shell labels show the program name, and plain paths only for inert programs.
+func TestShellLabelsHideArgumentsAndCredentials(t *testing.T) {
+	secrets := []string{"abcdef123456", "hunter2hunter2", "two word password", "sk-live-abcdefghijkl", "ghp_abcdefghijklmnop", "alice:hunter2"}
+	cases := []struct{ script, want string }{
+		{`curl -u alice:hunter2 https://example.com; sleep 5`, "running bash: curl …"},
+		{`curl https://alice:hunter2@example.com/private; sleep 5`, "running bash: curl …"},
+		{`tool --password 'two word password'`, "running bash: tool …"},
+		{"curl -H 'Authorization: Bearer abcdef123456' https://example.com", "running bash: curl …"},
+		{`echo token=hunter2hunter2`, "running bash: echo …"},
+		{`API_KEY="sk-live-abcdefghijkl" make`, "running bash: …"},
+		{`tool --token abcdef123456`, "running bash: tool …"},
+		{`echo ghp_abcdefghijklmnop`, "running bash: echo …"},
+		{`cat --token abcdef123456`, "running bash: cat …"},
+		{`./deploy.sh --token abcdef123456`, "running bash: ./deploy.sh …"},
+		{"line one\nline two", "running bash: line …"},
+		{`cd ~/projects/zel`, "running bash: cd ~/projects/zel"},
+		{`cat ~/.zel/init.lua`, "running bash: cat ~/.zel/init.lua"},
+		{`cd $HOME/x`, "running bash: cd …"},
+		{`ls`, "running bash: ls"},
+	}
+	for _, c := range cases {
+		got := labelOf(t, "sh", lua.LString(c.script))
+		if got != c.want {
+			t.Errorf("label(%q) = %q, want %q", c.script, got, c.want)
+		}
 		for _, secret := range secrets {
 			if strings.Contains(got, secret) {
-				t.Errorf("scrubLabel(%q) = %q leaks %q", in, got, secret)
+				t.Errorf("label(%q) = %q leaks %q", c.script, got, secret)
 			}
 		}
-	}
-	if got := safeURL("https://user:pw@example.com/a/b?access=xyz"); got != "https://example.com/a/b?…" {
-		t.Errorf("safeURL = %q", got)
 	}
 	if got := scrubLabel("reading ~/.zel/init.lua"); got != "reading ~/.zel/init.lua" {
 		t.Errorf("plain label changed: %q", got)
 	}
-	if got := scrubLabel("running bash: line one\nline two"); got != "running bash: line one …" {
-		t.Errorf("multi-line label = %q", got)
-	}
 	if got := scrubLabel(strings.Repeat("é", 300)); utf8.RuneCountInString(got) != maxLabel {
 		t.Errorf("long label has %d runes, want %d", utf8.RuneCountInString(got), maxLabel)
+	}
+}
+
+// A URL's path, query and fragment, and whatever is not a URL, stay out of a web label.
+func TestSafeURLShowsOnlySchemeAndHost(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://user:pw@example.com/a/b?access=xyz": "https://example.com/…?…",
+		"https://example.com/bot123:AAA/getUpdates":  "https://example.com/…",
+		"https://example.com":                        "https://example.com",
+		"https://example.com/#frag":                  "https://example.com#…",
+		"alice:hunter2@example.com":                  "…",
+		"example.com/x?token=1":                      "…",
+	} {
+		if got := safeURL(raw); got != want {
+			t.Errorf("safeURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	if got := labelOf(t, "web.get", lua.LString("http://user:pw@127.0.0.1:1/x?token=abc")); got != "GET http://127.0.0.1:1/…?…" {
+		t.Errorf("web label = %q", got)
+	}
+}
+
+// State keys and search patterns are free text that may be secrets: their labels
+// name the action and never the value; a search shows only its directory.
+func TestStateAndSearchLabelsHideFreeText(t *testing.T) {
+	const secret = "hunter2hunter2"
+	for _, c := range []struct {
+		name string
+		args []lua.LValue
+		want string
+	}{
+		{"state.get", []lua.LValue{lua.LString(secret)}, "reading state"},
+		{"state.set", []lua.LValue{lua.LString(secret), lua.LString("v")}, "writing state"},
+		{"state.set", []lua.LValue{lua.LString(secret), lua.LNil}, "deleting state"},
+		{"fs.grep", []lua.LValue{lua.LString(secret)}, "searching files"},
+	} {
+		if got := labelOf(t, c.name, c.args...); got != c.want || strings.Contains(got, secret) {
+			t.Errorf("%s label = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Every host function has a label, except the instant bookkeeping functions that
+// never block, where a label would only flicker. Session values are not functions.
+func TestEveryHostFunctionHasALabelExceptBookkeeping(t *testing.T) {
+	bookkeeping := map[string]bool{"print": true, "slice": true, "json.encode": true, "json.decode": true, "log.info": true, "log.warn": true}
+	names := []string{"print"}
+	for ns, fns := range builtinFns {
+		for _, fn := range fns {
+			switch {
+			case ns == "": // the global namespace
+				names = append(names, fn)
+			case ns == "session" && fn != "models" && fn != "rename":
+			default:
+				names = append(names, ns+"."+fn)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		label := labelOf(t, name)
+		switch {
+		case bookkeeping[name] && label != "":
+			t.Errorf("%s is bookkeeping but has label %q", name, label)
+		case !bookkeeping[name] && label == "":
+			t.Errorf("%s has no activity label", name)
+		}
+	}
+	for name := range bookkeeping {
+		if !seen[name] {
+			t.Errorf("bookkeeping exception %s is not a host function", name)
+		}
+	}
+}
+
+// A cancelled call ends its activity, and a registered extension function shows
+// its own name while it runs.
+func TestActivityEndsOnCancelAndCoversExtensions(t *testing.T) {
+	env := newEnv(t)
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
+local zel = require("zel")
+zel.fn{name = "zel.wait", summary = "waits", run = function() sleep(30) return 1 end}`)}})
+	defer cfg.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if res := (&Runner{Env: env, Cfg: cfg}).Run(ctx, `zel.wait()`); !res.IsError {
+		t.Fatalf("a cancelled call must fail: %q", res.Output)
+	}
+	env.mu.Lock()
+	defer env.mu.Unlock()
+	var sawExtension bool
+	for _, act := range env.acts {
+		if !act.ended {
+			t.Errorf("activity %q never ended after the cancel", act.label)
+		}
+		sawExtension = sawExtension || act.label == "running zel.wait"
+	}
+	if !sawExtension {
+		t.Fatalf("the extension function shows no activity: %+v", env.acts)
 	}
 }

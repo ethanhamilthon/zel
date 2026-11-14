@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -50,6 +49,7 @@ type Layer struct {
 	defaults        Defaults
 	fns             []*FnDef
 	hooks           []hook
+	completions     []completion
 }
 
 // Source names one init.lua to load: layers load in the order given.
@@ -58,15 +58,18 @@ type Source struct{ Name, Path string }
 // Config is the snapshot of all init.lua layers plus the long-lived Lua state
 // where their hooks and function bodies run.
 type Config struct {
-	env      Env
-	mu       sync.Mutex // guards the config vm
-	v        *vm
-	layers   []*Layer
-	fns      map[string]*FnDef
-	hooks    map[string][]hook
-	loading  *Layer
-	LoadErrs []string
-	closed   bool // set by Close: a closed snapshot runs no hooks or functions
+	env         Env
+	sem         chan struct{}   // one token: holding it means using the config vm
+	shutdown    context.Context // ends every call of this snapshot when it is closed
+	stop        context.CancelFunc
+	v           *vm
+	layers      []*Layer
+	fns         map[string]*FnDef
+	completions map[string]completion
+	hooks       map[string][]hook
+	loading     *Layer
+	LoadErrs    []string
+	closed      bool // set by Close: a closed snapshot runs no hooks or functions
 }
 
 var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true, "subagent_start": true, "subagent_end": true}
@@ -102,7 +105,8 @@ func isBuiltin(name string) bool {
 // LoadConfig runs the given init.lua files in order. A layer that fails to load
 // is skipped and reported through env.Notice.
 func LoadConfig(env Env, sources []Source) *Config {
-	c := &Config{env: env, fns: map[string]*FnDef{}, hooks: map[string][]hook{}}
+	c := &Config{env: env, sem: make(chan struct{}, 1), fns: map[string]*FnDef{}, completions: map[string]completion{}, hooks: map[string][]hook{}}
+	c.shutdown, c.stop = context.WithCancel(context.Background())
 	c.v = newVM(env, c, roleConfig)
 	c.v.L.PreloadModule("zel", c.zelModule)
 	for _, src := range sources {
@@ -111,12 +115,45 @@ func LoadConfig(env Env, sources []Source) *Config {
 	return c
 }
 
-// Close frees the config vm. A closed snapshot runs no more hooks or functions.
+// Close frees the config vm. Calls still running end at once, because their
+// contexts end with the snapshot; then the vm is freed. A closed snapshot runs
+// no more hooks or functions. Close is idempotent.
 func (c *Config) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closed = true
-	c.v.close()
+	c.stop()
+	c.lock()
+	defer c.unlock()
+	if !c.closed {
+		c.closed = true
+		c.v.close()
+	}
+}
+
+func (c *Config) lock()   { c.sem <- struct{}{} }
+func (c *Config) unlock() { <-c.sem }
+
+// lockCtx takes the config vm unless ctx ends first, so a caller waiting behind a
+// long hook gives up with its budget. A closed snapshot fails with errClosed.
+func (c *Config) lockCtx(ctx context.Context) error {
+	if c.shutdown.Err() != nil {
+		return errClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case c.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// scope returns ctx, which also ends when the snapshot is closed. Call done when
+// the call is over.
+func (c *Config) scope(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(c.shutdown, cancel)
+	return ctx, func() { stop(); cancel() }
 }
 
 // errClosed is what calls into a snapshot that was reloaded away return.
@@ -126,8 +163,8 @@ func (c *Config) loadLayer(src Source) {
 	if _, err := os.Stat(src.Path); err != nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lock()
+	defer c.unlock()
 	layer := &Layer{Name: src.Name, Path: src.Path, Dir: filepath.Dir(filepath.Dir(src.Path))}
 	if filepath.Base(filepath.Dir(src.Path)) != ".zel" {
 		layer.Dir = filepath.Dir(src.Path)
@@ -157,6 +194,12 @@ func (c *Config) loadLayer(src Source) {
 		}
 		c.fns[f.Name] = f
 	}
+	for _, p := range layer.completions {
+		if old, dup := c.completions[p.Name]; dup {
+			c.env.Log("warn", fmt.Sprintf("%s: completion #%s overrides the one from %s", src.Name, p.Name, old.Layer))
+		}
+		c.completions[p.Name] = p
+	}
 	for _, h := range layer.hooks {
 		c.hooks[h.event] = append(c.hooks[h.event], h)
 	}
@@ -166,8 +209,8 @@ func (c *Config) loadLayer(src Source) {
 // Defaults merges zel.defaults of all layers.
 func (c *Config) Defaults() Defaults {
 	var d Defaults
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lock()
+	defer c.unlock()
 	for _, l := range c.layers {
 		if l.defaults.Provider != "" {
 			d.Provider = l.defaults.Provider
@@ -184,8 +227,8 @@ func (c *Config) Defaults() Defaults {
 
 // Fns lists the effective (merged) plugin functions in layer order.
 func (c *Config) Fns() []*FnDef {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lock()
+	defer c.unlock()
 	var out []*FnDef
 	for _, l := range c.layers {
 		for _, f := range l.fns {
@@ -281,6 +324,15 @@ func (c *Config) zelModule(L *lua.LState) int {
 			fail("on", "unknown event %q", event)
 		}
 		l.hooks = append(l.hooks, hook{event: event, layer: l.Name, fn: L.CheckFunction(2)})
+		return 0
+	}))
+	t.RawSetString("complete", L.NewFunction(func(L *lua.LState) int {
+		l := layer("complete")
+		name := L.CheckString(1)
+		if !promptName.MatchString(name) {
+			fail("complete", "name %q must be 1 to 64 letters, digits, - or _", name)
+		}
+		l.completions = append(l.completions, completion{Name: name, Layer: l.Name, fn: L.CheckFunction(2)})
 		return 0
 	}))
 	t.RawSetString("fn", L.NewFunction(func(L *lua.LState) int {
@@ -427,8 +479,12 @@ func (c *Config) call(v *vm, def *FnDef, L *lua.LState) int {
 var errCodeRe = regexp.MustCompile(`^[\w.:]+: E[A-Z]+: `)
 
 func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	ctx, done := c.scope(ctx)
+	defer done()
+	if err := c.lockCtx(ctx); err != nil {
+		return nil, err
+	}
+	defer c.unlock()
 	if c.closed {
 		return nil, errClosed
 	}
@@ -454,10 +510,8 @@ func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error
 // emit runs the handlers of an event in order. fold applies one handler's
 // returned table to ev and reports whether to stop the chain.
 func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold func(ret map[string]any) bool) {
-	c.mu.Lock()
-	handlers := append([]hook(nil), c.hooks[event]...)
-	c.mu.Unlock()
-	for _, h := range handlers {
+	// The hooks are final once LoadConfig returns, so listing them needs no lock.
+	for _, h := range c.hooks[event] {
 		ret, err := c.runHook(ctx, h, ev)
 		if err != nil {
 			c.env.Log("warn", fmt.Sprintf("hook %s (%s): %v", event, h.layer, errorMessage(err)))
@@ -470,8 +524,12 @@ func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold
 }
 
 func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[string]any, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	ctx, done := c.scope(ctx)
+	defer done()
+	if err := c.lockCtx(ctx); err != nil {
+		return nil, err
+	}
+	defer c.unlock()
 	if c.closed {
 		return nil, errClosed
 	}
@@ -535,14 +593,15 @@ func (c *Config) SessionStart(ctx context.Context) string {
 	return c.collect(ctx, "session_start", map[string]any{})
 }
 
-// SessionEndTimeout bounds all session_end hooks together.
+// SessionEndTimeout is the budget of one session's shutdown: the session_end
+// hooks, the end hooks of subagents still running and the wait for running jobs
+// share it, so leaving a session takes at most this long.
 const SessionEndTimeout = 5 * time.Second
 
 // SessionEnd runs the session_end hooks when the session is left (reason:
-// "quit", "new" or "resume"). They get SessionEndTimeout in total.
+// "quit", "new" or "resume"). ctx is the shutdown budget: a hook that cannot
+// start or finish within it is skipped.
 func (c *Config) SessionEnd(ctx context.Context, reason string) {
-	ctx, cancel := context.WithTimeout(ctx, SessionEndTimeout)
-	defer cancel()
 	c.emit(ctx, "session_end", map[string]any{"reason": reason}, nil)
 }
 
@@ -558,25 +617,13 @@ func (c *Config) Message(ctx context.Context, text string) string {
 	return ev["text"].(string)
 }
 
-// Notice lets message hooks observe a notification without rewriting it.
-func (c *Config) Notice(ctx context.Context, text string) {
-	c.emit(ctx, "message", map[string]any{"text": text, "notice": true}, nil)
-}
-
 // TurnEnd runs the turn_end hooks; returned text becomes a notification
 // ("" lets the turn end).
 func (c *Config) TurnEnd(ctx context.Context, answer string) string {
 	return c.collect(ctx, "turn_end", map[string]any{"answer": answer})
 }
 
-// SubagentStart runs the subagent_start hooks when a subagent begins. info
-// describes the subagent; the hooks return nothing the agent sees.
-func (c *Config) SubagentStart(ctx context.Context, info map[string]any) {
-	c.emit(ctx, "subagent_start", info, nil)
-}
-
-// SubagentEnd runs the subagent_end hooks once a subagent has ended, with its
-// final status. Like SubagentStart, the hooks return nothing the agent sees.
-func (c *Config) SubagentEnd(ctx context.Context, info map[string]any) {
-	c.emit(ctx, "subagent_end", info, nil)
+// Subagent runs the subagent_start or subagent_end hooks; they return nothing the agent sees.
+func (c *Config) Subagent(ctx context.Context, event string, info map[string]any) {
+	c.emit(ctx, event, info, nil)
 }

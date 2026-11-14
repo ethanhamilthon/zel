@@ -12,17 +12,19 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// Activity labels say what a host operation does, in a few words, for the working
-// indicator: "reading ~/.zel/init.lua", "sleeping 20 sec". They show real arguments
-// where that helps and never the values that can carry secrets: request bodies and
-// headers, environment values, state values, the text of a log message.
+// Activity labels say what a host operation does for the working indicator, such
+// as "reading ~/.zel/init.lua". They never show secret values.
 
-// maxLabel bounds a label in runes; the UI truncates again to the terminal width.
-const maxLabel = 160
+const maxLabel = 160 // runes; the UI truncates again to the terminal width
 
-// backgroundKey marks the context of a background task (tasks.spawn). Operations
-// started there are background work: they never take over the foreground
-// indicator, which shows the operation the turn is waiting on.
+// simpleVerbs are host functions labeled by a verb and their first argument.
+var simpleVerbs = map[string]string{
+	"view": "viewing", "fs.read": "reading", "fs.edit": "editing", "fs.patch": "editing",
+	"fs.glob": "finding files", "fs.exists": "checking",
+}
+
+// backgroundKey marks the context of a background task (tasks.spawn); its host
+// operations never take over the foreground indicator.
 type backgroundKey struct{}
 
 // WithBackground returns ctx marked as background work for host operations.
@@ -34,83 +36,66 @@ func isBackground(ctx context.Context) bool {
 	return ctx != nil && ctx.Value(backgroundKey{}) != nil
 }
 
-// hostFn creates a host function that reports its activity while it runs. Its
-// label is computed from the arguments before the call. The activity ends on
-// every exit: returns, errors, and cancellation (the deferred end).
+// hostFn wraps a host function so its activity shows while it runs; the activity
+// ends on every exit, errors and cancellation included.
 func (v *vm) hostFn(name string, fn lua.LGFunction) *lua.LFunction {
 	return v.L.NewFunction(func(L *lua.LState) int {
-		text := v.label(name, L)
+		text := scrubLabel(v.describe(name, L))
 		if text == "" {
 			return fn(L)
 		}
-		end := v.env.Begin(text, isBackground(v.ctx))
-		defer end()
+		defer v.env.Begin(text, isBackground(v.ctx))()
 		return fn(L)
 	})
 }
 
-// label describes what the host function name does with the arguments on L.
-// Bookkeeping functions that finish at once have no label ("").
-func (v *vm) label(name string, L *lua.LState) string {
-	return scrubLabel(v.describe(name, L))
-}
-
-// describe builds the label before secrets are removed. It reads the arguments
-// with type checks only, so it never raises.
+// describe builds the label of a call before secrets are removed; it only reads
+// arguments with type checks, so it never raises.
 func (v *vm) describe(name string, L *lua.LState) string {
 	arg := func(n int) string { return textOf(L.Get(n)) }
-	field := func(n int, key string) string {
-		if t, ok := L.Get(n).(*lua.LTable); ok {
-			return textOf(t.RawGetString(key))
-		}
-		return ""
+	field := func(n int, key string) string { return textOf(opts(L, n).RawGetString(key)) }
+	if verb, ok := simpleVerbs[name]; ok {
+		return phrase(verb, arg(1))
 	}
-	flag := func(n int, key string) bool {
-		t, ok := L.Get(n).(*lua.LTable)
-		return ok && t.RawGetString(key) == lua.LTrue
-	}
-	ns, op, _ := strings.Cut(name, ".")
 	switch name {
+	case "print", "slice", "json.encode", "json.decode", "log.info", "log.warn":
+		return "" // bookkeeping: no label
 	case "sh":
-		return phrase("running bash:", arg(1))
+		if label := shellLabel(arg(1)); label != "" {
+			return "running bash: " + label
+		}
+		return "running bash"
 	case "sleep":
 		return phrase("sleeping", arg(1), "sec")
-	case "view":
-		return phrase("viewing", arg(1))
-	case "print", "slice", "json.encode", "json.decode", "log.info", "log.warn":
-		return ""
-	case "fs.read":
-		return phrase("reading", arg(1))
 	case "fs.write":
-		if flag(3, "append") {
+		if opts(L, 3).RawGetString("append") == lua.LTrue {
 			return phrase("appending to", arg(1))
 		}
 		return phrase("writing", arg(1))
-	case "fs.edit", "fs.patch":
-		return phrase("editing", arg(1))
 	case "fs.list":
-		return phrase("listing", cmpDefault(arg(1), "."))
-	case "fs.glob":
-		return phrase("finding files", arg(1))
+		return phrase("listing", fallback(arg(1), "."))
 	case "fs.grep":
-		return phrase("searching for", arg(1), inPath(field(2, "path")))
-	case "fs.exists":
-		return phrase("checking", arg(1))
+		// The pattern is free text that may be a secret, so only the directory shows.
+		if p := field(2, "path"); p != "" {
+			return phrase("searching in", p)
+		}
+		return "searching files"
 	case "fs.tmp":
 		return "creating a temp file"
-	case "web.request":
-		return phrase(cmpDefault(strings.ToUpper(field(1, "method")), "GET"), safeURL(field(1, "url")))
 	case "web.get":
 		return phrase("GET", safeURL(arg(1)))
 	case "web.post":
 		return phrase("POST", safeURL(arg(1)))
+	case "web.request":
+		return phrase(fallback(strings.ToUpper(field(1, "method")), "GET"), safeURL(field(1, "url")))
 	case "state.get":
-		return phrase("reading state", arg(1))
+		return "reading state"
 	case "state.set":
+		// Keys are free text and may hold secrets: the label names the action only.
 		if L.Get(2) == lua.LNil {
-			return phrase("deleting state", arg(1))
+			return "deleting state"
 		}
-		return phrase("writing state", arg(1))
+		return "writing state"
 	case "state.list":
 		return "listing state keys"
 	case "log.notice":
@@ -119,26 +104,20 @@ func (v *vm) describe(name string, L *lua.LState) string {
 		return "listing models"
 	case "session.rename":
 		return "renaming session"
-	case "agents.spawn", "agents.run":
-		verb := "starting"
-		if name == "agents.run" {
-			verb = "running"
-		}
-		return phrase(verb, "agent in", v.agentModel(L))
+	case "agents.spawn":
+		return phrase("starting agent in", v.agentModel(L))
+	case "agents.run":
+		return phrase("running agent in", v.agentModel(L))
 	}
-	switch ns {
-	case "tasks", "agents":
+	if ns, op, _ := strings.Cut(name, "."); ns == "tasks" || ns == "agents" {
 		return v.jobLabel(ns, op, L)
-	case "zel":
-		return "" // registration while init.lua loads
 	}
-	return phrase("running", name)
+	return phrase("running", name) // plugin functions (zel.fn) and anything else
 }
 
 // jobLabel describes a call of the tasks or agents namespace.
 func (v *vm) jobLabel(ns, op string, L *lua.LState) string {
-	noun := strings.TrimSuffix(ns, "s")
-	id := textOf(L.Get(1))
+	noun, id := strings.TrimSuffix(ns, "s"), textOf(L.Get(1))
 	switch op {
 	case "spawn":
 		if ns == "tasks" {
@@ -166,8 +145,7 @@ func (v *vm) jobLabel(ns, op string, L *lua.LState) string {
 	return phrase("running", ns+"."+op)
 }
 
-// agentModel is the model an agent call names: its own option or the session's,
-// with the effort after a slash when one is given.
+// agentModel is the model an agent call names, or the session's, with its effort after a slash.
 func (v *vm) agentModel(L *lua.LState) string {
 	o := opts(L, 1)
 	model := textOf(o.RawGetString("model"))
@@ -191,18 +169,11 @@ func textOf(v lua.LValue) string {
 	return ""
 }
 
-func cmpDefault(s, fallback string) string {
+func fallback(s, def string) string {
 	if s == "" {
-		return fallback
+		return def
 	}
 	return s
-}
-
-func inPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	return "in " + path
 }
 
 // phrase joins the non-empty parts with spaces.
@@ -216,26 +187,73 @@ func phrase(parts ...string) string {
 	return strings.Join(keep, " ")
 }
 
-// safeURL shows a URL without its user, query and fragment, where credentials and
-// tokens usually are. A query is marked "?…". Anything that does not parse as an
-// absolute URL goes through scrubText instead.
+// safeURL shows the scheme and host. Credentials, paths, queries and fragments
+// are where secrets go, so only the presence of a path, query or fragment shows
+// ("…"). Text that is not a URL with a scheme and host shows as "…".
 func safeURL(raw string) string {
-	if raw == "" {
-		return ""
-	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return scrubText(raw)
+		return "…"
 	}
-	out := u.Scheme + "://" + u.Host + u.EscapedPath()
+	out := u.Scheme + "://" + u.Host
+	if p := u.EscapedPath(); p != "" && p != "/" {
+		out += "/…"
+	}
 	if u.RawQuery != "" {
 		out += "?…"
+	}
+	if u.Fragment != "" || u.RawFragment != "" {
+		out += "#…"
 	}
 	return out
 }
 
-// The secret patterns are heuristics for what a command line or a label can
-// carry; they cannot know every secret. Values are replaced with [redacted].
+// inertCommands are programs whose plain path arguments show in a label. Every
+// other program shows its name only: its arguments may be credentials, and no
+// pattern tells them apart reliably.
+var inertCommands = map[string]bool{"cd": true, "ls": true, "cat": true, "head": true, "tail": true, "wc": true, "pwd": true}
+
+var (
+	programWord = regexp.MustCompile(`^[A-Za-z0-9._/+-]{1,64}$`)
+	plainWord   = regexp.MustCompile(`^[A-Za-z0-9._/~+-]{1,256}$`)
+)
+
+// shellLabel describes a bash command for the working indicator. It shows the
+// program name, then "…" when more follows. The arguments show only for an inert
+// program on one line whose arguments are all plain words; a command with quotes,
+// assignments, operators or substitutions shows no argument at all.
+func shellLabel(script string) string {
+	first, _, multi := strings.Cut(strings.TrimSpace(script), "\n")
+	words := strings.Fields(first)
+	if len(words) == 0 {
+		return ""
+	}
+	prog := words[0]
+	if !programWord.MatchString(prog) {
+		return "…"
+	}
+	if len(words) == 1 && !multi {
+		return prog
+	}
+	args := words[1:]
+	if !multi && inertCommands[prog] && plainArgs(args) {
+		return prog + " " + strings.Join(args, " ")
+	}
+	return prog + " …"
+}
+
+// plainArgs reports whether every argument is a plain path-like word. Flags are
+// not plain: a flag is often followed by its value.
+func plainArgs(words []string) bool {
+	for _, w := range words {
+		if strings.HasPrefix(w, "-") || !plainWord.MatchString(w) {
+			return false
+		}
+	}
+	return true
+}
+
+// The secret patterns are heuristics; they cannot know every secret.
 var (
 	bearerValue  = regexp.MustCompile(`(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{6,}`)
 	assignedKey  = regexp.MustCompile(`(?i)([\w.-]*(?:token|secret|passw(?:or)?d|passwd|api[_-]?key|apikey|auth|credential|private[_-]?key|access[_-]?key)[\w.-]*\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`)
@@ -243,7 +261,7 @@ var (
 	vendorSecret = regexp.MustCompile(`\b(sk|pk|ghp|gho|ghs|ghu|ghr|github_pat|xox[abprs])[-_][A-Za-z0-9_-]{8,}`)
 )
 
-// scrubText replaces the values of secret-looking words with [redacted].
+// scrubText replaces secret-looking values with [redacted].
 func scrubText(s string) string {
 	s = bearerValue.ReplaceAllString(s, "$1 [redacted]")
 	s = assignedKey.ReplaceAllString(s, "${1}[redacted]")
@@ -255,7 +273,7 @@ func scrubText(s string) string {
 func scrubLabel(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
-		s = strings.TrimSpace(s[:i]) + " …" // only the first line of a command
+		s = strings.TrimSpace(s[:i]) + " …" // first line of a command only
 	}
 	s = scrubText(strings.Join(strings.Fields(s), " "))
 	if utf8.RuneCountInString(s) > maxLabel {

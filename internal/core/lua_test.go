@@ -3,12 +3,14 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,26 +29,6 @@ func TestMessageHookRewritesUserText(t *testing.T) {
 	}
 	if req := fp.requests()[0]; !strings.Contains(req, "HELLO THERE") || strings.Contains(req, "hello there") {
 		t.Fatalf("request: %s", req)
-	}
-}
-
-func TestMessageHookObservesNotificationWithoutRewriting(t *testing.T) {
-	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-require("zel").on("message", function(ev)
- if ev.notice then
-  state.set("observed_notice", ev.text)
-  return "DO-NOT-REWRITE"
- end
-end)`))
-	input := notification("t1 finished")
-	got := a.hookInput(context.Background(), input)
-	if got.Text != input.Text || !got.Notice {
-		t.Fatalf("notification changed: %+v", got)
-	}
-	value, ok, err := (kvState{a: a}).Get("session", "observed_notice")
-	if err != nil || !ok || !strings.Contains(value, "t1 finished") {
-		t.Fatalf("observed notice = %q, %v, %v", value, ok, err)
 	}
 }
 
@@ -706,5 +688,279 @@ func TestSubagentRowTracksItsOwnActivity(t *testing.T) {
 	child.beginActivity("late") // a finished subagent updates nothing
 	if rows := tree.active("s"); len(rows) != 0 {
 		t.Fatalf("finished subagent came back: %+v", rows)
+	}
+}
+
+// Registered completions expand through the controller, outside its lock, and
+// follow a reload: the new init.lua is the snapshot for the next expansion.
+func TestPromptCompletionsExpandAndFollowReload(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	var projectDir string
+	setup := func(home, dir string) {
+		projectDir = dir
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `require("zel").complete("plan", function() return "first plan" end)`)
+	}
+	a := newTestAgentWith(t, fp, Options{}, setup)
+	ctl := NewController(a, func(Event) {})
+	if got := strings.Join(ctl.PromptNames(), " "); got != "plan" || !ctl.HasPromptTokens("do #plan") {
+		t.Fatalf("names = %q", got)
+	}
+	if got, err := ctl.ExpandPrompt(context.Background(), "do #plan and #unknown"); err != nil || got != "do first plan and #unknown" {
+		t.Fatalf("ExpandPrompt = %q, %v", got, err)
+	}
+	if ctl.HasPromptTokens("plain #unknown text") {
+		t.Fatal("an unregistered name must not count as a completion")
+	}
+	writeFile(t, filepath.Join(projectDir, ".zel", "init.lua"), `require("zel").complete("plan", function() return "second plan" end)`)
+	ctl.Reload()
+	if got, err := ctl.ExpandPrompt(context.Background(), "#plan"); err != nil || got != "second plan" {
+		t.Fatalf("after reload ExpandPrompt = %q, %v", got, err)
+	}
+}
+
+// A subagent's end hook belongs to the snapshot that ran its start hook. A reload
+// in between neither drops that end hook nor hands it to the new snapshot.
+func TestSubagentEndStaysWithItsSnapshotAcrossReload(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
+	}}
+	first := `
+local zel = require("zel")
+zel.on("subagent_start", function(ev) state.set("start." .. ev.id, "v1", "project") end)
+zel.on("subagent_end", function(ev) state.set("end." .. ev.id, "v1:" .. ev.status, "project") end)`
+	second := `
+local zel = require("zel")
+zel.on("subagent_end", function(ev) state.set("end2." .. ev.id, "v2:" .. ev.status, "project") end)`
+	var path string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		path = filepath.Join(dir, ".zel", "init.lua")
+		writeFile(t, path, first)
+	})
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release) // runs before the session closes
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	awaitStored(t, a, "start.a1", "v1")
+	writeFile(t, path, second)
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	awaitStored(t, a, "end.a1", "v1:done")
+	time.Sleep(50 * time.Millisecond) // a misrouted hook would have landed by now
+	if got := storedString(t, a, "end2.a1"); got != "" {
+		t.Fatalf("the reloaded snapshot received an end hook it never matched a start for: %q", got)
+	}
+}
+
+// Starting a new session stops the old session's subagents. Each one still gets
+// its end hook exactly once, from the snapshot that started it.
+func TestSubagentEndRunsOnceWhenSessionSwitches(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
+	}}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+local zel = require("zel")
+zel.on("subagent_start", function(ev) state.set("start." .. ev.id, "ok", "project") end)
+zel.on("subagent_end", function(ev)
+	state.set("end." .. ev.id, (state.get("end." .. ev.id, "project") or "") .. ev.status .. ";", "project")
+end)`))
+	t.Cleanup(func() { close(gate) })
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	awaitStored(t, a, "start.a1", "ok")
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	awaitStored(t, a, "end.a1", "stopped;")
+	time.Sleep(50 * time.Millisecond) // a duplicate end hook would have landed by now
+	if got := storedString(t, a, "end.a1"); got != "stopped;" {
+		t.Fatalf("end hook ran more than once: %q", got)
+	}
+}
+
+// Shutdown has one budget. A start hook that outlives it does not hold Close,
+// even though the subagent it belongs to finished before shutdown began.
+func TestShutdownBoundsSlowSubagentHooks(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case childMarker.MatchString(body):
+			return textReply("answer to: " + childMarker.FindString(body))
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-ping"}`)
+	}}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+local zel = require("zel")
+zel.on("subagent_start", function(ev) state.set("started", "1", "project"); sleep(30) end)
+zel.on("subagent_end", function(ev) sleep(30) end)`))
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	awaitStored(t, a, "started", "1")
+	start := time.Now()
+	a.Close()
+	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+		t.Fatalf("shutdown took %s: a subagent hook outlived the session budget", took)
+	}
+}
+
+// A running subagent is stopped at shutdown, and its end hook, which is slow too,
+// runs within the same budget instead of adding its own.
+func TestShutdownBoundsRunningSubagentAndItsEndHook(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
+	}}
+	var endFile string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		endFile = filepath.Join(dir, "ended.txt")
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+local zel = require("zel")
+zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status); sleep(30) end)`)
+	})
+	t.Cleanup(func() { close(gate) })
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(a.ActiveSubagents()) == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the subagent never started")
+		}
+	}
+	start := time.Now()
+	a.Close()
+	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+		t.Fatalf("shutdown took %s: the subagent or its end hook outlived the budget", took)
+	}
+	if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
+		t.Fatalf("the end hook did not run for the stopped subagent: %q, %v", got, err)
+	}
+}
+
+// A job that ignores cancellation is abandoned when the shutdown budget ends,
+// so a stuck job cannot hold the session open.
+func TestShutdownAbandonsJobThatIgnoresCancel(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	a := newTestAgent(t, fp, Options{})
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) })
+	_, err := a.tasks.start("stuck", startOpts{}, func(io.Writer, *job) (*proc, error) {
+		return &proc{cancel: func() {}, term: func() {}, wait: func() error { <-never; return nil }, exit: func() int { return 0 }}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	a.Close()
+	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+		t.Fatalf("shutdown took %s waiting for a job that ignores cancellation", took)
+	}
+}
+
+// Expanding a prompt ends with its caller: a cancelled context stops a slow
+// completion and returns no text, and a session closed meanwhile ends it too.
+func TestPromptExpansionStopsWithItsCaller(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+require("zel").complete("slow", function() sleep(30); return "never" end)`))
+	ctl := NewController(a, func(Event) {})
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if out, err := a.ExpandPrompt(ctx, "do #slow"); err == nil || out != "" || time.Since(start) > 5*time.Second {
+		t.Fatalf("headless expansion: %q, %v after %s", out, err, time.Since(start))
+	}
+	if out, err := ctl.ExpandPrompt(ctx, "do #slow"); err == nil || out != "" {
+		t.Fatalf("controller expansion after cancel: %q, %v", out, err)
+	}
+	// Closing the session while a completion runs is race-free and ends the call.
+	running, stop := context.WithCancel(context.Background())
+	defer stop()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ctl.ExpandPrompt(running, "#slow")
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	a.Close()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("an expansion of a closed session returned text")
+		}
+	case <-time.After(luart.SessionEndTimeout + 3*time.Second):
+		t.Fatal("the expansion outlived the session")
+	}
+}
+
+// A start hook that raises an error does not change the lifecycle: the child still
+// ends, its timeout is reported to the end hook, and the end hook runs exactly once.
+func TestSubagentTimeoutWithFailingStartHookEndsOnce(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-stuck", timeout = 0.2}`)
+	}}
+	var endFile string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		endFile = filepath.Join(dir, "ends.txt")
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+local zel = require("zel")
+zel.on("subagent_start", function(ev) error("start hook failed on purpose") end)
+zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status .. ";", {append = true}) end)`)
+	})
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release)
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if got, err := os.ReadFile(endFile); err == nil && len(got) > 0 {
+			if string(got) != "timeout;" {
+				t.Fatalf("end hook ran with %q, want one timeout", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the end hook never ran for the timed-out subagent")
+		}
+	}
+	release()
+	time.Sleep(50 * time.Millisecond) // a duplicate end hook would have landed by now
+	if got, _ := os.ReadFile(endFile); string(got) != "timeout;" {
+		t.Fatalf("end hook ran more than once: %q", got)
 	}
 }

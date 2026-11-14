@@ -102,6 +102,7 @@ zel.prompt(function(ctx) return "..." end)       -- dynamic part, computed at se
 zel.defaults{provider=, model=, effort=}  -- CLI flags above
 zel.fn{name, summary, params?, returns?, examples?, hidden?, run}  -- a function for the agent
 zel.on(event, function(ev, ctx) end)             -- a hook
+zel.complete(name, fn)                           -- #name completion: fn's text replaces the token when a message is sent
 ```
 
 ### Re-reading: snapshot + Reload
@@ -124,6 +125,16 @@ Types: `string integer number boolean table any`, `T[]`, `{k:T}`, `"a"|"b"`, `?`
 before the call (`web.search: EINVAL: arg #1 q: expected string, got nil`), not the result. An `error()` from `run` goes to the agent
 (without a code — prefix `<name>: EFAIL:`). `hidden = true` — it exists but is not rendered into the prompt.
 
+### Prompt completions (`zel.complete`)
+- `zel.complete("plan", function() return "..." end)` registers `#plan`. Names are 1 to 64 letters, digits, `-` or `_`.
+- In the composer, typing `#` lists the registered names (filter with more letters, Tab or Enter completes the token).
+- A token is `#name` at the start of the text or after white space; a bare `#` is not a token.
+- On send (also `zel -p`), each registered name runs once with a 10 s limit; every token with that name gets the same text, in one pass.
+- Cancelling a send (Ctrl+D while it expands in the TUI, or interrupting `zel -p`) sends nothing: the draft stays in the composer and the reason shows in the chat. A result that arrives after the cancel is dropped.
+  Unknown names stay as typed. The agent receives the expanded text; the chat shows it too.
+- A failing function keeps the draft unsent and the reason shows in red in the chat. A later layer with the same name overrides it with a warning.
+- Functions run at send time, not while typing, so their text can be dynamic. A reload replaces the registry with the new snapshot.
+
 ### Prompt generation
 Form: a compact signature + `--` doc lines (2–3 times cheaper than LuaLS `---@param`, the model reads it as Lua):
 `name(p: T, p2?: T=default) -> R  -- summary`, then `--   p: desc` (only if present) and `--   e.g. …` for an example.
@@ -133,22 +144,26 @@ Groups: `## built-in` (fixed text from the binary), then `## <layer> (path)`. Re
 | event | ev | return |
 |---|---|---|
 | `session_start` | `{}` | nil or a string / `{notify = "text"}` → notification (wakes the agent) |
-| `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; 5 s for all hooks together |
-| `message` | `{text, notice?}` | nil or a new user text string; `notice = true` marks a notification, whose text cannot be rewritten |
+| `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; shares the 5 s shutdown budget (below) |
+| `message` | `{text}` | nil or a new user text string |
 | `turn_end` | `{answer}` | nil or a string / `{notify = "text"}` → notification, the turn continues (at most 3 times in a row) |
 | `subagent_start` | `{id, prompt, model, effort, provider, cwd, depth}` | nothing; runs in the background when the subagent begins |
-| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; once per subagent: `done`/`failed`/`stopped`/`timeout` |
+| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; exactly once per started subagent: `done`/`failed`/`stopped`/`timeout` |
 
-Since 0.5.2 there are exactly four hooks: `before_call`, `after_call` and `bg_done` are removed (`zel.on` with them is a layer load error).
-Everything hooks report to the agent arrives in one format `<notification>text</notification>`.
-`ctx = {session, layer}`. An error in a hook → a warning in Tracing, counted as nil.
+The table is the complete list of hooks. Since 0.5.2 `before_call`, `after_call` and `bg_done` are removed (`zel.on` with them is a layer load error).
+Text from `session_start` and `turn_end` reaches the agent as `<notification>text</notification>`. `message` hooks rewrite the user's text, and each one sees the text the previous one returned. The subagent hooks return nothing to the agent.
+`ctx = {session, layer}`. An error in a hook → a warning in Tracing; the hook counts as nil.
+
+### Subagent hooks, reload and shutdown
+- A subagent keeps the snapshot that ran its `subagent_start` hook: its `subagent_end` runs there, even after Reload. That snapshot closes when its last subagent has ended, so a Reload never sends an end hook to a snapshot that did not see its start.
+- Leaving a session (`quit`, `new`, `resume`) has one budget of 5 s (`luart.SessionEndTimeout`). It covers `session_end`, the end hooks of running subagents and the wait for running jobs. Running jobs are stopped first. A hook that cannot start or finish in the budget is skipped, and a job that ignores cancellation is abandoned when it ends, so leaving never takes longer than the budget.
 
 ## 5. Layers and merging
 Order: `~/.zel/init.lua` → nearest `.zel/init.lua` going up from cwd → `--config FILE` (`.lua` only).
 - `instructions`/`prompt`: concatenated in order.
 - `defaults`: a later one overrides; CLI flags override everything.
 - `fn`: same name — the project one overrides the global one (warning in Tracing); built-in names are never overridden.
-- hooks: all run, global ones first; `args`/`result` are passed along the chain; the first `deny` stops it.
+- hooks: all run, global ones first; `message` text chains through them, each one seeing the text the previous one returned.
 - layer load error: the layer is skipped, `log.notice` in the UI, the session starts.
 
 ## 6. Examples
@@ -270,7 +285,7 @@ zel.check(pkg?: string="./...") -> string (task id: read it with tasks.wait(id, 
 
 ## 7. Implementation notes (deviations and details of 0.5.0)
 - Cancelling: the TUI has no Esc-cancel for a running turn; **Ctrl+D** (stop the active turn) cancels the running
-  call (`ECANCELED`). Background tasks and agents keep running, as designed.
+  call (`ECANCELED`). Ctrl+D also cancels a prompt completion that is still expanding. Background tasks and agents keep running, as designed.
 - `turn_end` may continue a turn at most 3 times (returned text → notification), so a hook that always answers cannot loop forever.
 - A queued user message is also passed through `message` hooks when it is accepted into the history.
 - `agents.spawn` runs a child agent inside the application (its own session; no `zel -p` process, no report file, no
@@ -289,3 +304,9 @@ zel.check(pkg?: string="./...") -> string (task id: read it with tasks.wait(id, 
 - Tracing kind of a call is `lua` (search `:lua text`). The lua output is not truncated (1 MiB safety cap) and the 30 s call timeout is fixed (0.5.2).
 - `ZEL.md` is neither read nor migrated; the repository itself uses `.zel/init.lua` + `AGENTS.md`.
 - Ready-made examples (global config, web plugin, project config) are in `docs/examples/` and covered by tests.
+- 0.5.4: `zel.on("subagent_start"/"subagent_end")` and `zel.complete` are new (see sections 3 and 4).
+  Activity labels show a shell command's program name only, plus its plain path arguments for a few read-only programs
+  (`cd`, `ls`, `cat`, `head`, `tail`, `wc`, `pwd`); a URL shows its scheme and host. Configured API keys are removed from
+  every label. Instant host functions (`print`, `slice`, `json.encode`/`json.decode`, `log.info`/`log.warn`) have no
+  label, because each label change publishes an update and a loop would flood the UI; every other host function has one.
+  The main agent's built-in prompt names the hooks; subagents get no lifecycle line and no `agents.*`.

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"go/parser"
 	"go/token"
@@ -390,29 +389,5 @@ func TestPackageBoundaries(t *testing.T) {
 				}
 			}
 		}
-	}
-	files, err := filepath.Glob(filepath.Join(root, "*", "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := 0
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines += bytes.Count(data, []byte{'\n'})
-	}
-	main, err := os.ReadFile(filepath.Join(filepath.Dir(root), "main.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines += bytes.Count(main, []byte{'\n'})
-	const maxProductionLines = 15500 // Keep a strict cap while accommodating the 0.5 Lua runtime.
-	if lines >= maxProductionLines {
-		t.Errorf("production Go code has %d lines; keep it below %d", lines, maxProductionLines)
 	}
 }

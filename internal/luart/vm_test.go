@@ -321,3 +321,22 @@ print(g.ok, g.status, g.body, p.body, m.ok, m.status, bad.ok, bad.status, q.body
 		t.Fatalf("%q", r.Output)
 	}
 }
+
+// The main agent's built-in prompt says what the config-side hooks do; subagents
+// get neither that line nor the agents.* functions.
+func TestBuiltinPromptLifecycleByDepth(t *testing.T) {
+	main, sub := Builtin(0), Builtin(1)
+	for _, want := range []string{"init.lua registers hooks and completions, not tool calls", "subagent_start and subagent_end run around each agents.* child", "#name in a user message arrives already expanded", "agents.spawn{prompt,model"} {
+		if !strings.Contains(main, want) {
+			t.Fatalf("main prompt misses %q", want)
+		}
+	}
+	for _, unwanted := range []string{"subagent_start", "#name", "agents.spawn", "agents.run", "agents.* child"} {
+		if strings.Contains(sub, unwanted) {
+			t.Fatalf("subagent prompt mentions %q", unwanted)
+		}
+	}
+	if !strings.Contains(sub, "agents.* is not available") {
+		t.Fatalf("subagent prompt lost the agents restriction: %q", sub[max(0, len(sub)-200):])
+	}
+}

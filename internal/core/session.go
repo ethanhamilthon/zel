@@ -63,10 +63,9 @@ func (a *Runtime) release() {
 func (a *Runtime) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
 
 func (a *Runtime) Close() {
-	if a.tasks != nil {
-		a.sessionEnd("quit")
-	}
+	a.sessionEnd("quit")
 	a.release()
+	a.lua.set(nil) // closes the config VM, or once the last subagent that owes hooks has ended
 	if a.db != nil {
 		a.db.Close()
 		a.db = nil

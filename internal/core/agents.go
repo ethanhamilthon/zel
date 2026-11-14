@@ -143,22 +143,27 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 	model := cmp.Or(o.Model, a.Settings().Model)
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
-	hooks, depth := a.lua, a.depth+1
+	holder, depth, budget := a.lua, a.depth+1, a.tasks.life
 	j, err := a.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
 			// The lifecycle hooks run on goroutines of their own. They wait for the Lua
 			// config lock, which a plugin function can hold while it waits for this very
-			// subagent, so no hook may sit on the path to the subagent's result.
+			// subagent, so no hook may sit on the path to the subagent's result. Both
+			// hooks use the snapshot pinned here, which the end hook releases: a reload
+			// or a session change never sends an end hook to a snapshot that did not
+			// run its start hook. Both are bounded by the session's shutdown budget.
+			cfg := holder.pin()
 			started := make(chan struct{})
-			j.endHook = func(status string, res map[string]any, closing bool) {
+			j.endHook = func(status string, res map[string]any) {
+				defer holder.unpin(cfg)
 				<-started
-				hooks.endSubagent(subagentEndInfo(j, o, status, res), closing)
+				deliverSubagent(budget, cfg, "subagent_end", subagentEndInfo(j, o, status, res))
 			}
 			done := make(chan error, 1)
 			go func() {
 				go func() {
 					defer close(started)
-					hooks.startSubagent(subagentStartInfo(j, o, cwd, depth))
+					deliverSubagent(budget, cfg, "subagent_start", subagentStartInfo(j, o, cwd, depth))
 				}()
 				err := a.runChild(ctx, j, log, cwd, o)
 				failed = err != nil
@@ -243,6 +248,15 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 	fmt.Fprintf(log, "%s\n", outcome.Answer)
 	j.setOutcome(outcome)
 	return nil
+}
+
+// deliverSubagent runs one lifecycle hook of the snapshot that owns a subagent,
+// under the session's shutdown budget ctx. Nothing it returns reaches the agent.
+func deliverSubagent(ctx context.Context, cfg *luart.Config, event string, info map[string]any) {
+	if cfg == nil || !cfg.HasHook(event) {
+		return
+	}
+	cfg.Subagent(luart.WithBackground(ctx), event, info)
 }
 
 // subagentStartInfo is the payload of subagent_start: the identity of the

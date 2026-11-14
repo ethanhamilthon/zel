@@ -69,6 +69,8 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	switch e.Kind {
 	case "user":
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, darkGray)
+	case "prompt_error":
+		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, errorColor)
 	case "compaction":
 		label := " context compacted "
 		side := max(0, width-lipgloss.Width(label)) / 2
@@ -261,10 +263,11 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 	tail = append(tail, block...)
 	tail = append(tail, "", "")
 	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
-	if count := len(m.fileCompletions); m.hasFileCompletions() {
-		start = max(0, m.fileSelected%count-rows+1)
+	items, selectedIndex := m.completionList()
+	if count := len(items); count > 0 {
+		start = max(0, selectedIndex-rows+1)
 		for i := start; i < min(count, start+rows); i++ {
-			selected := i == m.fileSelected%count
+			selected := i == selectedIndex
 			marker, fg := "  ", muted
 			if selected {
 				marker, fg = " <", foreground
@@ -272,7 +275,7 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 					marker = "<"
 				}
 			}
-			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
+			label := ansi.Truncate(sanitizeLabel(items[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
 			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
 			screen := screenRows(tail)
 			screen.add(row + "\n")

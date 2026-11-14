@@ -11,18 +11,15 @@ type activity struct {
 	label string
 }
 
-// activities holds the foreground host operations of one session. They can
-// overlap (a plugin function calls host functions, two lua calls run together),
-// so each operation removes only its own entry when it ends, and the indicator
-// shows the most recently started one still running.
+// activities holds the foreground operations of one session. They overlap, so each
+// one removes only its own entry, and the indicator shows the newest still running.
 type activities struct {
 	mu   sync.Mutex
 	seq  uint64
 	list []activity
 }
 
-// beginActivity records a foreground operation and returns the function that
-// ends it. Ending twice is harmless.
+// beginActivity records a foreground operation; the returned function ends it (twice is harmless).
 func (a *Runtime) beginActivity(label string) (end func()) {
 	acts := a.acts
 	if acts == nil { // a runtime built without a table shows no activity
@@ -34,19 +31,20 @@ func (a *Runtime) beginActivity(label string) (end func()) {
 	acts.list = append(acts.list, activity{id: id, label: label})
 	acts.mu.Unlock()
 	a.publishActivity()
-	var once sync.Once
+	done := false
 	return func() {
-		once.Do(func() {
-			acts.mu.Lock()
-			acts.list = slices.DeleteFunc(acts.list, func(x activity) bool { return x.id == id })
-			acts.mu.Unlock()
-			a.publishActivity()
-		})
+		if done {
+			return
+		}
+		done = true
+		acts.mu.Lock()
+		acts.list = slices.DeleteFunc(acts.list, func(x activity) bool { return x.id == id })
+		acts.mu.Unlock()
+		a.publishActivity()
 	}
 }
 
-// Activity is the label of the operation the session is waiting on, or "" when
-// no foreground operation runs. Background tasks never show here.
+// Activity is the label of the operation the session waits on, or "" when none runs.
 func (a *Runtime) Activity() string {
 	acts := a.acts
 	if acts == nil {
@@ -60,8 +58,8 @@ func (a *Runtime) Activity() string {
 	return ""
 }
 
-// publishActivity gives a subagent's current activity to its row in the agent
-// tree. The main session has no row: the working indicator reads Activity.
+// publishActivity gives a subagent's activity to its row in the agent tree; the
+// main session has no row, the working indicator reads Activity.
 func (a *Runtime) publishActivity() {
 	if link := a.link; link != nil {
 		link.tree.setActivity(link.id, a.Activity())

@@ -2788,3 +2788,212 @@ func TestSubagentRowsShowTheirOwnActivity(t *testing.T) {
 		t.Fatalf("idle row shows an activity: %q", row)
 	}
 }
+
+// The # list filters the registered names, Tab writes the token, and Enter expands
+// it outside the UI loop: the composer is read-only meanwhile and takes the
+// expanded text. A failing completion keeps the draft.
+func TestPromptCompletionComposerFlow(t *testing.T) {
+	f := newFixture(t, true)
+	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initLua := `
+require("zel").complete("plan", function() return "PLAN BODY" end)
+require("zel").complete("polish", function() return "POLISH BODY" end)
+require("zel").complete("boom", function() error("broken") end)`
+	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ctl.Reload()
+	f.m = settle(f.m)
+
+	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	m := typed(f.m, "#")
+	if got := strings.Join(m.promptItems, " "); got != "boom plan polish" || !m.hasPromptCompletions() {
+		t.Fatalf("list after # = %q", got)
+	}
+	m = typed(m, "pl")
+	if got := strings.Join(m.promptItems, " "); got != "plan" {
+		t.Fatalf("filtered list = %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.input.Value() != "#plan" || m.hasPromptCompletions() {
+		t.Fatalf("Tab must write #plan and close the list: %q", m.input.Value())
+	}
+	m = typed(m, " now")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.promptPending == 0 || cmd == nil {
+		t.Fatal("Enter must start the expansion")
+	}
+	m = typed(m, "x") // read-only while the expansion runs
+	if m.input.Value() != "#plan now" {
+		t.Fatalf("composer changed during expansion: %q", m.input.Value())
+	}
+	next, _ = m.Update(cmd())
+	m = settle(next.(model))
+	if m.promptPending != 0 || m.input.Value() != "" {
+		t.Fatalf("expanded message must be taken: pending=%d composer=%q", m.promptPending, m.input.Value())
+	}
+	if !hasEntry(m, "user", "PLAN BODY now") {
+		t.Fatalf("the agent must receive the expanded text: %+v", m.entries)
+	}
+
+	// a failing completion keeps the draft and says why
+	m = typed(m, "#boom")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = settle(next.(model))
+	if m.input.Value() != "#boom" || m.promptPending != 0 || hasEntry(m, "user", "boom") {
+		t.Fatalf("failed expansion must keep the draft unsent: %q, entries = %+v", m.input.Value(), m.entries)
+	}
+	if !hasEntry(m, "prompt_error", "your draft is kept") {
+		t.Fatalf("the reason must be shown in the chat: %+v", m.entries)
+	}
+}
+
+func hasEntry(m model, kind, text string) bool {
+	for _, e := range m.entries {
+		if e.Kind == kind && strings.Contains(e.Text, text) {
+			return true
+		}
+	}
+	return false
+}
+
+// Ctrl+D cancels a slow completion: nothing is sent, the draft stays in the
+// composer, the reason shows, and a result that arrives afterwards is dropped.
+func TestPromptExpansionCancelKeepsDraft(t *testing.T) {
+	f := newFixture(t, true)
+	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initLua := `require("zel").complete("slow", function() sleep(30) return "SLOW BODY" end)`
+	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ctl.Reload()
+	f.m = settle(f.m)
+
+	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	m := typed(f.m, "#slow now")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.promptPending == 0 || cmd == nil {
+		t.Fatal("Enter must start the expansion")
+	}
+	seq := m.promptPending
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = settle(next.(model))
+	if m.promptPending != 0 || m.input.Value() != "#slow now" {
+		t.Fatalf("cancel must end the expansion and keep the draft: pending=%d composer=%q", m.promptPending, m.input.Value())
+	}
+	if !hasEntry(m, "prompt_error", "cancelled; your draft is kept") {
+		t.Fatalf("the cancel must say why: %+v", m.entries)
+	}
+	select {
+	case msg := <-result:
+		if pe, ok := msg.(promptExpanded); !ok || pe.err == nil || pe.text != "" {
+			t.Fatalf("cancelled expansion returned %#v", msg)
+		}
+		next, _ = m.Update(msg)
+		m = settle(next.(model))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled expansion kept running")
+	}
+	// A result that somehow arrives late is ignored: its expansion is over.
+	next, _ = m.Update(promptExpanded{seq: seq, session: m.ctl.Status().Session, draft: "#slow now", text: "SLOW BODY now"})
+	m = settle(next.(model))
+	if hasEntry(m, "user", "SLOW BODY") || m.input.Value() != "#slow now" {
+		t.Fatalf("a late result was applied: composer=%q entries=%+v", m.input.Value(), m.entries)
+	}
+	// The composer is usable again, and a fresh send works.
+	m = typed(m, " x")
+	if m.input.Value() != "#slow now x" {
+		t.Fatalf("composer still read-only after cancel: %q", m.input.Value())
+	}
+}
+
+// The # list wraps in both directions, and accepting a name in the middle of the
+// text replaces only its token, leaving the rest of the composer as it was.
+func TestPromptCompletionWrapsAndReplacesMidText(t *testing.T) {
+	f := newFixture(t, true)
+	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initLua := `
+require("zel").complete("plan", function() return "PLAN BODY" end)
+require("zel").complete("polish", function() return "POLISH BODY" end)
+require("zel").complete("boom", function() return "BOOM" end)`
+	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ctl.Reload()
+	f.m = settle(f.m)
+
+	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	m := typed(f.m, "#")
+	if got := strings.Join(m.promptItems, " "); got != "boom plan polish" {
+		t.Fatalf("list = %q", got)
+	}
+	selected := func(m model) string { items, i := m.completionList(); return items[i] }
+	m = key(m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := selected(m); got != "polish" {
+		t.Fatalf("up from the first name must wrap to the last, got %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := selected(m); got != "boom" {
+		t.Fatalf("down from the last name must wrap to the first, got %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := selected(m); got != "plan" {
+		t.Fatalf("down from boom must select plan, got %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc}) // closes the list, the text stays
+	m = typed(m, "x")
+	m = key(m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	m = typed(m, "say #pl now")
+	for range len(" now") {
+		m = key(m, tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	if got := strings.Join(m.promptItems, " "); got != "plan" {
+		t.Fatalf("list at the cursor after #pl = %q", got)
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.input.Value() != "say #plan now" {
+		t.Fatalf("mid-text accept must replace only the token: %q", m.input.Value())
+	}
+}
+
+// A result that belongs to another session is not sent: the draft stays and the
+// reason shows in the chat.
+func TestPromptExpansionSessionChangeKeepsDraft(t *testing.T) {
+	f := newFixture(t, true)
+	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(`require("zel").complete("plan", function() return "PLAN BODY" end)`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ctl.Reload()
+	f.m = settle(f.m)
+	m := key(f.m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#plan")})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	seq := m.promptPending
+	if seq == 0 {
+		t.Fatal("Enter must start the expansion")
+	}
+	next, _ = m.Update(promptExpanded{seq: seq, session: "some-other-session", draft: "#plan", text: "PLAN BODY"})
+	m = settle(next.(model))
+	if m.promptPending != 0 || m.input.Value() != "#plan" || hasEntry(m, "user", "PLAN BODY") {
+		t.Fatalf("a result from another session was applied: pending=%d composer=%q", m.promptPending, m.input.Value())
+	}
+	if !hasEntry(m, "prompt_error", "the session changed while the prompt was expanding") {
+		t.Fatalf("the reason must be shown: %+v", m.entries)
+	}
+}

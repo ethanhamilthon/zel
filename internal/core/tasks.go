@@ -36,13 +36,20 @@ type tasks struct {
 	report       func(string)
 	jobs         map[string]*job
 	order        []string
+	// life is the lifecycle context of the session: subagent hooks run under it, and
+	// it ends with the session's shutdown budget (see startBudget).
+	life     context.Context
+	stopLife context.CancelFunc
+	budget   sync.Once
 }
 
 func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
+	life, stopLife := context.WithCancel(context.Background())
 	return &tasks{db: a.db, session: a.id, log: filepath.Join(a.home, "tasks"),
-		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{}}
+		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
+		life: life, stopLife: stopLife}
 }
 
 // proc is one running job: a Lua task or an in-process agent.
@@ -199,7 +206,6 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		// The result is queued before the task stops counting as running, so a waiting
 		// consumer cannot observe neither a task nor its result.
 		t.mu.Lock()
-		closing := t.closed
 		if !t.closed && !j.waited {
 			t.queue.PushNotice(notice)
 			j.pushed = notice.Text
@@ -208,7 +214,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		t.mu.Unlock()
 		close(j.done)
 		if j.endHook != nil {
-			j.endHook(status, res, closing)
+			j.endHook(status, res)
 		}
 	}()
 	return id, nil
@@ -236,7 +242,19 @@ func (t *tasks) Running() int {
 	return len(t.running)
 }
 
+// startBudget starts the session's shutdown budget, once: after
+// luart.SessionEndTimeout the lifecycle context ends, so the hooks still pending
+// are skipped and close stops waiting for jobs.
+func (t *tasks) startBudget() {
+	t.budget.Do(func() { time.AfterFunc(luart.SessionEndTimeout, t.stopLife) })
+}
+
+// close stops the running jobs and waits for them, their end hooks included, but
+// no longer than the shutdown budget. A job still running then is abandoned: it is
+// stopped, its result is not queued because the session is closed, and its hooks
+// find the budget spent.
 func (t *tasks) close() {
+	t.startBudget()
 	t.mu.Lock()
 	t.closed = true
 	for id, p := range t.running {
@@ -244,7 +262,16 @@ func (t *tasks) close() {
 		p.cancel()
 	}
 	t.mu.Unlock()
-	t.wg.Wait()
+	drained := make(chan struct{})
+	go func() {
+		t.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-t.life.Done():
+	}
+	t.stopLife()
 }
 
 func tail(path string) string {

@@ -9,8 +9,8 @@ providers and preferences live in the UI.
 > calls, the call timeout is 30 s, output is no longer truncated (`slice()` and
 > `fs.patch` are new), `tasks.spawn` takes a Lua function (shell commands and
 > `tasks.run` / `zel tasks` are gone), finished jobs arrive as short
-> `<notification>` messages, and only four hooks remain: `session_start`,
-> `session_end`, `message`, `turn_end`.
+> `<notification>` messages, and the hooks are `session_start`, `session_end`,
+> `message`, `turn_end`, `subagent_start` and `subagent_end`.
 >
 > **0.5.1 changes the Lua API.** The Lua call timeout is fixed at 10 s (no
 > `--! timeout=N`), job handles and the global `wait_all` are replaced by
@@ -82,7 +82,7 @@ and the same under `agents`). A task is a Lua function that runs in its own VM
 with copies of what it captured; subagents cannot start subagents. The agent
 wakes up only for your messages and notifications: unclaimed results arrive as
 `<notification>t1 finished</notification>` and the model fetches the details. Messages you type during a call are queued until the
-call ends; Ctrl+D (stop the turn) cancels the running call; background work keeps running.
+call ends; Ctrl+D (stop the turn) cancels the running call and any prompt completion still expanding; background work keeps running.
 
 Host API: `sh`, `fs.*`, `web.request/get/post`, `json`, `tasks.*`, `agents.*`,
 `state.*`, `view`, `session`, `log`, `sleep`. The model sees the
@@ -120,11 +120,25 @@ zel.on("turn_end", function(ev) end)  -- also session_start, session_end, messag
 
 Subagent hooks run in the parent's init.lua. `subagent_start` runs in the
 background when a subagent begins, with `{id, prompt, model, effort, provider,
-cwd, depth}`. `subagent_end` runs once after the subagent's result is published,
-with `{id, status, ok, answer, error, session, model, effort, ms}`; `status` is
-`done`, `failed`, `stopped` or `timeout`. While the session closes, the end hooks
-share the 5 s budget of `session_end`. Neither hook returns text to the agent:
-keep the data in `state` or raise a `log.notice`.
+cwd, depth}`. `subagent_end` runs exactly once per started subagent, after the
+subagent's result is published, with `{id, status, ok, answer, error, session,
+model, effort, ms}`; `status` is `done`, `failed`, `stopped` or `timeout`. A
+subagent keeps the init.lua snapshot that started it, so its end hook still runs
+there after a Reload. Leaving a session (quit, new or resume) gives
+`session_end`, the end hooks of running subagents and the wait for running jobs
+one shared budget of 5 s; hooks that do not finish in it are skipped. Neither
+subagent hook returns text to the agent: keep the data in `state` or raise a
+`log.notice`.
+
+Prompt completions: `zel.complete("plan", function() return "..." end)` registers
+`#plan`. Typing `#` in the composer lists the registered names; Tab or Enter
+completes the token. When you send a message that names a registered completion,
+Zel runs its function then and sends the returned text instead of the token. The
+function runs outside the UI loop with a 10 s limit. Unknown `#names` stay as
+typed, each name runs once per message, and a failing function keeps your draft
+(the reason shows in red in the chat). Ctrl+D while it expands (or interrupting
+`zel -p`) cancels the send: nothing is sent and the draft stays. A later init.lua layer overrides an earlier completion
+of the same name with a warning. Names are 1 to 64 letters, digits, `-` or `_`.
 
 Registered functions are rendered into the system prompt (signature, summary,
 examples), so the model finds them without extra setup. `package.path` includes
@@ -156,7 +170,7 @@ everything, and the chat shows a "context compacted" divider.
 
 ## Chat and Tracing
 
-Chat shows user messages, agent messages, and the working indicator. The indicator shows the Lua host operation the turn waits on (for example `reading ~/.zel/init.lua` or `sleeping 20 sec`), and each running subagent row shows its own; background tasks are not shown there. Labels hide secrets such as tokens and URL queries. Tools,
+Chat shows user messages, agent messages, and the working indicator. The indicator shows the Lua host operation the turn waits on (for example `reading ~/.zel/init.lua` or `sleeping 20 sec`), and each running subagent row shows its own; background tasks are not shown there. Labels never show a command's arguments, except plain paths of a few read-only commands, and show only the scheme and host of a URL; configured API keys are removed. Instant host functions such as `print` have no label. Tools,
 thoughts, errors, and other events belong in Tracing; there are no
 visibility toggles. A turn that fails or is stopped with Ctrl+D ends in the chat with a red line of wall-clock time and steps, then the error or "stopped by user". Info, Tracing, and Tasks refresh while open.
 
@@ -186,7 +200,7 @@ and your terminal's link-opening gesture for links.
 - Ctrl+T: Tracing
 - Ctrl+Q: Save and quit
 - Ctrl+Y: Copy the last answer as plain text (also available in Menu → Copy answer)
-- Ctrl+D: Stop the active turn (does not exit)
+- Ctrl+D: Stop the active turn or a prompt completion that is still expanding (does not exit)
 - Ctrl+C: reserved for terminal copying; never stops the active turn
 - Esc: back; shortcut-opened pages return directly to chat
 - Tracing merges history, tasks and notices/errors chronologically (tasks use their

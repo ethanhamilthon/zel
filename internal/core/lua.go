@@ -20,10 +20,14 @@ var luaMD string
 var LuaToolDescription = strings.TrimSpace(luaMD)
 
 // luaHolder keeps the config VM of init.lua layers. It is shared by pointer so a
-// session switch and Reload see the same value.
+// session switch and Reload see the same value. A snapshot that a running subagent
+// still owes lifecycle hooks is pinned: when it is replaced it stays open until the
+// last pin is released, so the subagent's end hook reaches the snapshot that ran
+// its start hook.
 type luaHolder struct {
 	mu     sync.RWMutex
 	cfg    *luart.Config
+	pins   map[*luart.Config]int
 	root   string
 	notice func(string)
 	models modelListing
@@ -46,13 +50,47 @@ func (h *luaHolder) get() *luart.Config {
 	return h.cfg
 }
 
+// set makes cfg the current snapshot. The one it replaces closes now, unless
+// pinned; the last unpin closes it then.
 func (h *luaHolder) set(cfg *luart.Config) {
 	h.mu.Lock()
 	old := h.cfg
 	h.cfg = cfg
+	closeNow := old != nil && h.pins[old] == 0
 	h.mu.Unlock()
-	if old != nil {
+	if closeNow {
 		old.Close()
+	}
+}
+
+// pin takes a reference on the current snapshot (nil when none is loaded).
+func (h *luaHolder) pin() *luart.Config {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg != nil {
+		if h.pins == nil {
+			h.pins = map[*luart.Config]int{}
+		}
+		h.pins[h.cfg]++
+	}
+	return h.cfg
+}
+
+// unpin releases a reference taken by pin. A snapshot that was replaced in the
+// meantime closes with its last reference.
+func (h *luaHolder) unpin(cfg *luart.Config) {
+	if cfg == nil {
+		return
+	}
+	h.mu.Lock()
+	h.pins[cfg]--
+	closeNow := h.pins[cfg] <= 0 && cfg != h.cfg
+	if h.pins[cfg] <= 0 {
+		delete(h.pins, cfg)
+	}
+	h.mu.Unlock()
+	if closeNow {
+		cfg.Close()
 	}
 }
 
@@ -234,7 +272,8 @@ func (e luaEnv) Begin(label string, background bool) (end func()) {
 	if background {
 		return func() {}
 	}
-	return e.a.beginActivity(label)
+	// Labels come from arguments, so configured API keys are removed here too.
+	return e.a.beginActivity(Redact(e.a.Settings(), label))
 }
 
 func (e luaEnv) Notice(msg string) { e.a.notify(msg) }
@@ -273,51 +312,31 @@ func (a *Runtime) sessionStart() {
 	}
 }
 
-// sessionEnd runs the session_end hooks before the session is left.
+// sessionEnd runs the session_end hooks before the session is left. The session's
+// shutdown budget starts here: the hooks, the end hooks of running subagents and the
+// stop of the jobs all share it (see tasks.close).
 func (a *Runtime) sessionEnd(reason string) {
+	t := a.tasks
+	if t == nil {
+		return
+	}
+	t.startBudget()
 	if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_end") {
-		cfg.SessionEnd(context.Background(), reason)
+		cfg.SessionEnd(t.life, reason)
 	}
 }
 
-// hookInput lets message hooks observe notifications or rewrite what the user typed.
+// hookInput lets message hooks rewrite what the user typed.
 func (a *Runtime) hookInput(ctx context.Context, input Input) Input {
 	cfg := a.lua.get()
-	if cfg == nil || !cfg.HasHook("message") || input.Text == "" {
-		return input
-	}
-	if input.Notice {
-		cfg.Notice(ctx, input.Text)
+	if input.Notice || cfg == nil || !cfg.HasHook("message") || input.Text == "" {
 		return input
 	}
 	input.Text = cfg.Message(ctx, input.Text)
 	return input
 }
 
-// startSubagent runs the subagent_start hooks of the current snapshot.
-func (h *luaHolder) startSubagent(info map[string]any) {
-	if cfg := h.get(); cfg != nil && cfg.HasHook("subagent_start") {
-		cfg.SubagentStart(luart.WithBackground(context.Background()), info)
-	}
-}
-
-// endSubagent runs the subagent_end hooks of the current snapshot. While the
-// session is closing they get the time budget of session_end.
-func (h *luaHolder) endSubagent(info map[string]any, closing bool) {
-	cfg := h.get()
-	if cfg == nil || !cfg.HasHook("subagent_end") {
-		return
-	}
-	ctx := luart.WithBackground(context.Background())
-	if closing {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, luart.SessionEndTimeout)
-		defer cancel()
-	}
-	cfg.SubagentEnd(ctx, info)
-}
-
-// turnEnd runs the turn_end hooks; a returned text becomes a new user message.
+// turnEnd runs the turn_end hooks; returned text becomes a notification that continues the turn.
 func (a *Runtime) turnEnd(ctx context.Context) string {
 	cfg := a.lua.get()
 	if cfg == nil || !cfg.HasHook("turn_end") {

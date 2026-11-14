@@ -279,10 +279,14 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	}
 	defer a.Close()
 	if headless {
-		if err := a.Run(ctx, prompt, func(core.TurnEvent) {}); err != nil {
+		expanded, err := a.ExpandPrompt(ctx, prompt)
+		if err != nil {
 			return cancelledOr(ctx, err)
 		}
-		_, err := fmt.Fprintln(out, a.FinalText())
+		if err := a.Run(ctx, expanded, func(core.TurnEvent) {}); err != nil {
+			return cancelledOr(ctx, err)
+		}
+		_, err = fmt.Fprintln(out, a.FinalText())
 		return cancelledOr(ctx, err)
 	}
 	running, stop := context.WithCancelCause(ctx)

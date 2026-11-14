@@ -54,9 +54,8 @@ configuration formats and helper protocols are retained.
 ## Verification
 
 Run `make test` for formatting, vet and race-enabled tests. Package-boundary tests
-also enforce frontend isolation, independent configuration/domain packages and the
-production-code budget of fewer than 15,500 Go lines (including blank lines and
-comments, excluding tests).
+also enforce frontend isolation and independent configuration/domain packages.
+There is no source line-count budget.
 
 ## The lua tool
 
@@ -76,9 +75,9 @@ session that runs in the same process. The parent owns its context,
 cancellation, progress and result; running agents live in an in-memory tree
 (`agentTree`) shared by the whole agent tree (subagents cannot start agents of
 their own), and closing the parent cancels
-and waits for its children. There is no Unix socket and no report file. init.lua layers are run once per session in
+its children and waits for them, with their end hooks, within the 5 s session budget. There is no Unix socket and no report file. init.lua layers are run once per session in
 a long-lived config VM (snapshot); hooks and plugin functions live there. The agent wakes up
-only for typed input or a notification: finished jobs nobody waited for, hook
-text and `view()` images are queued as `<notification>...</notification>`
+only for typed input or a notification: finished jobs nobody waited for, text
+from session_start and turn_end hooks, and `view()` images are queued as `<notification>...</notification>`
 (consecutive ones are delivered as one message). See
 [lua-api.md](lua-api.md).

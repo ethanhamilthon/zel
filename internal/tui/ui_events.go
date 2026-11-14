@@ -290,6 +290,7 @@ func (m *model) setComposer(text string) {
 	m.input.SetValue(text)
 	m.hideCompletion = false
 	m.dismissFileCompletion()
+	m.promptItems = nil
 }
 
 type menuTick struct{}

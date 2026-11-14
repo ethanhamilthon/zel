@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func layerFile(t *testing.T, dir, body string) string {
@@ -190,5 +191,131 @@ zel.fn{name = "helped", summary = "uses helper", run = function() return require
 	}
 	if !strings.HasPrefix(cfg.SystemPrompt(context.Background()), "from file\n\n# Lua") {
 		t.Fatal(cfg.SystemPrompt(context.Background()))
+	}
+}
+
+func TestPromptTokenRules(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want string
+	}{
+		{"#plan", "plan"},
+		{"fix #plan, then #review.", "plan review"},
+		{"a#plan", ""},
+		{"##plan", ""},
+		{"#", ""},
+		{"(#plan)", ""},
+		{"#plan-x_1 ok", "plan-x_1"},
+	} {
+		var names []string
+		for _, tok := range PromptTokens(c.in) {
+			names = append(names, tok.Name)
+		}
+		if got := strings.Join(names, " "); got != c.want {
+			t.Errorf("PromptTokens(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// the cursor after "#pl" in "x #plan": the token spans the name after the cursor too
+	if start, end, query, ok := PromptAt([]rune("x #plan"), 5); !ok || start != 2 || end != 7 || query != "pl" {
+		t.Errorf("PromptAt = %d %d %q %v", start, end, query, ok)
+	}
+	if _, _, query, ok := PromptAt([]rune("#"), 1); !ok || query != "" {
+		t.Errorf("a lone # must open the list with an empty query: %q %v", query, ok)
+	}
+	if _, _, _, ok := PromptAt([]rune("a#pl"), 4); ok {
+		t.Error("a # glued to a word must not open the list")
+	}
+}
+
+func TestPromptCompletionsExpandOncePerName(t *testing.T) {
+	env := newEnv(t)
+	g := layerFile(t, filepath.Join(env.cwd, "g"), `
+require("zel").complete("plan", function() return "GLOBAL PLAN" end)
+require("zel").complete("review", function() n = (n or 0) + 1; return "review " .. n end)`)
+	p := layerFile(t, filepath.Join(env.cwd, "p"), `require("zel").complete("plan", function() return "PROJECT PLAN" end)`)
+	cfg := LoadConfig(env, []Source{{"global", g}, {"project", p}})
+	defer cfg.Close()
+	if len(env.logs) == 0 || !strings.Contains(env.logs[0], "overrides") {
+		t.Fatalf("the project completion must override the global one with a warning: %v", env.logs)
+	}
+	if got := strings.Join(cfg.PromptNames(), " "); got != "plan review" {
+		t.Fatalf("names = %q", got)
+	}
+	got, err := cfg.Expand(context.Background(), "#plan then #review and #plan #missing #review")
+	if want := "PROJECT PLAN then review 1 and PROJECT PLAN #missing review 1"; err != nil || got != want {
+		t.Fatalf("Expand = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestPromptCompletionErrorsKeepTheText(t *testing.T) {
+	env := newEnv(t)
+	p := layerFile(t, env.cwd, `
+require("zel").complete("boom", function() error("bad state") end)
+require("zel").complete("nothing", function() return nil end)
+require("zel").complete("blank", function() return "  " end)
+require("zel").complete("ok", function() return "fine" end)`)
+	bad := layerFile(t, filepath.Join(env.cwd, "bad"), `require("zel").complete("has space", function() return "x" end)`)
+	cfg := LoadConfig(env, []Source{{"project", p}, {"bad", bad}})
+	if len(cfg.LoadErrs) != 1 || !strings.Contains(cfg.LoadErrs[0], "letters, digits") || cfg.HasPrompt("has space") {
+		t.Fatalf("invalid name must skip its layer: %v", cfg.LoadErrs)
+	}
+	ctx := context.Background()
+	for _, name := range []string{"boom", "nothing", "blank"} {
+		if _, err := cfg.Expand(ctx, "#"+name); err == nil || !strings.HasPrefix(err.Error(), "#"+name+": ") {
+			t.Errorf("#%s: err = %v", name, err)
+		}
+	}
+	if _, err := cfg.Expand(ctx, "#ok and #boom"); err == nil {
+		t.Error("one failing token must fail the whole expansion")
+	}
+	cfg.Close()
+	if _, err := cfg.Expand(ctx, "#ok"); err == nil || !strings.Contains(err.Error(), "reloaded") {
+		t.Errorf("a reloaded-away snapshot must not run: %v", err)
+	}
+}
+
+// A call that waits for the config lock gives up with its own budget; closing the
+// snapshot ends the hook that holds the lock, and a closed snapshot runs nothing.
+func TestConfigLockWaitIsBoundedAndCloseEndsRunningHooks(t *testing.T) {
+	env := newEnv(t)
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
+local zel = require("zel")
+zel.on("session_start", function() state.set("holding", true); sleep(30) end)
+zel.on("turn_end", function() return "never" end)`)}})
+	holding := make(chan struct{})
+	go func() {
+		defer close(holding)
+		cfg.SessionStart(context.Background())
+	}()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if v, _, _ := env.state.Get("session", "holding"); v == "true" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session_start hook never took the lock")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if got := cfg.TurnEnd(ctx, "x"); got != "" {
+		t.Fatalf("a hook that never got the lock must not reply: %q", got)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("waiting for the lock took %s, past the caller's budget", took)
+	}
+	start = time.Now()
+	cfg.Close()
+	select {
+	case <-holding:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close did not end the running hook")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("close took %s", took)
+	}
+	cfg.Close() // closing twice is harmless
+	if got := cfg.TurnEnd(context.Background(), "y"); got != "" {
+		t.Fatalf("a closed snapshot ran a hook: %q", got)
 	}
 }

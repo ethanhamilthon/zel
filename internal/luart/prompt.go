@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// BuiltinPrompt is the fixed part of the system prompt: the Lua tool and the host API.
-const BuiltinPrompt = `# Lua
+// builtinBase is the fixed part of the system prompt: the Lua tool and the host API.
+const builtinBase = `# Lua
 One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn/agents.spawn and check it in later calls.
 The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". state.* outlives the VM.
 Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = fs.read("bigfile.md"); print(slice(a, 100, 10)).
@@ -37,6 +38,13 @@ state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  --
 view(path, ...); session.{id,cwd,root,parent,depth,model,effort}; session.rename(name); log.info/warn/notice(msg); sleep(s)
 session.models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}; listed once per session, failures cached with it; listed again after a provider change`
 
+// lifecycleLine tells the main agent about the config-side hooks. Subagents get
+// neither the line nor the agents.* functions: they start no children of their own.
+const lifecycleLine = "init.lua registers hooks and completions, not tool calls: subagent_start and subagent_end run around each agents.* child, and their results never reach you. A #name in a user message arrives already expanded."
+
+// BuiltinPrompt is the fixed part of the system prompt, for the main agent.
+const BuiltinPrompt = builtinBase + "\n" + lifecycleLine
+
 // Builtin is BuiltinPrompt for the given agent depth: subagents (depth > 0)
 // cannot start agents, so their prompt leaves agents.* out.
 func Builtin(depth int) string {
@@ -44,6 +52,7 @@ func Builtin(depth int) string {
 		return BuiltinPrompt
 	}
 	r := strings.NewReplacer(
+		"\n"+lifecycleLine, "",
 		"run longer work with tasks.spawn/agents.spawn", "run longer work with tasks.spawn",
 		"agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}\n", "",
 		"tasks.* and agents.* both have:", "tasks.* also has:",
@@ -55,9 +64,9 @@ func Builtin(depth int) string {
 // Prompt renders the plugin-provided part of the system prompt: instructions and
 // dynamic pieces of every layer, in layer order.
 func (c *Config) Prompt(ctx context.Context) string {
-	c.mu.Lock()
+	c.lock()
 	layers := append([]*Layer(nil), c.layers...)
-	c.mu.Unlock()
+	c.unlock()
 	var parts []string
 	for _, l := range layers {
 		for _, text := range l.instructions {
@@ -75,11 +84,18 @@ func (c *Config) Prompt(ctx context.Context) string {
 }
 
 func (c *Config) renderPrompt(ctx context.Context, l *Layer, fn *lua.LFunction) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	L := c.v.L
-	pctx, cancel := context.WithTimeout(ctx, 60e9)
+	pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	pctx, done := c.scope(pctx)
+	defer done()
+	if err := c.lockCtx(pctx); err != nil {
+		return ""
+	}
+	defer c.unlock()
+	if c.closed {
+		return ""
+	}
+	L := c.v.L
 	prev := c.v.ctx
 	c.v.ctx = pctx
 	L.SetContext(pctx)
@@ -101,8 +117,8 @@ func (c *Config) renderPrompt(ctx context.Context, l *Layer, fn *lua.LFunction) 
 
 // FunctionDocs renders the plugin functions grouped by layer ("## name (path)").
 func (c *Config) FunctionDocs() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lock()
+	defer c.unlock()
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
 	for _, l := range c.layers {

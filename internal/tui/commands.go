@@ -121,6 +121,7 @@ func (m *model) fetchModels() tea.Cmd {
 
 func (m model) quit() (tea.Model, tea.Cmd) {
 	m.dismissFileCompletion()
+	m.cancelPrompt()
 	closed, err := m.ctl.Quit()
 	if err != nil {
 		return m.reject(err)
@@ -134,6 +135,7 @@ func (m model) quit() (tea.Model, tea.Cmd) {
 
 func (m *model) resetCompletions() {
 	m.dismissFileCompletion()
+	m.promptItems = nil
 	m.fileIndexCache = nil
 }
 

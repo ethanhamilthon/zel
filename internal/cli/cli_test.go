@@ -19,7 +19,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 	"zel/internal/core"
 	"zel/internal/store"
 )
@@ -442,5 +444,50 @@ zel.fn{name = "proj.hello", summary = "greet", params = {{"who", "string"}}, run
 	defer mu.Unlock()
 	if !slices.Contains(prompts, "child task") {
 		t.Fatalf("the child never ran: %q", prompts)
+	}
+}
+
+// A headless prompt that is cancelled while its completions expand is never sent:
+// no request reaches the provider, the run exits as cancelled and the session
+// keeps no turn.
+func TestHeadlessCancelDuringPromptExpansionSendsNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	t.Setenv("ZEL_CONFIG", "")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, `{"error":{"message":"unexpected"}}`)
+	}))
+	defer server.Close()
+	settings := core.DefaultSettings()
+	settings.Provider, settings.Model = "p", "default"
+	settings.Providers["p"] = core.Provider{BaseURL: server.URL}
+	if err := core.WriteConfig(home, settings); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "init.lua")
+	if err := os.WriteFile(config, []byte(`
+local zel = require("zel")
+zel.complete("slow", function() sleep(30) return "never" end)`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	var out strings.Builder
+	var diagnostics strings.Builder
+	start := time.Now()
+	err := Run(ctx, []string{"-p", "do #slow", "--config", config}, strings.NewReader(""), &out, &diagnostics, Options{})
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("cancelled expansion took %s", took)
+	}
+	if ExitCode(err) != 130 {
+		t.Fatalf("exit=%d err=%v", ExitCode(err), err)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("%d provider requests after a cancelled expansion", n)
+	}
+	if strings.Contains(out.String(), "never") {
+		t.Fatalf("stdout carries text from a cancelled expansion: %q", out.String())
 	}
 }

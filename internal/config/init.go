@@ -19,8 +19,13 @@ const initTemplate = `local zel = require("zel")
 --   run = function(pkg) local r = sh("go test " .. pkg); return {ok = r.ok, out = r.out} end,
 -- }
 
--- Hooks: session_start, session_end, message, turn_end (returned text becomes a <notification>)
+-- Hooks: session_start, session_end, message, turn_end, subagent_start, subagent_end
+-- (session_start and turn_end: returned text becomes a <notification>; message: returned
+-- text replaces the user's text; the other hooks return nothing)
 -- zel.on("turn_end", function(ev) end)
+
+-- Prompt completions: a #plan token in your message is replaced by what this returns when you send it
+-- zel.complete("plan", function() return "Instructions for the agent go here" end)
 `
 
 // InitProject creates ./.zel/init.lua without replacing an existing file. When
