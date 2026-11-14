@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,7 +65,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 		return ""
 	}
 	width = max(1, width)
-	text := ansi.Strip(e.Text)
+	text := ansi.Strip(clampText(e.Text, maxLayoutBytes))
 	switch e.Kind {
 	case "user":
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, darkGray)
@@ -77,7 +78,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 		return ""
 	}
 	body, ok := "", false
-	if markdown {
+	if markdown && len(text) <= maxMarkdownBytes {
 		body, ok = renderMarkdown(text, width, e.Preview)
 	}
 	if !ok {
@@ -148,12 +149,38 @@ func (r *screenRows) addLines(lines []string) {
 	*r = append(*r, lines[1:]...)
 }
 
+// timelineRows is the whole timeline as one slice: the chat history, the working
+// and agent indicators, the composer and the completions.
 func (m *model) timelineRows(budget time.Duration) []string {
-	var screen screenRows
+	head, tail := m.timelineSegments(budget)
+	return append(slices.Clone(head), tail...)
+}
+
+// blankRow reports whether a row holds nothing but whitespace.
+func blankRow(row string) bool { return strings.TrimSpace(ansi.Strip(row)) == "" }
+
+// trimBlankTail drops the trailing blank rows of rows without copying them.
+func trimBlankTail(rows []string) []string {
+	for len(rows) > 0 && blankRow(rows[len(rows)-1]) {
+		rows = rows[:len(rows)-1]
+	}
+	return rows
+}
+
+// timelineSegments builds the timeline as a stable head, the chat history, and a
+// tail that is cheap to rebuild: the indicators, the composer and the
+// completions. The history is concatenated only when an entry, the width or the
+// theme changed, so a loader tick or a keystroke costs nothing in its length.
+func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
+	if m.cache == nil {
+		m.historyStale = true
+	}
 	if len(m.cache) > len(m.entries) {
 		m.cache = m.cache[:len(m.entries)]
+		m.historyStale = true
 	} else if diff := len(m.entries) - len(m.cache); diff > 0 {
 		m.cache = append(m.cache, make([]renderedEntry, diff)...)
+		m.historyStale = true
 	}
 	started, rendered := time.Now(), 0
 	m.renderPending = false
@@ -177,34 +204,54 @@ func (m *model) timelineRows(budget time.Duration) []string {
 		cached.source, cached.width, cached.maxLines, cached.draft = e, m.width, limit, draft
 		cached.Text = renderEntryMode(e, m.width, limit, !draft)
 		cached.rows = strings.Split(cached.Text, "\n")
+		m.historyStale = true
 		if e.Kind == "assistant" && !draft {
 			rendered++
 		}
 	}
-	for _, cached := range m.cache {
-		if cached.Text != "" {
-			screen.addLines(cached.rows)
-			screen.add("\n\n")
+	if m.historyStale || m.history == nil {
+		var history screenRows
+		for _, cached := range m.cache {
+			if cached.Text != "" {
+				history.addLines(cached.rows)
+				history.add("\n\n")
+			}
+		}
+		m.history, m.historyStale = history, false
+	}
+	history := m.history
+
+	// Every chat entry ends with an empty row; the indicators start on it.
+	working, subagents := m.workingBlock(), m.subagentBlock()
+	var mid screenRows
+	if working == "" && subagents == "" {
+		head = trimBlankTail(history)
+	} else {
+		head = history
+		if len(history) > 0 {
+			head, mid = history[:len(history)-1], screenRows{history[len(history)-1]}
+		}
+		mid.add(working)
+		mid.add(subagents)
+		for len(mid) > 0 && blankRow(mid[len(mid)-1]) {
+			mid = mid[:len(mid)-1]
+		}
+		if len(mid) == 0 {
+			head = trimBlankTail(head)
 		}
 	}
-	screen.add(m.workingBlock())
-	screen.add(m.subagentBlock())
-	// Remove only trailing boundary whitespace, preserving all message-internal rows.
-	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
-		screen = screen[:len(screen)-1]
-	}
-	inputPrefix := ""
-	if len(screen) > 0 {
-		// screenRows joins chunks at their boundary; the leading newline keeps
-		// one actual empty row between content and the composer rail.
-		inputPrefix = "\n\n"
-	}
-	m.inputTop = len(screen)
-	if inputPrefix != "" {
+	tail = mid
+	// The composer follows after one empty row; its first chunk line merges into
+	// the last row of the screen, so only the rest of it is appended.
+	nonEmpty := len(head)+len(tail) > 0
+	m.inputTop = len(head) + len(tail)
+	block := strings.Split(m.inputBlock(), "\n")
+	if nonEmpty {
 		m.inputTop++
+		tail = append(tail, "")
 	}
-	screen.add(inputPrefix + m.inputBlock())
-	screen.add("\n\n")
+	tail = append(tail, block...)
+	tail = append(tail, "", "")
 	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
 	if count := len(m.fileCompletions); m.hasFileCompletions() {
 		start = max(0, m.fileSelected%count-rows+1)
@@ -219,11 +266,15 @@ func (m *model) timelineRows(budget time.Duration) []string {
 			}
 			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
 			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
+			screen := screenRows(tail)
 			screen.add(row + "\n")
+			tail = screen
 		}
 		if remaining := count - min(count, start+rows); remaining > 0 {
+			screen := screenRows(tail)
 			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
+			tail = screen
 		}
 	}
-	return screen
+	return head, tail
 }

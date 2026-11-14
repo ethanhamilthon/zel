@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"zel/internal/store"
 )
 
 // TraceEntry is one step of a session trace: the system prompt, a message, the
@@ -24,7 +26,23 @@ func traceKind(kind string) string {
 // notices/errors chronologically. Stable ties preserve source order; undated
 // legacy history and the system prompt stay before timestamped entries.
 func (a *Runtime) Trace() []TraceEntry {
-	entries := append(append(a.historyTrace(), a.taskTrace()...), a.eventTrace()...)
+	history, slow := a.traceSources()
+	return mergeTrace(history, slow())
+}
+
+// traceSources splits the trace by cost: the history is copied from memory now,
+// while the returned function reads the task rows and the events log. It
+// captures what it needs, so callers can run it without holding any lock.
+func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
+	history := a.historyTrace()
+	db, id, home := a.db, a.id, a.home
+	return history, func() []TraceEntry {
+		return append(taskTrace(db, id), eventTrace(home, id)...)
+	}
+}
+
+func mergeTrace(history, rest []TraceEntry) []TraceEntry {
+	entries := append(history, rest...)
 	slices.SortStableFunc(entries, func(a, b TraceEntry) int { return a.At.Compare(b.At) })
 	return entries
 }
@@ -48,8 +66,8 @@ func (a *Runtime) historyTrace() (entries []TraceEntry) {
 	return entries
 }
 
-func (a *Runtime) taskTrace() (entries []TraceEntry) {
-	tasks, err := a.Tasks()
+func taskTrace(db *store.Store, session string) (entries []TraceEntry) {
+	tasks, err := sessionTasks(db, session)
 	if err != nil {
 		return nil
 	}
@@ -61,11 +79,11 @@ func (a *Runtime) taskTrace() (entries []TraceEntry) {
 
 // eventTrace parses the lines LogEvent appends: a timestamp, the kind and one or
 // more lines of text.
-func (a *Runtime) eventTrace() (entries []TraceEntry) {
-	if a.home == "" || a.id == "" {
+func eventTrace(home, session string) (entries []TraceEntry) {
+	if home == "" || session == "" {
 		return nil
 	}
-	data, err := os.ReadFile(EventsLog(a.home, a.id))
+	data, err := os.ReadFile(EventsLog(home, session))
 	if err != nil {
 		return nil
 	}

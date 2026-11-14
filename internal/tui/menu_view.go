@@ -90,10 +90,9 @@ func (m model) menuTop() int {
 		body++
 	}
 	if m.menu.page == menuText || m.menu.page == menuInfo {
+		body = len(m.textBody(m.menuWidth()))
 		if m.traceEntryView() {
-			body = min(10, len(m.traceViewLines(m.menuWidth())))
-		} else {
-			body = len(m.wrapText(m.menuText(), m.menuWidth()))
+			body = min(10, body)
 		}
 	}
 	height := m.height
@@ -130,7 +129,7 @@ func (m model) menuHead() (title, shortcut string) {
 func (m model) pageLines(pad string, w int) []string {
 	if m.menu.page == menuText || m.menu.page == menuInfo {
 		if m.traceEntryView() {
-			body := m.traceViewLines(w)
+			body := m.textBody(w)
 			height := m.menuBodyRoom()
 			start := min(max(0, m.menu.offset), max(0, len(body)-height))
 			lines := make([]string, 0, height)
@@ -139,7 +138,7 @@ func (m model) pageLines(pad string, w int) []string {
 			}
 			return lines
 		}
-		body := m.wrapText(m.menuText(), w)
+		body := m.textBody(w)
 		height := m.menuBodyRoom()
 		start := min(max(0, m.menu.offset), max(0, len(body)-1))
 		lines := make([]string, 0, height)
@@ -218,19 +217,6 @@ func (m model) listWindow(rows int) (first, visible int) {
 	return first, visible
 }
 
-// wrapText wraps a text page body to the menu width.
-func (m model) wrapText(text string, w int) []string {
-	var lines []string
-	for _, line := range strings.Split(ansi.Strip(text), "\n") {
-		if line == "" {
-			lines = append(lines, "")
-			continue
-		}
-		lines = append(lines, strings.Split(ansi.Wrap(line, max(1, w-2), ""), "\n")...)
-	}
-	return lines
-}
-
 func (m model) traceEntryView() bool {
 	return m.menu != nil && m.menu.page == menuText && m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace)
 }
@@ -255,16 +241,44 @@ func (m model) traceHeader(pad string, width int) string {
 		lipgloss.NewStyle().Foreground(muted).Render(right)
 }
 
-func (m model) traceViewLines(width int) []string {
-	e := m.menu.trace[m.menu.traceIndex]
-	text := traceText(e)
-	color := traceColor(e.Kind)
-	if e.Kind == "system" || e.Kind == "user" || e.Kind == "assistant" || e.Kind == "agent" {
+// textLayout is the laid-out body of the open text page. It is rebuilt only when
+// the text, the width, the entry kind or the theme change, never per key or tick.
+type textLayout struct {
+	text, kind, theme string
+	width             int
+	lines             []string
+}
+
+// textBody returns the wrapped (for trace entries also colored and Markdown
+// rendered) lines of the open text page. The result is shared: do not modify it.
+func (m model) textBody(w int) []string {
+	mu := m.menu
+	text, kind := m.menuText(), ""
+	if m.traceEntryView() {
+		e := mu.trace[mu.traceIndex]
+		text, kind = traceText(e), e.Kind
+	}
+	if l := mu.layout; l != nil && l.width == w && l.kind == kind && l.theme == m.themeKey && l.text == text {
+		return l.lines
+	}
+	var lines []string
+	if kind != "" {
+		lines = m.traceViewLines(text, kind, w)
+	} else {
+		lines = m.wrapText(clampText(text, maxLayoutBytes), w)
+	}
+	mu.layout = &textLayout{text: text, kind: kind, theme: m.themeKey, width: w, lines: lines}
+	return lines
+}
+
+func (m model) traceViewLines(text, kind string, width int) []string {
+	color := traceColor(kind)
+	if (kind == "system" || kind == "user" || kind == "assistant" || kind == "agent") && len(text) <= maxMarkdownBytes {
 		if rendered, ok := renderTraceMarkdown(text, max(1, width-2), color); ok {
 			return strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 		}
 	}
-	lines := m.wrapText(text, width)
+	lines := m.wrapText(clampText(text, maxLayoutBytes), width)
 	style := lipgloss.NewStyle().Foreground(color)
 	for i := range lines {
 		lines[i] = style.Render(lines[i])
@@ -285,12 +299,7 @@ func (m model) menuText() string {
 
 // scrollText scrolls the body of a text page by delta rows.
 func (m *model) scrollText(delta int) {
-	var body []string
-	if m.traceEntryView() {
-		body = m.traceViewLines(m.menuWidth())
-	} else {
-		body = m.wrapText(m.menuText(), m.menuWidth())
-	}
+	body := m.textBody(m.menuWidth())
 	if m.traceEntryView() {
 		room := m.menuBodyRoom()
 		m.menu.offset = min(max(0, m.menu.offset+delta), max(0, len(body)-room))

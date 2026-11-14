@@ -163,7 +163,7 @@ func TestNativeCursorPosition(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.viewport.Width, m.viewport.Height = 20, 3
 	m.viewport.TopMargin = 1
-	m.viewport.lines = []string{"header", "▌ ab" + composerCursorMarker + "界", "footer"}
+	m.viewport.SetLines([]string{"header", "▌ ab" + composerCursorMarker + "界", "footer"})
 	view := m.View()
 	if !strings.HasSuffix(view, "\x1b]1337;ZelCaret;3;5\x07") || strings.Contains(view, composerCursorMarker) {
 		t.Fatalf("wrong native cursor position: %q", view)
@@ -934,7 +934,7 @@ func TestTraceEntryUpdateDisablesMouseOnEveryExit(t *testing.T) {
 			} else if updated.menu != nil {
 				t.Fatalf("Ctrl+K left menu open: %+v", updated.menu)
 			}
-			if cmd == nil || fmt.Sprintf("%T", cmd()) != "tea.disableMouseMsg" {
+			if !slices.Contains(commandMessages(cmd), "tea.disableMouseMsg") {
 				t.Fatalf("exit command = %T, want mouse disable", cmd)
 			}
 
@@ -1674,15 +1674,13 @@ func TestTracingNavigationAcrossRefresh(t *testing.T) {
 		{tea.KeyRight, "middle", 1},
 		{tea.KeyRight, "last", 2},
 	} {
-		next, _ := m.Update(menuTick{})
-		m = next.(model)
+		m.refreshMenu()
 		m = key(m, tea.KeyMsg{Type: step.key})
 		if !strings.Contains(m.menu.text, step.text) || m.menu.selected != step.selected {
 			t.Fatalf("navigation after refresh: selected=%d text=%q; want %d %q", m.menu.selected, m.menu.text, step.selected, step.text)
 		}
 	}
-	next, _ := m.Update(menuTick{})
-	m = next.(model)
+	m.refreshMenu()
 	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.menu == nil || m.menu.page != menuTracing || m.menu.selected != 2 || m.menu.query != "match" {
 		t.Fatal("refresh lost the tracing list state")
@@ -1714,8 +1712,7 @@ func TestTracingEntryNumber(t *testing.T) {
 	m = key(m, tea.KeyMsg{Type: tea.KeyRight})
 	check()
 	m.entries = append(m.entries, entry{Kind: "output", Text: "new entry", Preview: true})
-	next, _ := m.Update(menuTick{})
-	m = next.(model)
+	m.refreshMenu()
 	check()
 	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
 	_, shortcut := m.menuHead()
@@ -1821,7 +1818,7 @@ func TestTracingEntryMarkdownHeaderColorsAndScrolling(t *testing.T) {
 	for _, kind := range []string{"system", "user"} {
 		m.menu.trace[1] = core.TraceEntry{Kind: kind, Text: "**trace markdown**"}
 		m.openTrace(1)
-		body := ansi.Strip(strings.Join(m.traceViewLines(m.menuWidth()), "\n"))
+		body := ansi.Strip(strings.Join(m.textBody(m.menuWidth()), "\n"))
 		if strings.Contains(body, "**trace markdown**") || !strings.Contains(body, "trace markdown") {
 			t.Errorf("%s Markdown was not rendered: %q", kind, body)
 		}
@@ -2438,5 +2435,283 @@ func TestFrameDropsTrailingPadding(t *testing.T) {
 	}
 	if got := frame([]string{"ab" + composerCursorMarker + "  "}); got != "ab\x1b]1337;ZelCaret;1;3\x07" {
 		t.Fatalf("frame = %q", got)
+	}
+}
+
+// Performance baselines (go test -run xxx -bench . ./internal/tui). They cover
+// the paths that run on the UI thread: timeline refresh, text pages of large
+// documents, long lists, and the periodic menu snapshot.
+
+func perfText(size int) string {
+	line := "func example(value int) string { return fmt.Sprintf(\"%d items of the list\", value) } // comment\n"
+	return strings.Repeat(line, size/len(line)+1)[:size]
+}
+
+func perfModel(b *testing.B, entries int) model {
+	m := bareModel(b, b.TempDir())
+	m.width, m.height = 100, 40
+	for i := 0; i < entries; i++ {
+		kind := "user"
+		text := fmt.Sprintf("question %d about the project", i)
+		if i%2 == 1 {
+			kind, text = "assistant", fmt.Sprintf("## Answer %d\n\nSome **markdown** with `code` and a list:\n\n- first\n- second\n", i)
+		}
+		m.entries = append(m.entries, entry{Kind: kind, Text: text})
+	}
+	m.refresh(true)
+	return m
+}
+
+func BenchmarkTimelineRefresh(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprint(n, "entries"), func(b *testing.B) {
+			m := perfModel(b, n)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.refresh(false)
+			}
+		})
+	}
+}
+
+func BenchmarkTextPageOpen(b *testing.B) {
+	for _, size := range []int{100 << 10, 1 << 20, 10 << 20} {
+		b.Run(fmt.Sprint(size>>10, "KB"), func(b *testing.B) {
+			m := bareModel(b, b.TempDir())
+			m.width, m.height = 100, 40
+			text := perfText(size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.menu = &menuState{page: menuText, parent: menuTasks, text: text}
+				_ = m.menuView()
+			}
+		})
+	}
+}
+
+func BenchmarkTextPageScroll(b *testing.B) {
+	for _, size := range []int{100 << 10, 1 << 20} {
+		b.Run(fmt.Sprint(size>>10, "KB"), func(b *testing.B) {
+			m := bareModel(b, b.TempDir())
+			m.width, m.height = 100, 40
+			m.menu = &menuState{page: menuText, parent: menuTasks, text: perfText(size)}
+			_ = m.menuView()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.scrollText(1)
+				_ = m.menuView()
+			}
+		})
+	}
+}
+
+func BenchmarkTraceMarkdownEntry(b *testing.B) {
+	m := bareModel(b, b.TempDir())
+	m.width, m.height = 100, 40
+	text := strings.Repeat("## Heading\n\nA paragraph with **bold**, `code` and a [link](http://example.com).\n\n- item one\n- item two\n\n", 1000)
+	m.menu = &menuState{page: menuText, parent: menuTracing, traceIndex: 0, trace: []core.TraceEntry{{Kind: "assistant", Text: text}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = m.menuView()
+		m.scrollText(1)
+	}
+}
+
+func BenchmarkTraceList(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprint(n, "items"), func(b *testing.B) {
+			m := bareModel(b, b.TempDir())
+			m.width, m.height = 100, 40
+			m.menu = &menuState{page: menuTracing}
+			for i := 0; i < n; i++ {
+				m.menu.trace = append(m.menu.trace, core.TraceEntry{Kind: "output", Text: fmt.Sprintf("entry %d with some text", i)})
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.menu.selected = i % n
+				_ = m.menuView()
+			}
+		})
+	}
+}
+
+func BenchmarkMenuSnapshot(b *testing.B) {
+	for _, n := range []int{100, 1000, 5000} {
+		b.Run(fmt.Sprint(n, "events"), func(b *testing.B) {
+			m := bareModel(b, b.TempDir())
+			for i := 0; i < n; i++ {
+				m.ctl.LogEvent("notice", fmt.Sprintf("event %d", i))
+			}
+			m.menu = &menuState{page: menuTracing}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m.refreshMenu()
+			}
+		})
+	}
+}
+
+// commandMessages runs cmd, expanding batches, and names the message types it
+// produced. Timer commands take their delay, so use it sparingly.
+func commandMessages(cmd tea.Cmd) []string {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []string{fmt.Sprintf("%T", msg)}
+	}
+	var out []string
+	for _, c := range batch {
+		out = append(out, commandMessages(c)...)
+	}
+	return out
+}
+
+// referenceTimelineRows is the original single-slice timeline builder, kept to
+// prove the segmented one produces the same rows.
+func (m *model) referenceTimelineRows(budget time.Duration) []string {
+	var screen screenRows
+	if len(m.cache) > len(m.entries) {
+		m.cache = m.cache[:len(m.entries)]
+	} else if diff := len(m.entries) - len(m.cache); diff > 0 {
+		m.cache = append(m.cache, make([]renderedEntry, diff)...)
+	}
+	started, rendered := time.Now(), 0
+	m.renderPending = false
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		e := m.entries[i]
+		limit := 0
+		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" {
+			limit = -1
+		}
+		cached := &m.cache[i]
+		if cached.width == m.width && cached.source == e && cached.maxLines == limit && !cached.draft {
+			continue
+		}
+		draft := budget > 0 && e.Kind == "assistant" && rendered > 0 && time.Since(started) >= budget
+		if draft {
+			m.renderPending = true
+			if cached.draft && cached.width == m.width && cached.source == e && cached.maxLines == limit {
+				continue
+			}
+		}
+		cached.source, cached.width, cached.maxLines, cached.draft = e, m.width, limit, draft
+		cached.Text = renderEntryMode(e, m.width, limit, !draft)
+		cached.rows = strings.Split(cached.Text, "\n")
+		if e.Kind == "assistant" && !draft {
+			rendered++
+		}
+	}
+	for _, cached := range m.cache {
+		if cached.Text != "" {
+			screen.addLines(cached.rows)
+			screen.add("\n\n")
+		}
+	}
+	screen.add(m.workingBlock())
+	screen.add(m.subagentBlock())
+	// Remove only trailing boundary whitespace, preserving all message-internal rows.
+	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
+		screen = screen[:len(screen)-1]
+	}
+	inputPrefix := ""
+	if len(screen) > 0 {
+		// screenRows joins chunks at their boundary; the leading newline keeps
+		// one actual empty row between content and the composer rail.
+		inputPrefix = "\n\n"
+	}
+	m.inputTop = len(screen)
+	if inputPrefix != "" {
+		m.inputTop++
+	}
+	screen.add(inputPrefix + m.inputBlock())
+	screen.add("\n\n")
+	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
+	if count := len(m.fileCompletions); m.hasFileCompletions() {
+		start = max(0, m.fileSelected%count-rows+1)
+		for i := start; i < min(count, start+rows); i++ {
+			selected := i == m.fileSelected%count
+			marker, fg := "  ", muted
+			if selected {
+				marker, fg = " <", foreground
+				if m.width < ansi.StringWidth(marker) {
+					marker = "<"
+				}
+			}
+			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
+			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
+			screen.add(row + "\n")
+		}
+		if remaining := count - min(count, start+rows); remaining > 0 {
+			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
+		}
+	}
+	return screen
+}
+
+func TestTimelineSegmentsMatchReference(t *testing.T) {
+	build := func(m model, n int) model {
+		m.entries = nil
+		for i := 0; i < n; i++ {
+			kind, text := "user", fmt.Sprintf("question %d", i)
+			if i%2 == 1 {
+				kind, text = "assistant", fmt.Sprintf("**answer** %d\n\n- a\n- b", i)
+			}
+			m.entries = append(m.entries, entry{Kind: kind, Text: text})
+		}
+		return m
+	}
+	base := bareModel(t, t.TempDir())
+	base.width, base.height = 60, 20
+	for _, tc := range []struct {
+		name      string
+		entries   int
+		subagents []core.SubagentRun
+		input     string
+		files     []string
+	}{
+		{"empty", 0, nil, "", nil},
+		{"entries", 5, nil, "hello\nworld", nil},
+		{"agents", 4, []core.SubagentRun{{ID: "a", Started: time.Now(), Steps: 2, Model: "m"}}, "", nil},
+		{"agents only", 0, []core.SubagentRun{{ID: "a", Started: time.Now()}}, "x", nil},
+		{"completions", 3, nil, "@ma", []string{"main.go", "makefile", "map.go"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := build(base, tc.entries), build(base, tc.entries)
+			a.cache, b.cache = nil, nil
+			for _, m := range []*model{&a, &b} {
+				m.subagents = tc.subagents
+				m.input.SetValue(tc.input)
+				m.fileCompletions = tc.files
+				m.fileSelected = 1
+			}
+			want := a.referenceTimelineRows(0)
+			head, tail := b.timelineSegments(0)
+			got := append(slices.Clone(head), tail...)
+			if !slices.Equal(want, got) || a.inputTop != b.inputTop {
+				t.Fatalf("segments differ (inputTop %d vs %d)\nwant %q\ngot  %q", a.inputTop, b.inputTop, want, got)
+			}
+			// A second build reuses the history and must not change anything.
+			head2, tail2 := b.timelineSegments(0)
+			if !slices.Equal(got, append(slices.Clone(head2), tail2...)) {
+				t.Fatal("rebuild changed the rows")
+			}
+			// Changing an entry invalidates the cached history.
+			if tc.entries > 0 {
+				b.entries[0].Text = "changed"
+				head3, tail3 := b.timelineSegments(0)
+				if !strings.Contains(strings.Join(append(slices.Clone(head3), tail3...), "\n"), "changed") {
+					t.Fatal("stale history after an entry changed")
+				}
+			}
+		})
 	}
 }

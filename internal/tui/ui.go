@@ -77,6 +77,11 @@ type model struct {
 	dirty                     bool
 	renderPending             bool
 	redrawScheduled           bool
+	pulsing                   bool       // a loader tick is outstanding
+	pulseGen                  uint64     // generation of the outstanding tick
+	history                   screenRows // the chat rows, rebuilt only when an entry, the width or the theme changed
+	historyStale              bool
+	menuPulsing, menuDirty    bool // a menu timer tick is outstanding / the session logged something since the last snapshot
 }
 
 const (
@@ -88,15 +93,9 @@ type redraw struct{}
 
 type SubagentRun = core.SubagentRun
 
-func (m model) activeSubagents() []SubagentRun {
-	if m.subagents != nil {
-		return m.subagents
-	}
-	if m.ctl != nil {
-		return m.ctl.ActiveSubagents()
-	}
-	return nil
-}
+// activeSubagents is the running agents as last reported by the runtime. They
+// arrive as subagentsChanged messages, so rendering never queries anything.
+func (m model) activeSubagents() []SubagentRun { return m.subagents }
 
 func newComposer() textarea.Model {
 	input := textarea.New()
@@ -132,6 +131,7 @@ func newModel(a *core.Runtime, cwd string) model {
 	if session, err := ctl.Session(); err == nil {
 		m.entries, m.contextTokens = session.Records, session.Context
 	}
+	m.subagents = ctl.ActiveSubagents()
 	m.refresh(true)
 	if len(ctl.Settings().Providers) == 0 {
 		m.menu = &menuState{}
@@ -143,7 +143,7 @@ func newModel(a *core.Runtime, cwd string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.startCmd, func() tea.Msg { return prefetchModels{} }, menuPulse())
+	return tea.Batch(m.startCmd, func() tea.Msg { return prefetchModels{} }, m.ensureMenuPulse())
 }
 func (m *model) resizeInput() {
 	value, width, height := m.input.Value(), max(1, m.width), max(1, m.height-2)
@@ -182,7 +182,8 @@ func (m *model) refresh(follow bool) {
 	m.viewport.Height = max(1, m.height)
 	// Timeline rows already begin at the first content row; never reserve a header margin.
 	m.viewport.TopMargin = 0
-	m.viewport.SetLines(m.timelineRows(renderBudget))
+	head, tail := m.timelineSegments(renderBudget)
+	m.viewport.SetSegments(head, tail)
 	m.frameAt, m.dirty = time.Now(), false
 	if follow {
 		m.viewport.GotoBottom()
@@ -197,6 +198,7 @@ func (m *model) add(kind, text string) {
 		m.refresh(false)
 	default:
 		m.ctl.LogEvent(kind, text)
+		m.menuDirty = true
 	}
 }
 
@@ -215,6 +217,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if wasTraceEntry && !n.traceEntryView() {
 		cmd = tea.Batch(cmd, tea.DisableMouse)
+	}
+	if pulse := n.ensureMenuPulse(); pulse != nil {
+		cmd = tea.Batch(cmd, pulse)
 	}
 	if n.display != nil {
 		n.display.draw(n.render(), n.width, n.height)
@@ -281,45 +286,43 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh(true)
 		return m, nil
 	case menuTick:
-		m.refreshMenu()
-		return m, menuPulse()
+		m.menuPulsing = false
+		cmd := m.menuSnapshotCmd()
+		return m, tea.Batch(cmd, m.ensureMenuPulse())
+	case menuSnapshotMsg:
+		m.applyMenuSnapshot(v.snap)
+		return m, nil
 	case redraw:
 		m.redrawScheduled = false
 		if m.dirty || m.renderPending {
 			m.refresh(follow)
 		}
-		if len(m.activeSubagents()) > 0 {
-			started := time.Time{}
-			if m.ctl != nil {
-				started = m.ctl.Status().Started
-			}
-			if sub := m.activeSubagents(); len(sub) > 0 && started.IsZero() {
-				started = sub[0].Started
-			}
-			return m, workingPulse(started)
+		if len(m.subagents) > 0 {
+			return m, m.pulse()
 		}
 		return m, nil
 	case workingTick:
+		if v.gen != m.pulseGen || !m.pulsing {
+			return m, nil // a tick of an earlier timer
+		}
+		m.pulsing = false
 		if m.ctl == nil {
 			return m, nil
 		}
-		status := m.ctl.Status()
-		subagents := m.activeSubagents()
-		hasWork := status.Busy || len(subagents) > 0
-		if !hasWork {
+		if !m.ctl.Status().Busy && len(m.subagents) == 0 {
 			m.refresh(follow)
-			return m, nil
-		}
-		if status.Busy && !v.started.IsZero() && !v.started.Equal(status.Started) && len(subagents) == 0 {
 			return m, nil
 		}
 		m.term.tick()
 		m.refresh(follow)
-		started := status.Started
-		if !status.Busy && len(subagents) > 0 {
-			started = subagents[0].Started
+		return m, m.pulse()
+	case subagentsChanged:
+		m.subagents = m.ctl.ActiveSubagents()
+		m.refresh(follow)
+		if len(m.subagents) > 0 {
+			return m, m.pulse()
 		}
-		return m, workingPulse(started)
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, v.Width), max(1, v.Height)
 		m.refresh(follow)

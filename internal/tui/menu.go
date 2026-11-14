@@ -58,6 +58,7 @@ var mainRows = []menuRow{
 type menuListCache struct {
 	page     menuPage
 	count    int
+	rev      uint64
 	rows     []menuRow
 	query    string
 	indices  []int
@@ -66,6 +67,7 @@ type menuListCache struct {
 
 type menuState struct {
 	listCache       *menuListCache
+	layout          *textLayout // the laid-out body of the open text page
 	form            *formState
 	providerNames   []string
 	direct          bool // opened by a shortcut, not through Menu
@@ -86,6 +88,11 @@ type menuState struct {
 	info            []menuRow
 	tasks           []core.Task
 	trace           []core.TraceEntry
+	rev             uint64   // changes whenever a snapshot replaced the data above
+	ctx             []string // searchable text of the trace entries
+	ctxRev          uint64
+	loading, loaded bool // a background snapshot is in flight / one was applied
+	wasActive       bool // the session was active at the last snapshot
 }
 
 // File and trace sources change only when refreshed, not on cursor movement.

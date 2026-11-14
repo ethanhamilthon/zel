@@ -9,17 +9,29 @@ import (
 	"zel/internal/core"
 )
 
+// rowsCacheable reports whether the rows of the page depend only on the snapshot
+// data. A running task shows its elapsed time, so the Tasks page is rebuilt then.
+func (mu *menuState) rowsCacheable() bool {
+	switch mu.page {
+	case menuTracing, menuResume:
+		return true
+	case menuTasks:
+		return !slices.ContainsFunc(mu.tasks, func(t core.Task) bool { return t.Status == "running" })
+	}
+	return false
+}
+
 func (m model) rawMenuRows() []menuRow {
 	mu := m.menu
-	if mu.page != menuTracing {
+	if !mu.rowsCacheable() {
 		return m.buildMenuRows()
 	}
-	count := len(mu.trace)
-	if c := mu.listCache; c != nil && c.page == mu.page && c.count == count {
+	count := len(mu.trace) + len(mu.tasks) + len(mu.sessions)
+	if c := mu.listCache; c != nil && c.page == mu.page && c.count == count && c.rev == mu.rev {
 		return c.rows
 	}
 	rows := m.buildMenuRows()
-	mu.listCache = &menuListCache{page: mu.page, count: count, rows: rows}
+	mu.listCache = &menuListCache{page: mu.page, count: count, rev: mu.rev, rows: rows}
 	return rows
 }
 
@@ -113,7 +125,7 @@ func (m model) buildMenuRows() []menuRow {
 
 func (m model) menuIndices(rows []menuRow) []int {
 	c := m.menu.listCache
-	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query {
+	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query && c.rev == m.menu.rev {
 		return c.indices
 	}
 	return m.buildMenuIndices(rows)
@@ -139,7 +151,7 @@ func (m model) buildMenuIndices(rows []menuRow) []int {
 				if (len(types) > 0 && !traceTypeIn(e.Kind, types)) || (lower > 0 && position < lower) || (upper > 0 && position > upper) {
 					continue
 				}
-				text = traceContext(e)
+				text = m.menu.traceContextOf(i)
 			}
 		}
 		matches := true
@@ -195,7 +207,7 @@ func traceTypeIn(kind string, filters []string) bool {
 func (m model) menuRows() []menuRow {
 	rows := m.rawMenuRows()
 	c := m.menu.listCache
-	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query {
+	if c != nil && c.page == m.menu.page && c.filtered != nil && c.query == m.menu.query && c.rev == m.menu.rev {
 		return c.filtered
 	}
 	indices := m.menuIndices(rows)
@@ -217,4 +229,20 @@ func compactionLabel(threshold int) string {
 		return "off"
 	}
 	return formatTokens(int64(threshold)) + " tokens"
+}
+
+// traceContextOf is the searchable text of trace entry i, built once per
+// snapshot instead of once per typed key. Very large entries are not retained.
+func (mu *menuState) traceContextOf(i int) string {
+	if len(mu.ctx) != len(mu.trace) || mu.ctxRev != mu.rev {
+		mu.ctx, mu.ctxRev = make([]string, len(mu.trace)), mu.rev
+	}
+	if mu.ctx[i] != "" {
+		return mu.ctx[i]
+	}
+	text := traceContext(mu.trace[i])
+	if len(text) <= 256<<10 {
+		mu.ctx[i] = text
+	}
+	return text
 }

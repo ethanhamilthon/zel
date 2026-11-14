@@ -346,7 +346,7 @@ func TestTraceEventTimestampsSupportLegacyLocalAndPreciseNewLogs(t *testing.T) {
 	before := time.Now()
 	a.LogEvent("notice", "new")
 	after := time.Now()
-	entries := a.eventTrace()
+	entries := eventTrace(a.home, a.id)
 	expected := time.Date(2026, 1, 2, 0, 4, 5, 0, time.UTC)
 	if len(entries) != 2 || !entries[0].At.Equal(expected) || entries[0].Text != "legacy\nmultiline" {
 		t.Fatalf("legacy log: %+v", entries)

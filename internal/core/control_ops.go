@@ -215,9 +215,12 @@ func (c *Controller) StopTask(id string) error {
 
 // Trace returns everything the session has done: the system prompt, the messages,
 // the tool traffic the chat hides, the tasks and the events log.
-func (c *Controller) Trace() (trace []TraceEntry) {
-	c.view(func() { trace = c.a.Trace() })
-	return trace
+func (c *Controller) Trace() []TraceEntry {
+	var history []TraceEntry
+	var slow func() []TraceEntry
+	c.view(func() { history, slow = c.a.traceSources() })
+	// The task rows and the events log are read without the controller lock.
+	return mergeTrace(history, slow())
 }
 
 // LogEvent records a notice or error shown by a client in the session's events log.

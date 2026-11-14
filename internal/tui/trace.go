@@ -47,7 +47,11 @@ func traceColor(kind string) lipgloss.Color {
 // traceDetail is the second column: when it happened and its first line, or the
 // number of lines for a long body.
 func traceDetail(e core.TraceEntry) string {
-	first, rest, _ := strings.Cut(strings.TrimSpace(ansi.Strip(e.Text)), "\n")
+	head := e.Text
+	if len(head) > 4096 {
+		head = head[:4096] // the first line is all the list shows
+	}
+	first, rest, _ := strings.Cut(strings.TrimSpace(ansi.Strip(head)), "\n")
 	first = strings.Join(strings.Fields(first), " ")
 	if rest != "" {
 		first = fmt.Sprintf("%s · %d lines", first, strings.Count(e.Text, "\n")+1)
@@ -86,10 +90,10 @@ func (m *model) openTrace(index int) {
 	m.menu.title, m.menu.text = "Menu/Tracing/"+traceKindLabel(e.Kind), traceText(e)
 }
 
-// History is committed at the end of a model response; include the streaming
-// records the TUI has already received while that response is still in flight.
-func (m model) sessionTrace() []core.TraceEntry {
-	trace := m.ctl.Trace()
+// History is committed at the end of a model response; liveTrace is the
+// streaming records the TUI has already received while that response is still
+// in flight. The snapshot merges them into the session trace.
+func (m model) liveTrace() []core.TraceEntry {
 	var live []core.TraceEntry
 	for _, record := range m.entries {
 		if !record.Preview {
@@ -108,7 +112,12 @@ func (m model) sessionTrace() []core.TraceEntry {
 		}
 		live = append(live, core.TraceEntry{Kind: kind, Text: record.Text, At: at})
 	}
-	trace = append(trace, live...)
+	return live
+}
+
+// sessionTrace is the full trace of the session, read synchronously.
+func (m model) sessionTrace() []core.TraceEntry {
+	trace := append(m.ctl.Trace(), m.liveTrace()...)
 	slices.SortStableFunc(trace, func(a, b core.TraceEntry) int { return a.At.Compare(b.At) })
 	return trace
 }

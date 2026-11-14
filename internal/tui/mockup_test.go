@@ -473,7 +473,7 @@ func key(m model, k tea.KeyMsg) model {
 
 func agentEvent(e core.TurnEvent) core.Event { return core.Event{Kind: "agent", Agent: &e} }
 
-func freshAgent(t *testing.T) *core.Runtime {
+func freshAgent(t testing.TB) *core.Runtime {
 	t.Helper()
 	t.Setenv("ZEL_HOME", t.TempDir())
 	a, err := core.New(t.TempDir(), core.Options{})
@@ -484,7 +484,7 @@ func freshAgent(t *testing.T) *core.Runtime {
 	return a
 }
 
-func freshModel(t *testing.T) (model, *core.Runtime) {
+func freshModel(t testing.TB) (model, *core.Runtime) {
 	t.Helper()
 	a := freshAgent(t)
 	m := newModel(a, a.Shell.Dir)
@@ -492,7 +492,7 @@ func freshModel(t *testing.T) (model, *core.Runtime) {
 	return m, a
 }
 
-func bareModel(t *testing.T, cwd string) model {
+func bareModel(t testing.TB, cwd string) model {
 	t.Helper()
 	m, _ := freshModel(t)
 	m.cwd = cwd

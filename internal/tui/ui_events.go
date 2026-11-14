@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -34,6 +35,9 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	running, stop := context.WithCancel(ctx)
 	defer stop()
 	go forwardControl(running, m.events, program)
+	// Agents report through the runtime; the UI only hears about changes.
+	a.OnSubagentsChanged(func() { go program.Send(subagentsChanged{}) })
+	defer a.OnSubagentsChanged(nil)
 	go func() {
 		<-running.Done()
 		program.Quit()
@@ -62,13 +66,26 @@ func forwardControl(ctx context.Context, events *eventQueue, program *tea.Progra
 	}
 }
 
-type workingTick struct{ started time.Time }
+// workingTick is a tick of the loader timer. The model keeps one timer chain:
+// a tick of another generation is stale and ignored.
+type workingTick struct{ gen uint64 }
+
+// subagentsChanged tells the UI that the set of running agents or a step count changed.
+type subagentsChanged struct{}
 
 // workingFrame is the refresh interval for the working loader and elapsed time.
 const workingFrame = 80 * time.Millisecond
 
-func workingPulse(started time.Time) tea.Cmd {
-	return tea.Tick(workingFrame, func(time.Time) tea.Msg { return workingTick{started} })
+// pulse arms the loader timer unless a tick is already outstanding, so any number
+// of callers can ask for animation without multiplying the timers.
+func (m *model) pulse() tea.Cmd {
+	if m.pulsing {
+		return nil
+	}
+	m.pulsing = true
+	m.pulseGen++
+	gen := m.pulseGen
+	return tea.Tick(workingFrame, func(time.Time) tea.Msg { return workingTick{gen} })
 }
 
 // workingStars is the working indicator's animation, one frame per workingFrame.
@@ -168,6 +185,7 @@ func (m model) formatSubagentRow(child SubagentRun) string {
 }
 
 func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
+	m.menuDirty = true // anything the session did may show on a live page
 	follow := m.viewport.AtBottom()
 	var cmd tea.Cmd
 	switch e.Kind {
@@ -187,7 +205,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 	case "started":
 		m.turnIndex = len(m.entries)
 		m.refresh(true)
-		cmd = workingPulse(m.ctl.Status().Started)
+		cmd = m.pulse()
 	case "agent":
 		m.entries = core.ApplyEvent(m.entries, *e.Agent)
 		if meta := e.Agent.Meta; meta != nil && meta.ContextInput != nil {
@@ -209,6 +227,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.entries, m.contextTokens = slices.Clone(e.Session.Records), e.Session.Context
 		m.turnIndex = len(m.entries)
 		m.cache = nil
+		m.subagents = m.ctl.ActiveSubagents()
 		m.pasteGeneration++
 		m.pasting = false
 		m.dismissFileCompletion()
@@ -228,14 +247,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 	default:
 	}
 	if cmd == nil && len(m.activeSubagents()) > 0 {
-		started := time.Time{}
-		if m.ctl != nil {
-			started = m.ctl.Status().Started
-		}
-		if sub := m.activeSubagents(); len(sub) > 0 && started.IsZero() {
-			started = sub[0].Started
-		}
-		cmd = workingPulse(started)
+		cmd = m.pulse()
 	}
 	return m, cmd
 }
@@ -269,47 +281,185 @@ func (m *model) setComposer(text string) {
 
 type menuTick struct{}
 
+// menuPulse is the timer of the open live pages (Info, Tasks, Tracing, Resume).
+// It has one owner: m.menuPulsing says whether a tick is outstanding.
 func menuPulse() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return menuTick{} })
 }
 
-// Refresh snapshots without changing the query, selection or scroll position.
-func (m *model) refreshMenu() {
-	mu := m.menu
+// liveMenuPage reports the list page whose data changes while the menu is open;
+// the text pages opened from it follow their parent.
+func liveMenuPage(mu *menuState) (menuPage, bool) {
 	if mu == nil {
-		return
+		return 0, false
 	}
 	page := mu.page
 	if page == menuText {
 		page = mu.parent
 	}
 	switch page {
+	case menuInfo, menuTasks, menuTracing, menuResume:
+		return page, true
+	}
+	return 0, false
+}
+
+// ensureMenuPulse arms the menu timer when a live page is open and none is
+// outstanding. Static pages never poll.
+func (m *model) ensureMenuPulse() tea.Cmd {
+	if _, live := liveMenuPage(m.menu); !live || m.menuPulsing {
+		return nil
+	}
+	m.menuPulsing = true
+	return menuPulse()
+}
+
+// menuRequest is what a snapshot of a live page needs from the UI thread.
+type menuRequest struct {
+	menu  *menuState
+	page  menuPage
+	text  bool // a text page of the list is open
+	task  string
+	live  []core.TraceEntry // streaming entries that are not in the session trace yet
+	index int
+}
+
+// menuSnapshot is the data of a live page, read off the UI thread and applied
+// as one immutable unit.
+type menuSnapshot struct {
+	menu     *menuState
+	page     menuPage
+	info     []menuRow
+	tasks    []core.Task
+	taskText string
+	hasTask  bool
+	trace    []core.TraceEntry
+	sessions []core.SessionSummary
+}
+
+func (m *model) menuRequest() (menuRequest, bool) {
+	page, live := liveMenuPage(m.menu)
+	if !live {
+		return menuRequest{}, false
+	}
+	mu := m.menu
+	req := menuRequest{menu: mu, page: page, text: mu.page == menuText, task: mu.task, index: mu.traceIndex}
+	if page == menuTracing {
+		req.live = m.liveTrace()
+	}
+	return req, true
+}
+
+// load reads the snapshot. It touches no model state, so it can run anywhere.
+func (r menuRequest) load(ctl *core.Controller) menuSnapshot {
+	snap := menuSnapshot{menu: r.menu, page: r.page}
+	switch r.page {
 	case menuInfo:
-		if info, err := m.ctl.Info(); err == nil {
-			mu.info = infoRows(info)
+		if info, err := ctl.Info(); err == nil {
+			snap.info = infoRows(info)
 		}
 	case menuTasks:
-		if tasks, err := m.ctl.Tasks(); err == nil {
-			mu.tasks = tasks
+		if tasks, err := ctl.Tasks(); err == nil {
+			snap.tasks = tasks
 		}
-		if mu.page == menuText {
-			if text, err := m.ctl.TaskOutput(mu.task); err == nil {
-				mu.text = m.taskText(mu.task, text)
+		if r.text {
+			if text, err := ctl.TaskOutput(r.task); err == nil {
+				snap.taskText, snap.hasTask = text, true
 			}
 		}
 	case menuTracing:
-		mu.trace = m.sessionTrace()
-		mu.listCache = nil
+		trace := append(ctl.Trace(), r.live...)
+		slices.SortStableFunc(trace, func(a, b core.TraceEntry) int { return a.At.Compare(b.At) })
+		snap.trace = trace
+	case menuResume:
+		if sessions, err := ctl.Sessions(); err == nil {
+			snap.sessions = sessions
+		}
+	}
+	return snap
+}
+
+type menuSnapshotMsg struct{ snap menuSnapshot }
+
+// applyMenuSnapshot publishes a snapshot unless the menu moved on. Data that did
+// not change keeps its revision, so cached rows, filters and layouts stay valid.
+func (m *model) applyMenuSnapshot(snap menuSnapshot) {
+	mu := m.menu
+	if mu == nil || mu != snap.menu {
+		return
+	}
+	mu.loading, mu.loaded = false, true
+	if page, live := liveMenuPage(mu); !live || page != snap.page {
+		return
+	}
+	changed := false
+	switch snap.page {
+	case menuInfo:
+		if snap.info != nil && !reflect.DeepEqual(mu.info, snap.info) {
+			mu.info, changed = snap.info, true
+		}
+	case menuTasks:
+		if snap.tasks != nil && !reflect.DeepEqual(mu.tasks, snap.tasks) {
+			mu.tasks, changed = snap.tasks, true
+		}
+		if mu.page == menuText && snap.hasTask {
+			if text := m.taskText(mu.task, snap.taskText); text != mu.text {
+				mu.text = text
+			}
+		}
+	case menuTracing:
+		if !slices.EqualFunc(mu.trace, snap.trace, func(a, b core.TraceEntry) bool {
+			return a.Kind == b.Kind && a.At.Equal(b.At) && a.Text == b.Text
+		}) {
+			mu.trace, changed = snap.trace, true
+		}
 		if mu.page == menuText && mu.traceIndex >= 0 && mu.traceIndex < len(mu.trace) {
-			mu.text = traceText(mu.trace[mu.traceIndex])
+			if text := traceText(mu.trace[mu.traceIndex]); text != mu.text {
+				mu.text = text
+			}
 		}
 	case menuResume:
-		if sessions, err := m.ctl.Sessions(); err == nil {
-			mu.sessions = sessions
+		if snap.sessions != nil && !reflect.DeepEqual(mu.sessions, snap.sessions) {
+			mu.sessions, changed = snap.sessions, true
 		}
+	}
+	if changed {
+		mu.rev++
+		mu.listCache = nil
 	}
 	// Text pages retain their parent list selection; their own rows are empty.
 	if mu.page != menuText {
 		mu.selected = min(mu.selected, max(0, len(m.menuRows())-1))
 	}
+}
+
+// refreshMenu loads and applies a snapshot synchronously, for explicit refreshes
+// after a user action. The periodic refresh goes through menuSnapshotCmd.
+func (m *model) refreshMenu() {
+	if req, ok := m.menuRequest(); ok {
+		m.applyMenuSnapshot(req.load(m.ctl))
+	}
+}
+
+// menuSnapshotCmd loads a snapshot in the background when the page may have
+// changed: while the session is active, after a UI event, or on first open. An
+// idle session with an unchanged page costs nothing.
+func (m *model) menuSnapshotCmd() tea.Cmd {
+	mu := m.menu
+	if mu == nil || mu.loading {
+		return nil
+	}
+	status := m.ctl.Status()
+	active := status.Busy || status.Tasks > 0 || len(m.subagents) > 0
+	if mu.loaded && !active && !mu.wasActive && !m.menuDirty {
+		return nil
+	}
+	mu.wasActive, m.menuDirty = active, false
+	req, ok := m.menuRequest()
+	if !ok {
+		return nil
+	}
+	mu.loading = true
+	ctl := m.ctl
+	return func() tea.Msg { return menuSnapshotMsg{req.load(ctl)} }
 }
