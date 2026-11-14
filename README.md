@@ -5,6 +5,11 @@ commands, files, HTTP, background tasks and subagents are plain functions in it.
 You extend the agent in Lua too, with `~/.zel/init.lua` and `./.zel/init.lua`;
 providers and preferences live in the UI.
 
+> **0.5.1 changes the Lua API.** The Lua call timeout is fixed at 10 s (no
+> `--! timeout=N`), job handles and the global `wait_all` are replaced by
+> `tasks.*` / `agents.*` functions taking a job ID, and `zel view` / `zel tasks run|stop`
+> are removed.
+>
 > **0.5.0 is a breaking release.** The Bash tool and `ZEL.md` are gone. Move
 > your instructions into `.zel/init.lua` (see below). There is no migration.
 
