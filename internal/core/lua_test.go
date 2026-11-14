@@ -32,6 +32,26 @@ func TestMessageHookRewritesUserText(t *testing.T) {
 	}
 }
 
+func TestMessageHookObservesNotificationWithoutRewriting(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+require("zel").on("message", function(ev)
+ if ev.notice then
+  state.set("observed_notice", ev.text)
+  return "DO-NOT-REWRITE"
+ end
+end)`))
+	input := notification("t1 finished")
+	got := a.hookInput(context.Background(), input)
+	if got.Text != input.Text || !got.Notice {
+		t.Fatalf("notification changed: %+v", got)
+	}
+	value, ok, err := (kvState{a: a}).Get("session", "observed_notice")
+	if err != nil || !ok || !strings.Contains(value, "t1 finished") {
+		t.Fatalf("observed notice = %q, %v, %v", value, ok, err)
+	}
+}
+
 func TestTurnEndHookInjectsOnceAndIsBounded(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgentWith(t, fp, Options{}, initLua(t, `

@@ -617,6 +617,11 @@ func (c *Config) Message(ctx context.Context, text string) string {
 	return ev["text"].(string)
 }
 
+// Notice lets message hooks observe a notification without rewriting it.
+func (c *Config) Notice(ctx context.Context, text string) {
+	c.emit(ctx, "message", map[string]any{"text": text, "notice": true}, nil)
+}
+
 // TurnEnd runs the turn_end hooks; returned text becomes a notification
 // ("" lets the turn end).
 func (c *Config) TurnEnd(ctx context.Context, answer string) string {
