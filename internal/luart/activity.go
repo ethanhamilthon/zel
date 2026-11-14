@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	lua "github.com/yuin/gopher-lua"
@@ -36,15 +37,97 @@ func isBackground(ctx context.Context) bool {
 	return ctx != nil && ctx.Value(backgroundKey{}) != nil
 }
 
+// activityTrackerKey attaches an activityTracker to a foreground call context
+// so abandoning a stuck call ends every activity it started.
+type activityTrackerKey struct{}
+
+// activityTracker tracks the foreground activities started by one call so the
+// caller can close them immediately when it stops waiting, without racing with
+// or double-closing a late host return.
+type activityTracker struct {
+	mu     sync.Mutex
+	closed bool
+	ends   []func()
+}
+
+func withActivityTracker(ctx context.Context, t *activityTracker) context.Context {
+	return context.WithValue(ctx, activityTrackerKey{}, t)
+}
+
+func activityTrackerFrom(ctx context.Context) *activityTracker {
+	if ctx == nil {
+		return nil
+	}
+	t, _ := ctx.Value(activityTrackerKey{}).(*activityTracker)
+	return t
+}
+
+// begin calls start and registers its end function unless the call was already
+// abandoned. The returned cleanup is idempotent and safe alongside closeAll.
+func (t *activityTracker) begin(start func() func()) func() {
+	if t == nil {
+		return start()
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return func() {}
+	}
+	end := start()
+	idx := len(t.ends)
+	t.ends = append(t.ends, end)
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		var fn func()
+		if idx < len(t.ends) {
+			fn = t.ends[idx]
+			t.ends[idx] = nil
+		}
+		t.mu.Unlock()
+		if fn != nil {
+			fn()
+		}
+	}
+}
+
+// closeAll ends every still-open foreground activity owned by this call and blocks
+// any further activity registration from it.
+func (t *activityTracker) closeAll() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	t.closed = true
+	ends := t.ends
+	t.ends = nil
+	t.mu.Unlock()
+	for i := len(ends) - 1; i >= 0; i-- {
+		if ends[i] != nil {
+			ends[i]()
+		}
+	}
+}
+
 // hostFn wraps a host function so its activity shows while it runs; the activity
-// ends on every exit, errors and cancellation included.
+// ends on every exit, errors, cancellation and call abandonment included.
 func (v *vm) hostFn(name string, fn lua.LGFunction) *lua.LFunction {
 	return v.L.NewFunction(func(L *lua.LState) int {
 		text := scrubLabel(v.describe(name, L))
 		if text == "" {
 			return fn(L)
 		}
-		defer v.env.Begin(text, isBackground(v.ctx))()
+		if isBackground(v.ctx) {
+			defer v.env.Begin(text, true)()
+			return fn(L)
+		}
+		defer activityTrackerFrom(v.ctx).begin(func() func() {
+			return v.env.Begin(text, false)
+		})()
 		return fn(L)
 	})
 }

@@ -175,6 +175,9 @@ var abandonGrace = 500 * time.Millisecond
 func (r *Runner) run(parent context.Context, v *vm, code string) (res Result, drop string) {
 	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
+	tracker := &activityTracker{}
+	defer tracker.closeAll()
+	ctx = withActivityTracker(ctx, tracker)
 	type outcome struct {
 		res      Result
 		timedOut bool

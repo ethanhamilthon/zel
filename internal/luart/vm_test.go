@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -446,4 +448,168 @@ func TestStuckCallCancelReturnsPromptly(t *testing.T) {
 	main.Reset("test")
 	go releasePipe(fifo)
 	awaitFreed(t, parked)
+}
+
+// gatedHostEnv embeds fakeEnv to gate supported host operations (session.rename,
+// view) and tracks the live foreground activity stack with exact end counts.
+type gatedHostEnv struct {
+	*fakeEnv
+	renameEntered chan struct{}
+	renameRelease chan struct{}
+	viewEntered   chan struct{}
+	viewRelease   chan struct{}
+
+	stackMu  sync.Mutex
+	seq      uint64
+	live     []gatedAct
+	endCalls map[uint64]int
+}
+
+type gatedAct struct {
+	id    uint64
+	label string
+}
+
+func newGatedHostEnv(t *testing.T) *gatedHostEnv {
+	return &gatedHostEnv{
+		fakeEnv:       newEnv(t),
+		renameEntered: make(chan struct{}),
+		renameRelease: make(chan struct{}),
+		viewEntered:   make(chan struct{}),
+		viewRelease:   make(chan struct{}),
+		endCalls:      map[uint64]int{},
+	}
+}
+
+func (e *gatedHostEnv) Begin(label string, background bool) func() {
+	inner := e.fakeEnv.Begin(label, background)
+	if background {
+		return inner
+	}
+	e.stackMu.Lock()
+	e.seq++
+	id := e.seq
+	e.live = append(e.live, gatedAct{id: id, label: label})
+	e.stackMu.Unlock()
+	return func() {
+		inner()
+		e.stackMu.Lock()
+		e.endCalls[id]++
+		e.live = slices.DeleteFunc(e.live, func(x gatedAct) bool { return x.id == id })
+		e.stackMu.Unlock()
+	}
+}
+
+func (e *gatedHostEnv) foreground() string {
+	e.stackMu.Lock()
+	defer e.stackMu.Unlock()
+	if len(e.live) == 0 {
+		return ""
+	}
+	return e.live[len(e.live)-1].label
+}
+
+func (e *gatedHostEnv) Rename(name string) error {
+	close(e.renameEntered)
+	<-e.renameRelease
+	return e.fakeEnv.Rename(name)
+}
+
+func (e *gatedHostEnv) View(path string) error {
+	close(e.viewEntered)
+	<-e.viewRelease
+	return e.fakeEnv.View(path)
+}
+
+// Abandoning a stuck supported host call clears every foreground activity it
+// started as soon as Run returns, so later calls see no stale label and the
+// eventual host return neither removes another call's activity nor double-closes.
+func TestAbandonedHostCallClearsForegroundActivity(t *testing.T) {
+	env := newGatedHostEnv(t)
+	oldGrace := abandonGrace
+	abandonGrace = 50 * time.Millisecond
+	defer func() { abandonGrace = oldGrace }()
+
+	main := &Runner{Env: env}
+	defer main.Close()
+	main.Run(context.Background(), "x = 1")
+	parked := main.v
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan Result, 1)
+	go func() {
+		done <- main.Run(ctx, `session.rename("stuck")`)
+	}()
+
+	select {
+	case <-env.renameEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session.rename was never entered")
+	}
+	if got := env.foreground(); got != "renaming session" {
+		t.Fatalf("foreground while blocked = %q, want %q", got, "renaming session")
+	}
+	cancel()
+
+	select {
+	case res := <-done:
+		if !res.IsError || !strings.Contains(res.Output, ECANCELED) {
+			t.Fatalf("abandoned call = %+v", res)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return promptly after cancellation")
+	}
+	if got := env.foreground(); got != "" {
+		t.Fatalf("foreground activity still live right after abandoned Run returned: %q", got)
+	}
+
+	next := main.Run(context.Background(), "return 42")
+	if next.IsError || !strings.HasSuffix(next.Output, "\n42") {
+		t.Fatalf("subsequent call = %+v", next)
+	}
+	if got := env.foreground(); got != "" {
+		t.Fatalf("foreground activity still live after subsequent call returned: %q", got)
+	}
+
+	// Hold a new foreground activity on call 3 while releasing the abandoned call 1:
+	// call 1's late return must neither clear call 3's activity nor double-close.
+	call3 := make(chan Result, 1)
+	go func() {
+		call3 <- main.Run(context.Background(), `view("next.png")`)
+	}()
+	select {
+	case <-env.viewEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("view was never entered")
+	}
+	if got := env.foreground(); got != "viewing next.png" {
+		t.Fatalf("foreground during call 3 = %q", got)
+	}
+
+	close(env.renameRelease)
+	awaitFreed(t, parked)
+	if got := env.foreground(); got != "viewing next.png" {
+		t.Fatalf("late return of abandoned call disturbed call 3's activity: %q", got)
+	}
+
+	close(env.viewRelease)
+	select {
+	case res := <-call3:
+		if res.IsError {
+			t.Fatalf("call 3 failed: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call 3 did not finish")
+	}
+	if got := env.foreground(); got != "" {
+		t.Fatalf("foreground after call 3 = %q", got)
+	}
+	env.stackMu.Lock()
+	defer env.stackMu.Unlock()
+	for id, count := range env.endCalls {
+		if count != 1 {
+			t.Errorf("activity %d ended %d times, want 1", id, count)
+		}
+	}
 }

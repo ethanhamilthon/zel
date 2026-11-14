@@ -183,6 +183,9 @@ func (c *Config) lockCtx(ctx context.Context) error {
 func (c *Config) run(ctx context.Context, fn func(ctx context.Context) error) error {
 	ctx, done := c.scope(ctx)
 	defer done()
+	tracker := &activityTracker{}
+	defer tracker.closeAll()
+	ctx = withActivityTracker(ctx, tracker)
 	if err := c.lockCtx(ctx); err != nil {
 		return err
 	}

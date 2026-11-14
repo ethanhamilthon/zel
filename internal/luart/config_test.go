@@ -350,3 +350,88 @@ zel.on("turn_end", function() return {notify = io.open("`+fifo+`", "r"):read("a"
 	go releasePipe(fifo)
 	awaitFreed(t, cfg.v)
 }
+
+// Cancelling a config-side completion while a host call is blocked ends its
+// foreground activity immediately when Expand returns, and releasing the blocked
+// call afterward neither double-closes nor disturbs a later completion's activity.
+func TestAbandonedConfigCallClearsForegroundActivity(t *testing.T) {
+	env := newGatedHostEnv(t)
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
+local zel = require("zel")
+zel.complete("stuck", function() session.rename("stuck"); return "x" end)
+zel.complete("hold", function() view("later.png"); return "ok" end)
+zel.complete("fast", function() return "done" end)`)}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := cfg.Expand(ctx, "#stuck")
+		done <- err
+	}()
+	select {
+	case <-env.renameEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session.rename was never entered")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled Expand returned nil")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Expand did not return after cancel")
+	}
+	if got := env.foreground(); got != "" {
+		t.Fatalf("foreground activity still live after cancelled Expand: %q", got)
+	}
+
+	// Expand acquires the config lock; release the blocked call so a later completion
+	// can run, while testing Close and end-count invariants.
+	close(env.renameRelease)
+	got, err := cfg.Expand(context.Background(), "#fast")
+	if err != nil || got != "done" {
+		t.Fatalf("Expand(#fast) = %q, %v", got, err)
+	}
+	if fg := env.foreground(); fg != "" {
+		t.Fatalf("foreground after #fast = %q", fg)
+	}
+
+	// Also verify cancelling while holding #hold leaves no activity and allows Close.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	done2 := make(chan error, 1)
+	go func() {
+		_, err := cfg.Expand(ctx2, "#hold")
+		done2 <- err
+	}()
+	select {
+	case <-env.viewEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("view was never entered")
+	}
+	cancel2()
+	select {
+	case err := <-done2:
+		if err == nil {
+			t.Fatal("cancelled #hold returned nil")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Expand(#hold) did not return after cancel")
+	}
+	if fg := env.foreground(); fg != "" {
+		t.Fatalf("foreground after #hold cancel = %q", fg)
+	}
+	cfg.Close()
+	close(env.viewRelease)
+	awaitFreed(t, cfg.v)
+
+	env.stackMu.Lock()
+	defer env.stackMu.Unlock()
+	for id, count := range env.endCalls {
+		if count != 1 {
+			t.Errorf("activity %d ended %d times, want 1", id, count)
+		}
+	}
+}
