@@ -46,19 +46,19 @@ type tasks struct {
 // lifeParent is what the session's lifecycle context derives from. A subagent's
 // session ends within the shutdown budget of its parent, so its own session_end
 // cannot outlast the parent's shutdown.
-func (a *Runtime) lifeParent() context.Context {
-	if a.link != nil && a.link.budget != nil {
-		return a.link.budget
+func (s *session) lifeParent() context.Context {
+	if s.link != nil && s.link.budget != nil {
+		return s.link.budget
 	}
 	return context.Background()
 }
 
-func (a *Runtime) newTasks() *tasks {
+func (s *session) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
-	_ = a.db.LoseTasks(a.id)
-	life, stopLife := context.WithCancel(a.lifeParent())
-	return &tasks{db: a.db, session: a.id, log: filepath.Join(a.home, "tasks"),
-		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
+	_ = s.db.LoseTasks(s.id)
+	life, stopLife := context.WithCancel(s.lifeParent())
+	return &tasks{db: s.db, session: s.id, log: filepath.Join(s.home, "tasks"),
+		queue: s.queue, report: func(text string) { s.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
 		life: life, stopLife: stopLife}
 }
 
@@ -348,11 +348,13 @@ func tail(path string) string {
 
 var IsNotice = entities.IsNotice
 
-func (a *Runtime) RunningTasks() int {
-	if a.tasks == nil {
+func (a *Runtime) RunningTasks() int { return a.session().RunningTasks() }
+
+func (s *session) RunningTasks() int {
+	if s.tasks == nil {
 		return 0
 	}
-	return a.tasks.Running()
+	return s.tasks.Running()
 }
 
 // EventsLog is the per-session file that keeps the notices and errors the UI showed.
@@ -360,12 +362,16 @@ func EventsLog(home, session string) string {
 	return filepath.Join(home, "events", session+".log")
 }
 
+func (a *Runtime) LogEvent(kind, text string) { a.session().LogEvent(kind, text) }
+
 // LogEvent appends one notice or error to the session's events log; failures are ignored.
-func (a *Runtime) LogEvent(kind, text string) {
-	if a.home == "" || a.id == "" {
+func (s *session) LogEvent(kind, text string) {
+	if s.home == "" || s.id == "" {
 		return
 	}
-	path := EventsLog(a.home, a.id)
+	path := EventsLog(s.home, s.id)
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
 	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
 		return
 	}
@@ -387,13 +393,17 @@ func SessionTasks(home, session string) ([]Task, error) {
 	return sessionTasks(db, session)
 }
 
-func (a *Runtime) Tasks() ([]Task, error) { return sessionTasks(a.db, a.id) }
+func (a *Runtime) Tasks() ([]Task, error) { return a.session().Tasks() }
 
-func (a *Runtime) StopTask(id string) error {
-	if a.tasks == nil {
+func (s *session) Tasks() ([]Task, error) { return sessionTasks(s.db, s.id) }
+
+func (a *Runtime) StopTask(id string) error { return a.session().StopTask(id) }
+
+func (s *session) StopTask(id string) error {
+	if s.tasks == nil {
 		return fmt.Errorf("task %s is not running", id)
 	}
-	return a.tasks.stop(id)
+	return s.tasks.stop(id)
 }
 
 func sessionTasks(db *store.Store, session string) ([]Task, error) { return db.Tasks(session) }
@@ -438,15 +448,17 @@ func (w *taskLog) Write(p []byte) (int, error) {
 
 // StartTask runs Lua code as a background task of this session; its result
 // is announced like any task's.
-func (a *Runtime) StartTask(code string) (string, error) {
-	if a.tasks == nil {
+func (a *Runtime) StartTask(code string) (string, error) { return a.session().StartTask(code) }
+
+func (s *session) StartTask(code string) (string, error) {
+	if s.tasks == nil {
 		return "", errors.New("no active session")
 	}
-	run, discard, err := luart.CodeTask(luaEnv{a}, a.lua.get(), code)
+	run, discard, err := luart.CodeTask(luaEnv{s}, s.lua.get(), code)
 	if err != nil {
 		return "", err
 	}
-	j, err := a.tasks.spawnLua(run, startOpts{name: oneLine(code)})
+	j, err := s.tasks.spawnLua(run, startOpts{name: oneLine(code)})
 	if err != nil {
 		discard()
 		return "", err

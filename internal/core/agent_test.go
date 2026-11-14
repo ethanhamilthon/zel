@@ -263,7 +263,7 @@ func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgent(t, fp, Options{})
-	a.History = append(a.History, raw(map[string]any{"role": "user", "content": "start"}),
+	a.session().History = append(a.session().History, raw(map[string]any{"role": "user", "content": "start"}),
 		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": `{"command":"touch marker"}`}))
 	if _, err := turn(t, a, "continue"); err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 		t.Fatal("interrupted command was rerun")
 	}
 	joined := ""
-	for _, item := range a.History {
+	for _, item := range a.session().History {
 		joined += string(item)
 	}
 	if !strings.Contains(joined, "interrupted") || !strings.Contains(joined, "c1") {
@@ -613,16 +613,17 @@ func awaitInput(t *testing.T, a *Runtime) []Input {
 }
 
 func pendingImages(a *Runtime) int {
-	a.slots.mu.Lock()
-	defer a.slots.mu.Unlock()
-	return a.slots.n
+	slots := a.session().slots
+	slots.mu.Lock()
+	defer slots.mu.Unlock()
+	return slots.n
 }
 
 func TestSessionUsageCountsEachRequestOnce(t *testing.T) {
 	msg := func(role string) json.RawMessage {
 		return json.RawMessage(`{"type":"message","role":"` + role + `","content":"x"}`)
 	}
-	a := &Runtime{histMu: &sync.RWMutex{}, History: []json.RawMessage{msg("user"), msg("assistant"), msg("assistant"), msg("assistant")}}
+	a := &Runtime{cur: &session{History: []json.RawMessage{msg("user"), msg("assistant"), msg("assistant"), msg("assistant")}}}
 	a.setItemMeta(1, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}})
 	a.setItemMeta(2, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}}) // same request
 	a.setItemMeta(3, Metadata{RequestSeq: 4, Usage: &Usage{Input: 200, Output: 20, Cached: 160}})
@@ -693,12 +694,12 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	if _, err := a.StartTask("return 1"); err != nil {
 		t.Fatal(err)
 	}
-	a.tasks.wg.Wait()
+	a.session().tasks.wg.Wait()
 	inputs := a.Queue().Take()
 	if len(inputs) != 1 || inputs[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("completion: %+v", inputs)
 	}
-	if data, _ := os.ReadFile(EventsLog(a.home, a.id)); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "completion blocked") {
+	if data, _ := os.ReadFile(EventsLog(a.Home(), a.SessionID())); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "completion blocked") {
 		t.Fatalf("persistence failure not reported: %s", data)
 	}
 }
@@ -1192,9 +1193,9 @@ func TestCompactionZones(t *testing.T) {
 	if _, again := compactionBounds(history, threshold, bounds); again {
 		t.Fatal("unchanged bounds reported as a new compaction")
 	}
-	a := &Runtime{histMu: &sync.RWMutex{}, History: history, compacted: bounds}
+	s := &session{History: history, compacted: bounds}
 	var sent []string
-	for _, item := range a.requestInput() {
+	for _, item := range s.requestInput() {
 		sent = append(sent, string(item))
 	}
 	body := strings.Join(sent, "\n")
@@ -1243,9 +1244,10 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	if !slices.ContainsFunc(a.Records(), func(r Record) bool { return r.Kind == "compaction" }) {
 		t.Fatal("compaction not recorded")
 	}
-	want := a.compacted
-	a.compacted = compaction{}
-	if err := a.readSession(); err != nil || a.compacted != want || want.Drop == 0 {
-		t.Fatalf("resumed bounds %+v, want %+v (%v)", a.compacted, want, err)
+	s := a.session()
+	want := s.compacted
+	s.compacted = compaction{}
+	if err := s.readSession(); err != nil || s.compacted != want || want.Drop == 0 {
+		t.Fatalf("resumed bounds %+v, want %+v (%v)", s.compacted, want, err)
 	}
 }

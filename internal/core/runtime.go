@@ -11,15 +11,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
 	"zel/internal/agent"
 	"zel/internal/entities"
 	"zel/internal/luart"
 	"zel/internal/provider"
-	"zel/internal/store"
-
 	"zel/internal/shell"
+	"zel/internal/store"
 )
 
 var codeField = regexp.MustCompile(`"code"\s*:\s*"`)
@@ -53,17 +54,41 @@ type Options struct {
 	link                    *agentLink           // set for in-process agents
 }
 
+// Runtime is the stable application handle held by callers and the controller
+// across NewSession/Resume. Each opened session owns an independent *session so
+// surviving background work (hooks, tasks, abandoned Lua calls) keeps its own
+// session identity and environment without racing with session replacement.
 type Runtime struct {
+	opts       Options
+	home       string
+	db         *store.Store
+	project    string
+	Shell      *shell.Runner
+	tree       *agentTree
+	parentRoot string
+	depth      int
+	link       *agentLink
+	closeOnce  sync.Once
+
+	mu  sync.RWMutex
+	cur *session
+}
+
+// session is the owned state of one Zel session. It is never overwritten in
+// place when switching sessions.
+type session struct {
 	opts          Options
 	home          string
-	cfg           *settingsState
-	histMu        *sync.RWMutex
-	Shell         *shell.Runner
-	History       []json.RawMessage
-	itemMeta      map[int]*Metadata
-	db            *store.Store
+	dir           string
+	db            *store.Store // shared handle; never cleared so late callers see closed DB cleanly
 	project       string
 	id            string
+	cfg           *settingsState
+	histMu        sync.RWMutex
+	saveMu        sync.Mutex
+	logMu         sync.Mutex
+	History       []json.RawMessage
+	itemMeta      map[int]*Metadata
 	saved         int
 	stored        bool
 	owner         *os.File
@@ -75,9 +100,9 @@ type Runtime struct {
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
 	tree          *agentTree  // running agents of this session tree
-	parentRoot    string      // root session of the tree when this runtime is an agent
+	parentRoot    string      // root session of the tree when this session is an agent
 	depth         int         // agent nesting depth
-	link          *agentLink  // set when this runtime is an agent: its row in the tree
+	link          *agentLink  // set when this session is an agent: its row in the tree
 	acts          *activities // foreground host operations in progress
 	queue         *Steering
 	slots         *imageSlots
@@ -85,6 +110,14 @@ type Runtime struct {
 	lua           *luaHolder
 	vm            *luart.Runner   // the session's main Lua VM, created on first use
 	liveSteps     map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
+	ended         atomic.Bool
+}
+
+func (a *Runtime) session() *session {
+	a.mu.RLock()
+	s := a.cur
+	a.mu.RUnlock()
+	return s
 }
 
 func (a *Runtime) Home() string { return a.home }
@@ -97,79 +130,110 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{opts: opts, home: home, tree: newAgentTree(), histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}, acts: &activities{}}
+	a := &Runtime{
+		opts:  opts,
+		home:  home,
+		tree:  newAgentTree(),
+		Shell: &shell.Runner{Dir: dir},
+	}
 	if opts.link != nil {
 		a.tree, a.parentRoot, a.depth, a.link = opts.link.tree, opts.link.root, opts.link.depth, opts.link
 	} else {
 		a.depth, _ = strconv.Atoi(os.Getenv("ZEL_DEPTH"))
 	}
 	a.Shell.Env = a.shellEnv
-	if err := a.loadConfig(dir); err != nil {
+	s := a.newSessionState(dir, nil, nil)
+	a.cur = s
+	if err := s.loadConfig(dir); err != nil {
 		return nil, err
 	}
-	if a.db, err = openDB(a.Settings().DBPath); err != nil {
+	if a.db, err = openDB(s.Settings().DBPath); err != nil {
 		return nil, err
 	}
-	if err := a.openProject(dir); err != nil {
+	s.db = a.db
+	if err := s.openProject(dir); err != nil {
 		a.Close()
 		return nil, err
 	}
-	a.loadLua()
+	a.project, a.Shell.Dir = s.project, s.dir
+	s.loadLua()
 	// Initial selection: CLI flags, then zel.defaults, then the stored preferences.
-	defaults := a.LuaDefaults()
+	defaults := s.LuaDefaults()
 	provider, model, effort := cmp.Or(opts.Provider, defaults.Provider), cmp.Or(opts.Model, defaults.Model), cmp.Or(opts.Effort, defaults.Effort)
 	if provider != "" || model != "" || effort != "" {
-		s := a.Settings()
-		if err := a.ConfigureSession(context.Background(), cmp.Or(provider, s.Provider), cmp.Or(model, s.Model), cmp.Or(effort, s.Effort)); err != nil {
-			a.release()
-			a.db.Close()
+		st := s.Settings()
+		if err := s.ConfigureSession(context.Background(), cmp.Or(provider, st.Provider), cmp.Or(model, st.Model), cmp.Or(effort, st.Effort)); err != nil {
+			s.shutdown("quit")
+			a.closeDB()
 			return nil, err
 		}
 	}
 	if opts.SessionReady != nil {
 		if err := opts.SessionReady(a); err != nil {
-			a.release()
-			a.db.Close()
+			s.shutdown("quit")
+			a.closeDB()
 			return nil, err
 		}
 	}
-	a.sessionStart()
+	s.sessionStart()
 	return a, nil
 }
 
-// loadConfig reads preferences and init.lua; the session's model selection stays.
-func (a *Runtime) ReloadConfig() error {
-	return a.loadConfig(a.Shell.Dir)
+func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) *session {
+	return &session{
+		opts:       a.opts,
+		home:       a.home,
+		dir:        dir,
+		db:         a.db,
+		project:    a.project,
+		tree:       a.tree,
+		parentRoot: a.parentRoot,
+		depth:      a.depth,
+		link:       a.link,
+		slots:      &imageSlots{},
+		queue:      &Steering{wake: wake},
+		lua:        &luaHolder{notice: notice},
+		acts:       &activities{},
+	}
 }
 
-func (a *Runtime) loadConfig(dir string) error {
-	if a.cfg == nil {
-		a.cfg = &settingsState{}
+// ReloadConfig reads preferences and init.lua; the session's model selection stays.
+func (a *Runtime) ReloadConfig() error { return a.session().ReloadConfig() }
+
+func (s *session) ReloadConfig() error {
+	return s.loadConfig(s.dir)
+}
+
+func (s *session) loadConfig(dir string) error {
+	if s.cfg == nil {
+		s.cfg = &settingsState{}
 	}
-	base, err := LoadConfig(a.home, dir)
+	base, err := LoadConfig(s.home, dir)
 	if err != nil {
 		return err
 	}
-	a.cfg.mu.Lock()
-	defer a.cfg.mu.Unlock()
-	if err := a.applyLocked(base); err != nil {
+	s.cfg.mu.Lock()
+	defer s.cfg.mu.Unlock()
+	if err := s.applyLocked(base); err != nil {
 		// A stale session model must not block a valid config.
-		a.cfg.sel = selection{}
-		return a.applyLocked(base)
+		s.cfg.sel = selection{}
+		return s.applyLocked(base)
 	}
 	return nil
 }
 
 func raw(v any) json.RawMessage { data, _ := json.Marshal(v); return data }
 
-func (a *Runtime) message(role, text string) {
-	a.histMu.Lock()
-	defer a.histMu.Unlock()
-	a.History = append(a.History, raw(map[string]any{"role": role, "content": text}))
+func (a *Runtime) message(role, text string) { a.session().message(role, text) }
+
+func (s *session) message(role, text string) {
+	s.histMu.Lock()
+	defer s.histMu.Unlock()
+	s.History = append(s.History, raw(map[string]any{"role": role, "content": text}))
 }
 
-func (a *Runtime) saveHistory() error {
-	if err := a.Save(); err != nil {
+func (s *session) saveHistory() error {
+	if err := s.Save(); err != nil {
 		return fmt.Errorf("could not save history: %w", err)
 	}
 	return nil
@@ -179,18 +243,22 @@ func (a *Runtime) Run(ctx context.Context, text string, emit func(TurnEvent)) er
 	return a.RunInput(ctx, Input{Text: text}, emit)
 }
 
-func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
+func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) error {
+	return a.session().RunInput(ctx, input, emit)
+}
+
+func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
 	started, turnSeq := time.Now(), -1
 	defer func() {
-		err = a.safeError(err)
+		err = s.safeError(err)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			emit(TurnEvent{Kind: "error", Text: err.Error()})
 		}
 		if text, ok := turnEndText(ctx, err); ok && turnSeq >= 0 {
-			a.closeTurn(turnSeq, text, started, emit)
+			s.closeTurn(turnSeq, text, started, emit)
 		}
-		if a.HasSavedSession() {
-			if e := a.saveHistory(); e != nil {
+		if s.HasSavedSession() {
+			if e := s.saveHistory(); e != nil {
 				err = errors.Join(err, e)
 				emit(TurnEvent{Kind: "error", Text: e.Error()})
 			}
@@ -199,10 +267,13 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 
 	// A crash may leave calls without outputs. Their effects are unknown, so
 	// never rerun them; supply an explicit interrupted result on continuation.
-	for _, output := range interruptedOutputs(a.History) {
-		a.histMu.Lock()
-		a.History = append(a.History, output)
-		a.histMu.Unlock()
+	s.histMu.RLock()
+	interrupted := interruptedOutputs(s.History)
+	s.histMu.RUnlock()
+	for _, output := range interrupted {
+		s.histMu.Lock()
+		s.History = append(s.History, output)
+		s.histMu.Unlock()
 		for _, r := range RecordsForItem(output) {
 			emit(TurnEvent{Kind: r.Kind, Text: r.Text, Final: true})
 		}
@@ -215,24 +286,26 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 			return false
 		}
 		accepted := false
-		for _, instruction := range batch(a.queue.Take()) {
+		for _, instruction := range batch(s.queue.Take()) {
 			if strings.TrimSpace(instruction.Text) != "" || len(instruction.Images) > 0 {
-				a.addInput(a.hookInput(ctx, instruction), emit)
+				s.addInput(s.hookInput(ctx, instruction), emit)
 				accepted = true
 			}
 		}
 		return accepted
 	}
 
-	input = a.hookInput(ctx, input)
+	input = s.hookInput(ctx, input)
 	shown := inputEvent(input)
 	shown.ID = fmt.Sprintf("input-%d", time.Now().UnixNano())
-	a.commitInput(input)
-	shown.Meta = a.itemMeta[len(a.History)-1]
+	s.commitInput(input)
+	s.histMu.RLock()
+	turnSeq = len(s.History) - 1
+	shown.Meta = s.itemMeta[turnSeq]
+	s.histMu.RUnlock()
 	emit(shown)
 
-	turnSeq = len(a.History) - 1
-	return agent.Run(ctx, &turnHost{a: a, emit: emit, accept: acceptSteering, turnSeq: turnSeq})
+	return agent.Run(ctx, &turnHost{s: s, emit: emit, accept: acceptSteering, turnSeq: turnSeq})
 }
 
 // turnEndType is the history item that closes a turn ending with an error or a stop.
@@ -254,16 +327,16 @@ func turnEndText(ctx context.Context, err error) (text string, ok bool) {
 // it, also after resume; the model never sees it. Its time is the wall clock since
 // the turn started, as the working indicator shows it. Its steps are the turn's,
 // including streamed steps of a response that never committed.
-func (a *Runtime) closeTurn(turnSeq int, text string, started time.Time, emit func(TurnEvent)) {
+func (s *session) closeTurn(turnSeq int, text string, started time.Time, emit func(TurnEvent)) {
 	item := raw(map[string]any{"type": turnEndType, "text": text})
-	a.histMu.Lock()
-	a.History = append(a.History, item)
-	seq := len(a.History) - 1
-	steps := countSteps(a.History[turnSeq:seq]) + len(a.liveSteps)
-	a.liveSteps = nil
-	a.histMu.Unlock()
+	s.histMu.Lock()
+	s.History = append(s.History, item)
+	seq := len(s.History) - 1
+	steps := countSteps(s.History[turnSeq:seq]) + len(s.liveSteps)
+	s.liveSteps = nil
+	s.histMu.Unlock()
 	m := Metadata{Duration: time.Since(started), Steps: steps, At: time.Now()}
-	a.setItemMeta(seq, m)
+	s.setItemMeta(seq, m)
 	for _, r := range RecordsForItem(item) {
 		emit(TurnEvent{Kind: r.Kind, Text: r.Text, Meta: &m, Final: true})
 	}
@@ -272,13 +345,13 @@ func (a *Runtime) closeTurn(turnSeq int, text string, started time.Time, emit fu
 // noteSteps remembers the steps a response streams, by item ID, so a turn that
 // ends before the response is committed still counts them. Repeated events of
 // one item, such as partial arguments or a retried stream, count once.
-func (a *Runtime) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
+func (s *session) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
 	return func(e TurnEvent) {
 		if e.ID != "" && (e.Kind == "code" || e.Kind == "reasoning" || e.Kind == "reasoning_delta") {
-			if a.liveSteps == nil {
-				a.liveSteps = map[string]bool{}
+			if s.liveSteps == nil {
+				s.liveSteps = map[string]bool{}
 			}
-			a.liveSteps[e.ID] = true
+			s.liveSteps[e.ID] = true
 		}
 		emit(e)
 	}
@@ -309,7 +382,7 @@ func callOutput(callID, output string) json.RawMessage {
 
 // runTool executes a lua tool call and returns the text the model sees. Messages
 // the user types meanwhile stay queued until the call ends.
-func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) string {
+func (s *session) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) string {
 	if ctx.Err() != nil {
 		return "error: lua: " + luart.ECANCELED + ": the call was cancelled"
 	}
@@ -322,37 +395,40 @@ func (a *Runtime) runTool(ctx context.Context, callID, name, arguments string, e
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: lua: " + luart.EINVAL + ": the tool input must be Lua code (" + err.Error() + ")"
 	}
-	return a.runLua(ctx, args.Code).Output
+	return s.runLua(ctx, args.Code).Output
 }
 
-func (a *Runtime) itemID(index int64) string {
-	return fmt.Sprintf("%s-%d", a.lastRequest.RequestID, index)
+func (s *session) itemID(index int64) string {
+	return fmt.Sprintf("%s-%d", s.lastRequest.RequestID, index)
 }
 
-func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []json.RawMessage, err error) {
-	defer func() { err = a.safeError(err) }()
-	settings, client := a.snapshot()
+func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []json.RawMessage, err error) {
+	defer func() { err = s.safeError(err) }()
+	settings, client := s.snapshot()
 	if hint := settings.SetupHint(); hint != "" {
 		return nil, errors.New(hint)
 	}
-	prompt, err := a.instructions(ctx)
+	prompt, err := s.instructions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for i, item := range a.History {
+	s.histMu.RLock()
+	for i, item := range s.History {
 		if !json.Valid(item) {
+			s.histMu.RUnlock()
 			return nil, fmt.Errorf("invalid history item %d", i)
 		}
 	}
-	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: a.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
+	s.histMu.RUnlock()
+	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
 		Tools: []provider.Tool{{Name: "lua", Description: LuaToolDescription, Parameters: luaParameters(), Freeform: "code"}}}
 	started := time.Now()
-	a.histMu.Lock()
-	a.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(a.History))}
-	a.requestedLen = len(a.History)
-	a.histMu.Unlock()
-	a.slots.sent()
-	emit = a.noteSteps(emit)
+	s.histMu.Lock()
+	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}
+	s.requestedLen = len(s.History)
+	s.histMu.Unlock()
+	s.slots.sent()
+	emit = s.noteSteps(emit)
 	var completed []json.RawMessage
 	arguments := map[int64]string{}
 	names := map[int64]string{}
@@ -367,7 +443,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 				arguments[event.OutputIndex] = event.Arguments
 			}
 			if names[event.OutputIndex] == "lua" {
-				emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: a.itemID(event.OutputIndex), Final: true})
+				emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
 			}
 		case "response.output_item.added", "response.output_item.done":
 			var item struct{ Type, Name, Arguments string }
@@ -379,34 +455,34 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 					arguments[event.OutputIndex] = item.Arguments
 				}
 				if item.Name == "lua" {
-					emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: a.itemID(event.OutputIndex), Final: true})
+					emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
 					return nil
 				}
 			}
 			if event.Type == "response.output_item.added" {
 				for _, record := range RecordsForItem(event.Item) {
-					emit(TurnEvent{Kind: record.Kind, Text: record.Text, ID: a.itemID(event.OutputIndex), Final: true, Provisional: true})
+					emit(TurnEvent{Kind: record.Kind, Text: record.Text, ID: s.itemID(event.OutputIndex), Final: true, Provisional: true})
 				}
 			}
 		case "response.output_text.delta":
-			emit(TurnEvent{Kind: "delta", Text: event.Delta, ID: a.itemID(event.OutputIndex), Provisional: true})
+			emit(TurnEvent{Kind: "delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-			emit(TurnEvent{Kind: "reasoning_delta", Text: event.Delta, ID: a.itemID(event.OutputIndex), Provisional: true})
+			emit(TurnEvent{Kind: "reasoning_delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
 		case "response.refusal.delta":
-			emit(TurnEvent{Kind: "refusal_delta", Text: event.Delta, ID: a.itemID(event.OutputIndex), Provisional: true})
+			emit(TurnEvent{Kind: "refusal_delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
 		case "response.completed":
-			a.histMu.Lock()
-			a.lastRequest.Duration = time.Since(started)
+			s.histMu.Lock()
+			s.lastRequest.Duration = time.Since(started)
 			if u := event.Response.Usage; u != nil {
 				n := u.InputTokens
-				a.lastRequest.ContextInput = &n
+				s.lastRequest.ContextInput = &n
 				cached := int64(-1)
 				if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens != nil {
 					cached = *u.InputTokensDetails.CachedTokens
 				}
-				a.lastRequest.Usage = &Usage{Input: n, Output: u.OutputTokens, Cached: cached}
+				s.lastRequest.Usage = &Usage{Input: n, Output: u.OutputTokens, Cached: cached}
 			}
-			a.histMu.Unlock()
+			s.histMu.Unlock()
 			completed = append([]json.RawMessage{}, event.Response.Output...)
 			return provider.ErrStreamDone
 		case "response.failed", "response.incomplete", "error":
@@ -446,30 +522,36 @@ func estimateTokens(history []json.RawMessage) int64 {
 	return total
 }
 
-func (a *Runtime) ContextTokens() int64 {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	if a.lastRequest.ContextInput != nil {
+func (a *Runtime) ContextTokens() int64 { return a.session().ContextTokens() }
+
+func (s *session) ContextTokens() int64 {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	if s.lastRequest.ContextInput != nil {
 		// Items added since that request (tool outputs, steering) are estimated.
 		var added []json.RawMessage
-		if a.requestedLen <= len(a.History) {
-			added = a.History[a.requestedLen:]
+		if s.requestedLen <= len(s.History) {
+			added = s.History[s.requestedLen:]
 		}
-		return *a.lastRequest.ContextInput + estimateTokens(added)
+		return *s.lastRequest.ContextInput + estimateTokens(added)
 	}
-	return estimateTokens(a.requestInput()) + int64(len(a.prompt))/tokenBytes
+	return estimateTokens(s.requestInputLocked()) + int64(len(s.prompt))/tokenBytes
 }
 
-func (a *Runtime) FinalText() string {
+func (a *Runtime) FinalText() string { return a.session().FinalText() }
+
+func (s *session) FinalText() string {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
 	var texts []string
-	for i := len(a.History) - 1; i >= 0; i-- {
+	for i := len(s.History) - 1; i >= 0; i-- {
 		var v struct {
 			Role, Type string
 		}
-		if json.Unmarshal(a.History[i], &v) != nil || v.Role == "user" || v.Type == "function_call" || v.Type == "function_call_output" {
+		if json.Unmarshal(s.History[i], &v) != nil || v.Role == "user" || v.Type == "function_call" || v.Type == "function_call_output" {
 			break
 		}
-		for _, r := range RecordsForItem(a.History[i]) {
+		for _, r := range RecordsForItem(s.History[i]) {
 			if r.Kind == "assistant" && r.Text != "" {
 				texts = append([]string{r.Text}, texts...)
 			}
@@ -478,7 +560,7 @@ func (a *Runtime) FinalText() string {
 	return strings.Join(texts, "\n")
 }
 
-func (a *Runtime) SessionID() string { return a.id }
+func (a *Runtime) SessionID() string { return a.session().id }
 
 func luaParameters() map[string]any {
 	return map[string]any{
@@ -489,11 +571,13 @@ func luaParameters() map[string]any {
 	}
 }
 
-func (a *Runtime) setItemMeta(seq int, m Metadata) {
-	a.histMu.Lock()
-	defer a.histMu.Unlock()
-	if a.itemMeta == nil {
-		a.itemMeta = map[int]*Metadata{}
+func (a *Runtime) setItemMeta(seq int, m Metadata) { a.session().setItemMeta(seq, m) }
+
+func (s *session) setItemMeta(seq int, m Metadata) {
+	s.histMu.Lock()
+	defer s.histMu.Unlock()
+	if s.itemMeta == nil {
+		s.itemMeta = map[int]*Metadata{}
 	}
-	a.itemMeta[seq] = &m
+	s.itemMeta[seq] = &m
 }

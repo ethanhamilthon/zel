@@ -12,31 +12,31 @@ const systemIntro = "You are Zel, a coding agent. Use the lua tool to help the u
 
 // instructions returns the session's system prompt. It is assembled once and stored
 // in the history, so a resumed session keeps its prompt until Reload or New session.
-func (a *Runtime) instructions(ctx context.Context) (string, error) {
-	if a.promptFrozen {
-		return a.prompt, nil
+func (s *session) instructions(ctx context.Context) (string, error) {
+	if s.promptFrozen {
+		return s.prompt, nil
 	}
-	prompt := a.assemblePrompt(ctx)
-	a.histMu.Lock()
-	a.History = append(a.History, raw(map[string]string{"type": "instructions", "text": prompt}))
-	a.histMu.Unlock()
-	if err := a.saveHistory(); err != nil {
-		a.histMu.Lock()
-		a.History = a.History[:len(a.History)-1]
-		a.histMu.Unlock()
+	prompt := s.assemblePrompt(ctx)
+	s.histMu.Lock()
+	s.History = append(s.History, raw(map[string]string{"type": "instructions", "text": prompt}))
+	s.histMu.Unlock()
+	if err := s.saveHistory(); err != nil {
+		s.histMu.Lock()
+		s.History = s.History[:len(s.History)-1]
+		s.histMu.Unlock()
 		return "", err
 	}
-	a.prompt, a.promptFrozen = prompt, true
+	s.prompt, s.promptFrozen = prompt, true
 	return prompt, nil
 }
 
 // assemblePrompt renders the intro, the instructions and dynamic pieces of every
 // init.lua layer, then the Lua API: the built-in part and the registered functions.
-func (a *Runtime) assemblePrompt(ctx context.Context) string {
-	if cfg := a.lua.get(); cfg != nil {
+func (s *session) assemblePrompt(ctx context.Context) string {
+	if cfg := s.lua.get(); cfg != nil {
 		return systemIntro + "\n\n" + cfg.SystemPrompt(ctx)
 	}
-	return systemIntro + "\n\n" + luart.Builtin(a.depth)
+	return systemIntro + "\n\n" + luart.Builtin(s.depth)
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {
@@ -44,20 +44,24 @@ func instructionSnapshot(item json.RawMessage) (string, bool) {
 	_ = json.Unmarshal(item, &v)
 	return v.Text, v.Type == "instructions"
 }
-func (a *Runtime) requestInput() []json.RawMessage {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	input := make([]json.RawMessage, 0, len(a.History)+1)
-	marked := a.compacted.Drop == 0
-	for i, item := range a.History {
+func (s *session) requestInput() []json.RawMessage {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	return s.requestInputLocked()
+}
+
+func (s *session) requestInputLocked() []json.RawMessage {
+	input := make([]json.RawMessage, 0, len(s.History)+1)
+	marked := s.compacted.Drop == 0
+	for i, item := range s.History {
 		if sent, _ := historyItem(item); !sent {
 			continue
 		}
-		if !marked && i >= a.compacted.Drop {
+		if !marked && i >= s.compacted.Drop {
 			input = append(input, raw(map[string]any{"role": "user", "content": compactionNotice}))
 			marked = true
 		}
-		if item, ok := a.compactedInput(i, item); ok {
+		if item, ok := s.compactedInput(i, item); ok {
 			input = append(input, item)
 		}
 	}

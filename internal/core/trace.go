@@ -25,17 +25,23 @@ func traceKind(kind string) string {
 // Trace merges history, background tasks (at their start time), and logged
 // notices/errors chronologically. Stable ties preserve source order; undated
 // legacy history and the system prompt stay before timestamped entries.
-func (a *Runtime) Trace() []TraceEntry {
-	history, slow := a.traceSources()
+func (a *Runtime) Trace() []TraceEntry { return a.session().Trace() }
+
+func (s *session) Trace() []TraceEntry {
+	history, slow := s.traceSources()
 	return mergeTrace(history, slow())
+}
+
+func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
+	return a.session().traceSources()
 }
 
 // traceSources splits the trace by cost: the history is copied from memory now,
 // while the returned function reads the task rows and the events log. It
 // captures what it needs, so callers can run it without holding any lock.
-func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
-	history := a.historyTrace()
-	db, id, home := a.db, a.id, a.home
+func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
+	history := s.historyTrace()
+	db, id, home := s.db, s.id, s.home
 	return history, func() []TraceEntry {
 		return append(taskTrace(db, id), eventTrace(home, id)...)
 	}
@@ -47,12 +53,12 @@ func mergeTrace(history, rest []TraceEntry) []TraceEntry {
 	return entries
 }
 
-func (a *Runtime) historyTrace() (entries []TraceEntry) {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	for seq, item := range a.History {
+func (s *session) historyTrace() (entries []TraceEntry) {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	for seq, item := range s.History {
 		var at time.Time
-		if meta := a.itemMeta[seq]; meta != nil {
+		if meta := s.itemMeta[seq]; meta != nil {
 			at = meta.At
 		}
 		if text, ok := instructionSnapshot(item); ok {

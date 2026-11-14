@@ -97,7 +97,7 @@ func TestLuaToolRunsInTheTurn(t *testing.T) {
 	if !strings.Contains(fp.requests()[1], "hi") {
 		t.Fatalf("no tool output: %s", fp.requests()[1])
 	}
-	if v, ok, err := (kvState{a}).Get("session", "k"); err != nil || !ok || v != "42" {
+	if v, ok, err := (kvState{a.session()}).Get("session", "k"); err != nil || !ok || v != "42" {
 		t.Fatalf("state value %q %v %v", v, ok, err)
 	}
 	if strings.Contains(fp.requests()[0], `"name":"bash"`) {
@@ -302,10 +302,10 @@ func TestTraceMergesSourcesChronologically(t *testing.T) {
 	// Two records with equal timestamps must keep their original history order.
 	a.message("assistant", "same-time")
 	a.setItemMeta(2, Metadata{At: base.Add(5 * time.Second)})
-	if _, err := a.db.Exec(`INSERT INTO tasks(session,id,command,status,started,log) VALUES(?, 't1','build','done',?,'')`, a.id, base.Add(time.Second).UnixNano()); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO tasks(session,id,command,status,started,log) VALUES(?, 't1','build','done',?,'')`, a.SessionID(), base.Add(time.Second).UnixNano()); err != nil {
 		t.Fatal(err)
 	}
-	path := EventsLog(a.home, a.id)
+	path := EventsLog(a.Home(), a.SessionID())
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestTraceEventTimestampsSupportLegacyLocalAndPreciseNewLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	path := EventsLog(a.home, a.id)
+	path := EventsLog(a.Home(), a.SessionID())
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestTraceEventTimestampsSupportLegacyLocalAndPreciseNewLogs(t *testing.T) {
 	before := time.Now()
 	a.LogEvent("notice", "new")
 	after := time.Now()
-	entries := eventTrace(a.home, a.id)
+	entries := eventTrace(a.Home(), a.SessionID())
 	expected := time.Date(2026, 1, 2, 0, 4, 5, 0, time.UTC)
 	if len(entries) != 2 || !entries[0].At.Equal(expected) || entries[0].Text != "legacy\nmultiline" {
 		t.Fatalf("legacy log: %+v", entries)

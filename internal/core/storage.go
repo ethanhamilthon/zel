@@ -7,108 +7,150 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"zel/internal/store"
 )
 
-func (a *Runtime) openProject(dir string) error {
+func (s *session) openProject(dir string) error {
 	absolute, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
-	a.Shell.Dir, a.project = absolute, absolute
-	return a.createSession()
+	s.dir, s.project = absolute, absolute
+	return s.createSession()
 }
 
 func validSessionID(id string) bool {
 	return id != "" && filepath.Base(id) == id && !strings.ContainsAny(id, `/\\`)
 }
 
-func (a *Runtime) openSession(id string) error {
+func (a *Runtime) openSession(id string) error { return a.session().openSession(id) }
+
+func (s *session) openSession(id string) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID: %s", id)
 	}
-	v, err := a.db.Session(id, a.project)
+	v, err := s.db.Session(id, s.project)
 	sel := selection{v.Provider, v.Model, v.Effort}
-	a.title = v.Title
+	s.histMu.Lock()
+	s.title = v.Title
+	s.histMu.Unlock()
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("session not found in this project: %s", id)
 	}
 	if err != nil {
 		return err
 	}
-	a.id, a.stored = id, true
-	a.fixSelection(sel)
-	if err := a.acquire(); err != nil {
+	s.id = id
+	s.histMu.Lock()
+	s.stored = true
+	s.histMu.Unlock()
+	s.fixSelection(sel)
+	if err := s.acquire(); err != nil {
 		return err
 	}
-	if err := a.readSession(); err != nil {
-		a.release()
+	if err := s.readSession(); err != nil {
+		s.release()
 		return err
 	}
-	if _, err := a.instructions(context.Background()); err != nil {
-		a.release()
+	if _, err := s.instructions(context.Background()); err != nil {
+		s.release()
 		return err
 	}
 	return nil
 }
 
-func (a *Runtime) createSession() error {
+func (s *session) createSession() error {
 	var id [8]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return err
 	}
-	a.id = time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(id[:])
-	a.itemMeta = nil
-	a.fixSelection(selection{})
-	return a.acquire()
+	s.id = time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(id[:])
+	s.histMu.Lock()
+	s.itemMeta = nil
+	s.histMu.Unlock()
+	s.fixSelection(selection{})
+	return s.acquire()
 }
 
-func (a *Runtime) readSession() error {
-	items, err := a.db.Items(a.id)
+func (a *Runtime) readSession() error { return a.session().readSession() }
+
+func (s *session) readSession() error {
+	items, err := s.db.Items(s.id)
 	if err != nil {
 		return err
 	}
-	a.History, a.itemMeta, a.imageWarnings, a.compacted = nil, nil, nil, compaction{}
+	s.histMu.Lock()
+	s.History, s.itemMeta, s.imageWarnings, s.compacted = nil, nil, nil, compaction{}
 	for _, item := range items {
-		a.History = append(a.History, item.Data)
-		a.imageWarnings = append(a.imageWarnings, missingOriginalImages(item.Data)...)
+		s.History = append(s.History, item.Data)
+		s.imageWarnings = append(s.imageWarnings, missingOriginalImages(item.Data)...)
 		if prompt, ok := instructionSnapshot(item.Data); ok {
-			a.prompt, a.promptFrozen = prompt, true
+			s.prompt, s.promptFrozen = prompt, true
 		}
 		if c, ok := compactionSnapshot(item.Data); ok {
-			a.compacted = c
+			s.compacted = c
 		}
 		if item.Meta != nil {
-			a.setItemMeta(len(a.History)-1, *item.Meta)
+			if s.itemMeta == nil {
+				s.itemMeta = map[int]*Metadata{}
+			}
+			m := *item.Meta
+			s.itemMeta[len(s.History)-1] = &m
 		}
 	}
-	a.saved = len(a.History)
+	s.saved = len(s.History)
+	s.histMu.Unlock()
 	return nil
 }
 
-func (a *Runtime) Save() error {
+func (s *session) HasSavedSession() bool {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	return len(s.History) > 0 || s.stored
+}
+
+func (a *Runtime) Save() error { return a.session().Save() }
+
+func (s *session) Save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	// Read before the transaction: update holds cfg.mu while it writes the database.
 	// A saved session pins the model it runs with, so a later default does not change it.
-	a.cfg.mu.Lock()
-	if a.cfg.sel.Model == "" && a.cfg.s.Model != "" {
-		a.cfg.sel = selection{a.cfg.s.Provider, a.cfg.s.Model, a.cfg.s.Effort}
+	s.cfg.mu.Lock()
+	if s.cfg.sel.Model == "" && s.cfg.s.Model != "" {
+		s.cfg.sel = selection{s.cfg.s.Provider, s.cfg.s.Model, s.cfg.s.Effort}
 	}
-	sel := a.cfg.sel
-	a.cfg.mu.Unlock()
-	if err := a.db.SaveSession(store.Session{ID: a.id, Project: a.project, Title: a.title, First: a.DefaultTitle(), Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort}, a.History, a.itemMeta, a.saved); err != nil {
+	sel := s.cfg.sel
+	s.cfg.mu.Unlock()
+	s.histMu.RLock()
+	history := slices.Clone(s.History)
+	meta := maps.Clone(s.itemMeta)
+	saved := s.saved
+	title := s.title
+	first := firstUserLine(history)
+	s.histMu.RUnlock()
+	if err := s.db.SaveSession(store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort}, history, meta, saved); err != nil {
 		return err
 	}
-	a.saved, a.stored = len(a.History), true
+	s.histMu.Lock()
+	if len(history) > s.saved {
+		s.saved = len(history)
+	}
+	s.stored = true
+	s.histMu.Unlock()
 	return nil
 }
 
-func (a *Runtime) Sessions() ([]SessionSummary, error) { return a.db.Sessions(a.project) }
+func (a *Runtime) Sessions() ([]SessionSummary, error) { return a.session().Sessions() }
+
+func (s *session) Sessions() ([]SessionSummary, error) { return s.db.Sessions(s.project) }
 
 func firstUserLine(history []json.RawMessage) string {
 	for _, item := range history {
@@ -121,14 +163,28 @@ func firstUserLine(history []json.RawMessage) string {
 	return ""
 }
 
-func (a *Runtime) CustomTitle() string { return a.title }
+func (a *Runtime) CustomTitle() string { return a.session().CustomTitle() }
 
-func (a *Runtime) Rename(name string) error {
-	a.title = strings.Join(strings.Fields(name), " ")
-	if !a.HasSavedSession() {
+func (s *session) CustomTitle() string {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	return s.title
+}
+
+func (a *Runtime) Rename(name string) error { return a.session().Rename(name) }
+
+func (s *session) Rename(name string) error {
+	if s.ended.Load() {
+		return errors.New("session has ended")
+	}
+	clean := strings.Join(strings.Fields(name), " ")
+	s.histMu.Lock()
+	s.title = clean
+	s.histMu.Unlock()
+	if !s.HasSavedSession() {
 		return nil
 	}
-	return a.Save()
+	return s.Save()
 }
 
 func FirstLine(text string) string {
@@ -140,10 +196,12 @@ func FirstLine(text string) string {
 	return ""
 }
 
-func (a *Runtime) DefaultTitle() string {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	return firstUserLine(a.History)
+func (a *Runtime) DefaultTitle() string { return a.session().DefaultTitle() }
+
+func (s *session) DefaultTitle() string {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	return firstUserLine(s.History)
 }
 
 func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
@@ -193,11 +251,11 @@ func ReadSession(cwd, id string) ([]Record, error) {
 		}
 		return nil, err
 	}
-	a := &Runtime{db: db, id: id, histMu: &sync.RWMutex{}, acts: &activities{}}
-	if err := a.readSession(); err != nil {
+	s := &session{db: db, id: id, acts: &activities{}}
+	if err := s.readSession(); err != nil {
 		return nil, err
 	}
-	return a.Records(), nil
+	return s.Records(), nil
 }
 
 func missingOriginalImages(item json.RawMessage) []Record {

@@ -54,9 +54,11 @@ func (a *Runtime) DBPath() string { return a.Settings().DBPath }
 func (a *Runtime) Project() string { return a.project }
 
 // ConfigFiles are the config layers that exist, in merge order.
-func (a *Runtime) ConfigFiles() []string {
+func (a *Runtime) ConfigFiles() []string { return a.session().ConfigFiles() }
+
+func (s *session) ConfigFiles() []string {
 	var files []string
-	for _, layer := range LuaLayers(a.home, a.Shell.Dir) {
+	for _, layer := range LuaLayers(s.home, s.dir) {
 		if _, err := os.Stat(layer.Path); err == nil {
 			files = append(files, layer.Path)
 		}
@@ -76,49 +78,53 @@ type settingsState struct {
 
 type selection struct{ Provider, Model, Effort string }
 
-func (a *Runtime) applyLocked(base Settings) error {
-	s := base
-	s.Providers = maps.Clone(base.Providers)
-	if sel := a.cfg.sel; sel.Model != "" {
-		s.Provider, s.Model, s.Effort = sel.Provider, sel.Model, sel.Effort
+func (s *session) applyLocked(base Settings) error {
+	st := base
+	st.Providers = maps.Clone(base.Providers)
+	if sel := s.cfg.sel; sel.Model != "" {
+		st.Provider, st.Model, st.Effort = sel.Provider, sel.Model, sel.Effort
 	}
-	if s.Effort == "" {
-		s.Effort = "medium"
+	if st.Effort == "" {
+		st.Effort = "medium"
 	}
-	if err := config.Validate(s); err != nil {
+	if err := config.Validate(st); err != nil {
 		return err
 	}
-	a.cfg.base, a.cfg.s = base, s
-	a.cfg.client = newClient(s.Providers[s.Provider])
+	s.cfg.base, s.cfg.s = base, st
+	s.cfg.client = newClient(st.Providers[st.Provider])
 	return nil
 }
 
+func (a *Runtime) fixSelection(sel selection) { a.session().fixSelection(sel) }
+
 // fixSelection applies a session's stored model; one that no longer validates is dropped.
-func (a *Runtime) fixSelection(sel selection) {
-	c := a.cfg
+func (s *session) fixSelection(sel selection) {
+	c := s.cfg
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sel = sel
-	if sel.Model == "" || a.applyLocked(c.base) != nil {
+	if sel.Model == "" || s.applyLocked(c.base) != nil {
 		c.sel = selection{}
-		_ = a.applyLocked(c.base)
+		_ = s.applyLocked(c.base)
 	}
 }
 
-func (a *Runtime) snapshot() (Settings, *provider.Client) {
-	a.cfg.mu.Lock()
-	defer a.cfg.mu.Unlock()
-	return a.settingsLocked(), a.cfg.client
+func (s *session) snapshot() (Settings, *provider.Client) {
+	s.cfg.mu.Lock()
+	defer s.cfg.mu.Unlock()
+	return s.settingsLocked(), s.cfg.client
 }
 
-func (a *Runtime) settingsLocked() Settings {
-	s := a.cfg.s
-	s.Providers = maps.Clone(s.Providers)
-	return s
+func (s *session) settingsLocked() Settings {
+	st := s.cfg.s
+	st.Providers = maps.Clone(st.Providers)
+	return st
 }
 
-func (a *Runtime) Settings() Settings {
-	a.cfg.mu.Lock()
-	defer a.cfg.mu.Unlock()
-	return a.settingsLocked()
+func (a *Runtime) Settings() Settings { return a.session().Settings() }
+
+func (s *session) Settings() Settings {
+	s.cfg.mu.Lock()
+	defer s.cfg.mu.Unlock()
+	return s.settingsLocked()
 }

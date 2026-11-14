@@ -8,20 +8,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	"zel/internal/luart"
 	"zel/internal/store"
 )
 
-func (a *Runtime) lockPath() string { return filepath.Join(a.home, "locks", a.id+".lock") }
+func (s *session) lockPath() string { return filepath.Join(s.home, "locks", s.id+".lock") }
 
-func (a *Runtime) acquire() error {
-	if err := os.MkdirAll(filepath.Dir(a.lockPath()), 0700); err != nil {
+func (s *session) acquire() error {
+	if err := os.MkdirAll(filepath.Dir(s.lockPath()), 0700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(a.lockPath(), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
@@ -34,80 +33,107 @@ func (a *Runtime) acquire() error {
 		file.Close()
 		return err
 	}
-	a.owner = file
-	a.tasks = a.newTasks()
+	s.owner = file
+	s.tasks = s.newTasks()
 	return nil
 }
 
 // release stops the jobs, drops the lock and removes the lock file of an unsaved session.
 // The database stays open: a session change hands it to the next session.
-func (a *Runtime) release() {
-	if a.vm != nil {
-		a.vm.Close()
-		a.vm = nil
+// s.tasks is retained (already closed) so surviving environment work never races on nil.
+func (s *session) release() {
+	if s.vm != nil {
+		s.vm.Close()
+		s.vm = nil
 	}
-	if a.tasks != nil {
-		a.tasks.close(nil)
-		a.tasks = nil
+	if s.tasks != nil {
+		s.tasks.close(nil)
 	}
-	if a.owner != nil {
-		_ = syscall.Flock(int(a.owner.Fd()), syscall.LOCK_UN)
-		_ = a.owner.Close()
-		a.owner = nil
-		if !a.stored {
-			_ = os.Remove(a.lockPath())
+	if s.owner != nil {
+		_ = syscall.Flock(int(s.owner.Fd()), syscall.LOCK_UN)
+		_ = s.owner.Close()
+		s.owner = nil
+		s.histMu.RLock()
+		stored := s.stored
+		s.histMu.RUnlock()
+		if !stored {
+			_ = os.Remove(s.lockPath())
 		}
 	}
 }
 
-func (a *Runtime) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
+func (s *session) shutdown(reason string) {
+	s.sessionEnd(reason)
+	s.ended.Store(true)
+	if s.queue != nil {
+		s.queue.OnPush(nil)
+	}
+	if s.lua != nil {
+		s.lua.setNotice(nil)
+	}
+	s.release()
+	if s.lua != nil {
+		s.lua.set(nil) // closes the config VM, or once the last subagent that owes hooks has ended
+	}
+}
+
+func (a *Runtime) release() { a.session().release() }
+
+func (a *Runtime) HasSavedSession() bool { return a.session().HasSavedSession() }
+
+func (a *Runtime) closeDB() {
+	a.closeOnce.Do(func() {
+		if a.db != nil {
+			a.db.Close()
+		}
+	})
+}
 
 func (a *Runtime) Close() {
-	a.sessionEnd("quit")
-	a.release()
-	a.lua.set(nil) // closes the config VM, or once the last subagent that owes hooks has ended
-	if a.db != nil {
-		a.db.Close()
-		a.db = nil
+	if s := a.session(); s != nil {
+		s.shutdown("quit")
 	}
+	a.closeDB()
 }
 
 // NewSession and Resume are called only when no turn is running.
 func (a *Runtime) NewSession() error      { return a.changeSession("") }
 func (a *Runtime) Resume(id string) error { return a.changeSession(id) }
 
-func (a *Runtime) Reload() error {
-	if err := a.loadConfig(a.Shell.Dir); err != nil {
+func (a *Runtime) Reload() error { return a.session().Reload() }
+
+func (s *session) Reload() error {
+	if err := s.loadConfig(s.dir); err != nil {
 		return err
 	}
-	a.reloadLua()
-	if a.tasks != nil {
-		a.tasks.cancelLua()
+	s.reloadLua()
+	if s.tasks != nil {
+		s.tasks.cancelLua()
 	}
-	if a.vm != nil {
-		a.vm.Reset("init.lua was reloaded")
+	if s.vm != nil {
+		s.vm.Reset("init.lua was reloaded")
 	}
-	previous, frozen := a.prompt, a.promptFrozen
-	a.promptFrozen = false
-	if _, err := a.instructions(context.Background()); err != nil {
-		a.prompt, a.promptFrozen = previous, frozen
+	previous, frozen := s.prompt, s.promptFrozen
+	s.promptFrozen = false
+	if _, err := s.instructions(context.Background()); err != nil {
+		s.prompt, s.promptFrozen = previous, frozen
 		return err
 	}
 	return nil
 }
 
 func (a *Runtime) changeSession(id string) error {
-	if id != "" && id == a.SessionID() {
-		if err := a.loadConfig(a.Shell.Dir); err != nil {
+	old := a.session()
+	if id != "" && id == old.id {
+		if err := old.loadConfig(old.dir); err != nil {
 			return err
 		}
-		a.loadLua()
-		_, err := a.instructions(context.Background())
+		old.loadLua()
+		_, err := old.instructions(context.Background())
 		return err
 	}
-	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell, tree: a.tree, parentRoot: a.parentRoot, depth: a.depth, link: a.link,
-		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, lua: &luaHolder{notice: a.lua.notice}, acts: &activities{}}
-	if err := next.loadConfig(a.Shell.Dir); err != nil {
+	next := a.newSessionState(old.dir, old.queue.wakeHandler(), old.lua.noticeHandler())
+	if err := next.loadConfig(next.dir); err != nil {
 		return err
 	}
 	var err error
@@ -121,9 +147,10 @@ func (a *Runtime) changeSession(id string) error {
 		return err
 	}
 	next.loadLua()
-	if a.HasSavedSession() {
-		if err = a.Save(); err != nil {
+	if old.HasSavedSession() {
+		if err = old.Save(); err != nil {
 			next.release()
+			next.lua.set(nil)
 			return err
 		}
 	}
@@ -131,33 +158,35 @@ func (a *Runtime) changeSession(id string) error {
 	if id != "" {
 		reason = "resume"
 	}
-	a.sessionEnd(reason)
-	a.release()
-	a.lua.set(nil)
-	*a = *next
+	old.shutdown(reason)
+	a.mu.Lock()
+	a.cur = next
+	a.mu.Unlock()
 	if id != "" {
-		a.vm = &luart.Runner{Env: luaEnv{a}}
-		a.vm.Reset("the session was resumed")
+		next.vm = &luart.Runner{Env: luaEnv{next}}
+		next.vm.Reset("the session was resumed")
 	}
-	a.sessionStart()
+	next.sessionStart()
 	return nil
 }
 
-// rootID is the root session of this runtime's agent tree: the session of the
+// rootID is the root session of this session's agent tree: the session of the
 // top-level runtime, which agents started below it report to.
-func (a *Runtime) rootID() string {
-	if a.parentRoot != "" {
-		return a.parentRoot
+func (s *session) rootID() string {
+	if s.parentRoot != "" {
+		return s.parentRoot
 	}
-	return a.id
+	return s.id
 }
+
+func (a *Runtime) shellEnv() map[string]string { return a.session().shellEnv() }
 
 // shellEnv is exported to every sh() call. API keys and settings are never exported.
 // ZEL_DEPTH is the agent nesting depth, so a nested `zel -p` still honors the limit.
-func (a *Runtime) shellEnv() map[string]string {
+func (s *session) shellEnv() map[string]string {
 	return map[string]string{
-		"ZEL_SESSION_ID": a.SessionID(),
-		"ZEL_DEPTH":      strconv.Itoa(a.depth),
+		"ZEL_SESSION_ID": s.id,
+		"ZEL_DEPTH":      strconv.Itoa(s.depth),
 	}
 }
 

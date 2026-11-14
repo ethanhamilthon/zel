@@ -227,15 +227,15 @@ func tailLines(path string, n int) string {
 // jobSet is one namespace of jobs of a session, "task" or "agent". It
 // implements the lifecycle half of luart.Tasks and luart.Agents.
 type jobSet struct {
-	a    *Runtime
+	s    *session
 	kind string
 }
 
-func (e luaEnv) Tasks() luart.Tasks   { return taskSet{jobSet{e.a, "task"}} }
-func (e luaEnv) Agents() luart.Agents { return agentSet{jobSet{e.a, "agent"}} }
+func (e luaEnv) Tasks() luart.Tasks   { return taskSet{jobSet{e.s, "task"}} }
+func (e luaEnv) Agents() luart.Agents { return agentSet{jobSet{e.s, "agent"}} }
 
 func (s jobSet) find(id string) (*job, error) {
-	t := s.a.tasks
+	t := s.s.tasks
 	if t == nil {
 		return nil, luart.ErrNoJob
 	}
@@ -252,7 +252,7 @@ func (j *job) info() luart.JobInfo {
 }
 
 func (s jobSet) List() []luart.JobInfo {
-	t := s.a.tasks
+	t := s.s.tasks
 	if t == nil {
 		return nil
 	}
@@ -317,7 +317,7 @@ func (s jobSet) Stop(id string) error {
 type taskSet struct{ jobSet }
 
 func (s taskSet) Spawn(run luart.TaskFunc, o luart.TaskOpts) (string, error) {
-	t := s.a.tasks
+	t := s.s.tasks
 	if t == nil {
 		return "", errors.New("no active session")
 	}
@@ -331,7 +331,7 @@ func (s taskSet) Spawn(run luart.TaskFunc, o luart.TaskOpts) (string, error) {
 type agentSet struct{ jobSet }
 
 func (s agentSet) Spawn(o luart.AgentOpts) (string, error) {
-	j, err := s.a.spawnAgent(o)
+	j, err := s.s.spawnAgent(o)
 	if err != nil {
 		return "", err
 	}

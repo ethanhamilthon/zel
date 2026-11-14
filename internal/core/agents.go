@@ -120,7 +120,10 @@ type agentLink struct {
 
 // ActiveSubagents lists the running agents of this session tree. It only reads
 // memory, so it is safe to call from rendering paths.
-func (a *Runtime) ActiveSubagents() []SubagentRun { return a.tree.active(a.rootID()) }
+func (a *Runtime) ActiveSubagents() []SubagentRun {
+	s := a.session()
+	return s.tree.active(s.rootID())
+}
 
 // OnSubagentsChanged registers fn to run whenever the set of running agents or
 // their step counts change. fn must not block.
@@ -133,22 +136,22 @@ func (a *Runtime) OnSubagentsChanged(fn func()) {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // spawnAgent starts a child agent inside this process. The child is a full
-// runtime with its own session; this runtime owns its context, progress,
+// runtime with its own session; this session owns its context, progress,
 // cancellation and result.
-func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
-	if a.tasks == nil {
+func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
+	if s.tasks == nil {
 		return nil, errors.New("no active session")
 	}
-	if a.depth+1 > MaxAgentDepth {
+	if s.depth+1 > MaxAgentDepth {
 		return nil, fmt.Errorf("agents are nested too deeply (max depth %d)", MaxAgentDepth)
 	}
-	cwd := cmp.Or(o.Cwd, a.Shell.Dir)
-	model := cmp.Or(o.Model, a.Settings().Model)
+	cwd := cmp.Or(o.Cwd, s.dir)
+	model := cmp.Or(o.Model, s.Settings().Model)
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
-	holder, depth, budget := a.lua, a.depth+1, a.tasks.life
+	holder, depth, budget := s.lua, s.depth+1, s.tasks.life
 	startCtx, stopStart := context.WithCancel(budget)
-	j, err := a.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
+	j, err := s.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
 			// The lifecycle hooks run on goroutines of their own. They wait for the Lua
 			// config lock, which a plugin function can hold while it waits for this very
@@ -173,7 +176,7 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 					defer stopStart()
 					deliverSubagent(startCtx, cfg, "subagent_start", subagentStartInfo(j, o, cwd, depth))
 				}()
-				err := a.runChild(ctx, j, log, cwd, o, budget)
+				err := s.runChild(ctx, j, log, cwd, o, budget)
 				failed = err != nil
 				done <- err
 			}()
@@ -194,17 +197,17 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 }
 
 // runChild runs one agent to completion and records its outcome on the job.
-func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts, budget context.Context) error {
-	key := a.id + "/" + j.id
-	root := a.rootID()
-	tree := a.tree
+func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts, budget context.Context) error {
+	key := s.id + "/" + j.id
+	root := s.rootID()
+	tree := s.tree
 	run := SubagentRun{ID: key, Parent: root, Started: j.started, Model: j.model, Effort: o.Effort, Command: oneLine(o.Prompt)}
 	tree.add(run)
 	defer tree.remove(key)
 
 	var outcome agentOutcome
 	opts := Options{Mode: "headless", Provider: o.Provider, Model: o.Model, Effort: o.Effort,
-		link: &agentLink{tree: tree, root: root, depth: a.depth + 1, id: key, budget: budget}}
+		link: &agentLink{tree: tree, root: root, depth: s.depth + 1, id: key, budget: budget}}
 	opts.SessionReady = func(c *Runtime) error {
 		if hint := c.Settings().SetupHint(); hint != "" {
 			return errors.New(hint)
@@ -227,10 +230,10 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 		j.setOutcome(agentOutcome{Session: outcome.Session})
 		return ctx.Err()
 	}
-	s := child.Settings()
+	st := child.Settings()
 	tree.mu.Lock()
 	if r := tree.runs[key]; r != nil {
-		r.Model, r.Effort = s.Model, s.Effort
+		r.Model, r.Effort = st.Model, st.Effort
 	}
 	tree.mu.Unlock()
 	tree.notify()

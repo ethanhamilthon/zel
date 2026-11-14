@@ -10,30 +10,39 @@ import (
 	"zel/internal/shell"
 )
 
-func (a *Runtime) addInput(input Input, emit func(TurnEvent)) {
-	a.commitInput(input)
+func (s *session) addInput(input Input, emit func(TurnEvent)) {
+	s.commitInput(input)
 	e := inputEvent(input)
-	e.Meta = a.itemMeta[len(a.History)-1]
+	s.histMu.RLock()
+	e.Meta = s.itemMeta[len(s.History)-1]
+	s.histMu.RUnlock()
 	emit(e)
 }
 
-func (a *Runtime) commitInput(input Input) {
+func (a *Runtime) commitInput(input Input) { a.session().commitInput(input) }
+
+func (s *session) commitInput(input Input) {
 	if input.SentAt.IsZero() {
 		input.SentAt = time.Now()
 	}
-	defer func() { a.setItemMeta(len(a.History)-1, Metadata{At: input.SentAt}) }()
+	defer func() {
+		s.histMu.RLock()
+		seq := len(s.History) - 1
+		s.histMu.RUnlock()
+		s.setItemMeta(seq, Metadata{At: input.SentAt})
+	}()
 	text := input.Display()
 	if len(input.Images) == 0 {
-		a.message("user", text)
+		s.message("user", text)
 		return
 	}
 	parts := []any{map[string]any{"type": "input_text", "text": text + imageOriginals(input.Images)}}
 	for _, img := range input.Images {
 		parts = append(parts, map[string]any{"type": "input_image", "image_url": img.URL, "detail": "auto"})
 	}
-	a.histMu.Lock()
-	a.History = append(a.History, raw(map[string]any{"role": "user", "content": parts}))
-	a.histMu.Unlock()
+	s.histMu.Lock()
+	s.History = append(s.History, raw(map[string]any{"role": "user", "content": parts}))
+	s.histMu.Unlock()
 }
 
 const originalImage = "\nOriginal image (for crops): "
@@ -103,9 +112,15 @@ func (s *Steering) OnPush(wake func()) {
 	s.wake = wake
 }
 
+func (s *Steering) wakeHandler() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wake
+}
+
 const maxQueued = 64
 
-func (a *Runtime) Queue() *Steering { return a.queue }
+func (a *Runtime) Queue() *Steering { return a.session().queue }
 
 // PushNotice is reserved for completions of admitted tasks; admission bounds
 // pending notices plus running tasks, so final results never need to be dropped.

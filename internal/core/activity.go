@@ -19,10 +19,15 @@ type activities struct {
 	list []activity
 }
 
-// beginActivity records a foreground operation; the returned function ends it (twice is harmless).
 func (a *Runtime) beginActivity(label string) (end func()) {
-	acts := a.acts
-	if acts == nil { // a runtime built without a table shows no activity
+	return a.session().beginActivity(label)
+}
+
+// beginActivity records a foreground operation; the returned function ends it
+// safely and at most once, even under concurrent abandonment and late host return.
+func (s *session) beginActivity(label string) (end func()) {
+	acts := s.acts
+	if acts == nil { // a session built without a table shows no activity
 		return func() {}
 	}
 	acts.mu.Lock()
@@ -30,23 +35,23 @@ func (a *Runtime) beginActivity(label string) (end func()) {
 	id := acts.seq
 	acts.list = append(acts.list, activity{id: id, label: label})
 	acts.mu.Unlock()
-	a.publishActivity()
-	done := false
+	s.publishActivity()
+	var once sync.Once
 	return func() {
-		if done {
-			return
-		}
-		done = true
-		acts.mu.Lock()
-		acts.list = slices.DeleteFunc(acts.list, func(x activity) bool { return x.id == id })
-		acts.mu.Unlock()
-		a.publishActivity()
+		once.Do(func() {
+			acts.mu.Lock()
+			acts.list = slices.DeleteFunc(acts.list, func(x activity) bool { return x.id == id })
+			acts.mu.Unlock()
+			s.publishActivity()
+		})
 	}
 }
 
 // Activity is the label of the operation the session waits on, or "" when none runs.
-func (a *Runtime) Activity() string {
-	acts := a.acts
+func (a *Runtime) Activity() string { return a.session().Activity() }
+
+func (s *session) Activity() string {
+	acts := s.acts
 	if acts == nil {
 		return ""
 	}
@@ -60,8 +65,8 @@ func (a *Runtime) Activity() string {
 
 // publishActivity gives a subagent's activity to its row in the agent tree; the
 // main session has no row, the working indicator reads Activity.
-func (a *Runtime) publishActivity() {
-	if link := a.link; link != nil {
-		link.tree.setActivity(link.id, a.Activity())
+func (s *session) publishActivity() {
+	if link := s.link; link != nil {
+		link.tree.setActivity(link.id, s.Activity())
 	}
 }

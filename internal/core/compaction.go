@@ -76,8 +76,8 @@ func compactionBounds(history []json.RawMessage, threshold int64, prev compactio
 	return next, next != prev
 }
 
-func (a *Runtime) compactedInput(i int, item json.RawMessage) (json.RawMessage, bool) {
-	c := a.compacted
+func (s *session) compactedInput(i int, item json.RawMessage) (json.RawMessage, bool) {
+	c := s.compacted
 	if i < c.Drop {
 		return conversationOnly(item)
 	}
@@ -134,30 +134,31 @@ func pruneOutput(item json.RawMessage) json.RawMessage {
 }
 
 // compact runs between model steps, once all tool outputs of a step are saved.
-func (a *Runtime) compact(emit func(TurnEvent)) error {
-	threshold := int64(a.Settings().CompactionThreshold)
-	if threshold <= 0 || a.ContextTokens() < threshold {
+func (s *session) compact(emit func(TurnEvent)) error {
+	threshold := int64(s.Settings().CompactionThreshold)
+	if threshold <= 0 || s.ContextTokens() < threshold {
 		return nil
 	}
-	a.histMu.RLock()
-	next, changed := compactionBounds(a.History, threshold, a.compacted)
-	a.histMu.RUnlock()
+	s.histMu.RLock()
+	next, changed := compactionBounds(s.History, threshold, s.compacted)
+	s.histMu.RUnlock()
 	if !changed {
 		return nil
 	}
 	item := raw(map[string]any{"type": compactionType, "prune_before": next.Prune, "drop_before": next.Drop})
-	a.histMu.Lock()
-	a.History = append(a.History, item)
-	a.compacted = next
+	s.histMu.Lock()
+	s.History = append(s.History, item)
+	seq := len(s.History) - 1
+	s.compacted = next
 	// Recount from the compacted request instead of the last provider usage.
-	a.lastRequest.ContextInput = nil
-	a.histMu.Unlock()
-	a.setItemMeta(len(a.History)-1, Metadata{At: time.Now()})
+	s.lastRequest.ContextInput = nil
+	s.histMu.Unlock()
+	s.setItemMeta(seq, Metadata{At: time.Now()})
 	for _, r := range RecordsForItem(item) {
 		emit(TurnEvent{Kind: r.Kind, Text: r.Text, Final: true})
 	}
-	emit(TurnEvent{Kind: "notice", Text: fmt.Sprintf("Context compacted at %s tokens; now about %s.", formatTokenCount(threshold), formatTokenCount(a.ContextTokens()))})
-	return a.saveHistory()
+	emit(TurnEvent{Kind: "notice", Text: fmt.Sprintf("Context compacted at %s tokens; now about %s.", formatTokenCount(threshold), formatTokenCount(s.ContextTokens()))})
+	return s.saveHistory()
 }
 
 func formatTokenCount(n int64) string {

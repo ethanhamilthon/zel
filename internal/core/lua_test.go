@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,7 +48,7 @@ end)`))
 	if got.Text != input.Text || !got.Notice {
 		t.Fatalf("notification changed: %+v", got)
 	}
-	value, ok, err := (kvState{a: a}).Get("session", "observed_notice")
+	value, ok, err := (kvState{s: a.session()}).Get("session", "observed_notice")
 	if err != nil || !ok || !strings.Contains(value, "t1 finished") {
 		t.Fatalf("observed notice = %q, %v, %v", value, ok, err)
 	}
@@ -171,11 +172,11 @@ func TestSessionModelsCancelledCallDoesNotWaitForListing(t *testing.T) {
 		t.Fatal("the cancelled call waited for the other listing")
 	}
 	// The cancelled caller neither released the held request nor started a listing of its own.
-	if _, done, _ := (luaEnv{a}).Tasks().Wait(context.Background(), "t1", 100*time.Millisecond); done || listings() != 1 {
+	if _, done, _ := (luaEnv{a.session()}).Tasks().Wait(context.Background(), "t1", 100*time.Millisecond); done || listings() != 1 {
 		t.Fatalf("task finished %v, listings %d", done, listings())
 	}
 	open()
-	if _, done, err := (luaEnv{a}).Tasks().Wait(context.Background(), "t1", 5*time.Second); !done || err != nil {
+	if _, done, err := (luaEnv{a.session()}).Tasks().Wait(context.Background(), "t1", 5*time.Second); !done || err != nil {
 		t.Fatalf("task after release: done %v, err %v", done, err)
 	}
 	if res := a.runLua(context.Background(), `return #session.models()`); res.IsError || res.Output != "1" || listings() != 1 {
@@ -381,12 +382,12 @@ func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
 	}}
 	a := newTestAgent(t, fp, Options{})
 	t.Cleanup(func() { close(gate) })
-	a.depth = MaxAgentDepth
-	if _, err := (luaEnv{a}).Agents().Spawn(luart.AgentOpts{Prompt: "x"}); err == nil || !strings.Contains(err.Error(), "nested too deeply") {
+	a.session().depth = MaxAgentDepth
+	if _, err := (luaEnv{a.session()}).Agents().Spawn(luart.AgentOpts{Prompt: "x"}); err == nil || !strings.Contains(err.Error(), "nested too deeply") {
 		t.Fatalf("depth limit: %v", err)
 	}
-	a.depth = 0
-	id, err := (luaEnv{a}).Agents().Spawn(luart.AgentOpts{Prompt: "child-hang"})
+	a.session().depth = 0
+	id, err := (luaEnv{a.session()}).Agents().Spawn(luart.AgentOpts{Prompt: "child-hang"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +419,7 @@ func TestTaskFunctionNotifiesOnce(t *testing.T) {
 	if len(got) != 1 || got[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("messages %+v", got)
 	}
-	res, ok, err := (luaEnv{a}).Tasks().Result("t1")
+	res, ok, err := (luaEnv{a.session()}).Tasks().Result("t1")
 	if err != nil || !ok || res["value"] != "v1" || res["ok"] != true {
 		t.Fatalf("result %+v %v %v", res, ok, err)
 	}
@@ -517,8 +518,8 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 	if out := fp.requests()[1]; !strings.Contains(out, "http://x") {
 		t.Fatalf("web.search plugin did not run: %s", out)
 	}
-	if a.lua.get().LoadErrs != nil {
-		t.Fatalf("load errors: %v", a.lua.get().LoadErrs)
+	if a.session().lua.get().LoadErrs != nil {
+		t.Fatalf("load errors: %v", a.session().lua.get().LoadErrs)
 	}
 }
 
@@ -657,7 +658,7 @@ zel.on("subagent_end", function(ev) sh("true") end)`))
 // its own, the indicator shows the newest one still running, and a background
 // operation never takes over the foreground.
 func TestActivityOverlapAndBackground(t *testing.T) {
-	a := &Runtime{acts: &activities{}}
+	a := &Runtime{cur: &session{acts: &activities{}}}
 	endOuter := a.beginActivity("running review")
 	endInner := a.beginActivity("reading ~/.zel/init.lua")
 	if got := a.Activity(); got != "reading ~/.zel/init.lua" {
@@ -668,7 +669,7 @@ func TestActivityOverlapAndBackground(t *testing.T) {
 	if got := a.Activity(); got != "running review" {
 		t.Fatalf("after the inner end activity = %q", got)
 	}
-	endBackground := luaEnv{a}.Begin("sleeping 60 sec", true)
+	endBackground := luaEnv{a.session()}.Begin("sleeping 60 sec", true)
 	if got := a.Activity(); got != "running review" {
 		t.Fatalf("background work replaced the foreground: %q", got)
 	}
@@ -686,7 +687,7 @@ func TestSubagentRowTracksItsOwnActivity(t *testing.T) {
 	changes := 0
 	tree.changed = func() { changes++ }
 	tree.add(SubagentRun{ID: "s/a1", Parent: "s"})
-	child := &Runtime{tree: tree, acts: &activities{}, link: &agentLink{tree: tree, root: "s", id: "s/a1"}}
+	child := &Runtime{tree: tree, cur: &session{tree: tree, acts: &activities{}, link: &agentLink{tree: tree, root: "s", id: "s/a1"}}}
 	endFirst := child.beginActivity("reading a.txt")
 	endSecond := child.beginActivity("reading a.txt")
 	rows := tree.active("s")
@@ -892,7 +893,7 @@ func TestShutdownAbandonsJobThatIgnoresCancel(t *testing.T) {
 	a := newTestAgent(t, fp, Options{})
 	never := make(chan struct{})
 	t.Cleanup(func() { close(never) })
-	_, err := a.tasks.start("stuck", startOpts{}, func(io.Writer, *job) (*proc, error) {
+	_, err := a.session().tasks.start("stuck", startOpts{}, func(io.Writer, *job) (*proc, error) {
 		return &proc{cancel: func() {}, term: func() {}, wait: func() error { <-never; return nil }, exit: func() int { return 0 }}, nil
 	})
 	if err != nil {
@@ -1126,7 +1127,7 @@ require("zel").on("subagent_end", function() io.open("`+fifo+`", "r"):read("a") 
 	// The hook gives up at the same moment the shutdown does, so its entry follows Close.
 	var events []byte
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		events, _ = os.ReadFile(EventsLog(a.home, a.id))
+		events, _ = os.ReadFile(EventsLog(a.Home(), a.SessionID()))
 		if strings.Contains(string(events), "stopped early") || time.Now().After(deadline) {
 			break
 		}
@@ -1171,4 +1172,403 @@ func closeWithin(a *Runtime, d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
+}
+
+// A deadline-expired subagent_end hook must never race with session replacement
+// (NewSession or Resume) or route warnings into the new session's log. Both a
+// single cooperative handler and a 200-handler burst must isolate warnings to
+// the old session and clean up the abandoned work cleanly.
+func TestDeadlineExpiredSubagentEndHookAcrossSessionSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		resume bool
+		copies int
+	}{
+		{"new/single", false, 1},
+		{"new/200", false, 200},
+		{"resume/single", true, 1},
+		{"resume/200", true, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := make(chan struct{})
+			initCode := fmt.Sprintf(`
+for i = 1, %d do
+	require("zel").on("subagent_end", function() sleep(30) end)
+end`, tc.copies)
+			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, initLua(t, initCode))
+			t.Cleanup(func() { close(gate) })
+
+			var targetID string
+			if tc.resume {
+				if err := a.Save(); err != nil {
+					t.Fatal(err)
+				}
+				targetID = a.SessionID()
+				if err := a.NewSession(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := turn(t, a, "go"); err != nil {
+				t.Fatal(err)
+			}
+			awaitSubagentRunning(t, a)
+
+			oldSess := a.session()
+			oldID := a.SessionID()
+			oldCfg := oldSess.lua.get()
+			if oldCfg == nil {
+				t.Fatal("missing old config snapshot")
+			}
+
+			start := time.Now()
+			var err error
+			if tc.resume {
+				err = a.Resume(targetID)
+			} else {
+				err = a.NewSession()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+				t.Fatalf("session switch took %s past shutdown budget", took)
+			}
+
+			newID := a.SessionID()
+			if newID == oldID {
+				t.Fatalf("session ID did not change: %s", newID)
+			}
+
+			// Eventual cleanup of the abandoned job goroutine and pinned config snapshot.
+			drained := make(chan struct{})
+			go func() {
+				oldSess.tasks.wg.Wait()
+				close(drained)
+			}()
+			select {
+			case <-drained:
+			case <-time.After(5 * time.Second):
+				t.Fatal("abandoned subagent_end / job did not finish cleaning up")
+			}
+			oldSess.lua.mu.Lock()
+			pins := len(oldSess.lua.pins)
+			oldSess.lua.mu.Unlock()
+			if pins != 0 {
+				t.Fatalf("old config snapshot retained %d pins after drain", pins)
+			}
+
+			a.LogEvent("notice", "in-new")
+
+			var oldEvents []byte
+			for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				oldEvents, _ = os.ReadFile(EventsLog(a.Home(), oldID))
+				if strings.Contains(string(oldEvents), "stopped early") || time.Now().After(deadline) {
+					break
+				}
+			}
+			if !strings.Contains(string(oldEvents), "subagent_end") || !strings.Contains(string(oldEvents), "stopped early") {
+				t.Fatalf("old session %s missing subagent_end warning: %q", oldID, oldEvents)
+			}
+			if strings.Contains(string(oldEvents), "in-new") {
+				t.Fatalf("old session %s received new session notice: %q", oldID, oldEvents)
+			}
+			newEvents, _ := os.ReadFile(EventsLog(a.Home(), newID))
+			if strings.Contains(string(newEvents), "subagent_end") || strings.Contains(string(newEvents), "stopped early") {
+				t.Fatalf("new session %s received old subagent_end warning: %q", newID, newEvents)
+			}
+			if !strings.Contains(string(newEvents), "in-new") {
+				t.Fatalf("new session %s missing its own notice: %q", newID, newEvents)
+			}
+		})
+	}
+}
+
+// An abandoned non-cooperative subagent_end hook survives session switch while
+// pinned to its old session, routes later warnings strictly to the old session,
+// and releases its task waiter and config snapshot once unblocked.
+func TestAbandonedSubagentEndHookCleansUpAfterReleaseAcrossSessionSwitch(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		name := "new"
+		if resume {
+			name = "resume"
+		}
+		t.Run(name, func(t *testing.T) {
+			gate := make(chan struct{})
+			var fifo string
+			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
+				fifo = namedPipe(t, filepath.Join(dir, "stuck-end"))
+				writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+local zel = require("zel")
+zel.on("subagent_end", function() io.open("`+fifo+`", "r"):read("a") end)
+for i = 1, 20 do
+	zel.on("subagent_end", function() sleep(30) end)
+end`)
+			})
+			t.Cleanup(func() { close(gate) })
+			release := sync.OnceFunc(func() { go releasePipe(fifo) })
+			t.Cleanup(release)
+
+			var targetID string
+			if resume {
+				if err := a.Save(); err != nil {
+					t.Fatal(err)
+				}
+				targetID = a.SessionID()
+				if err := a.NewSession(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := turn(t, a, "go"); err != nil {
+				t.Fatal(err)
+			}
+			awaitSubagentRunning(t, a)
+
+			oldSess := a.session()
+			oldID := a.SessionID()
+			oldCfg := oldSess.lua.get()
+
+			start := time.Now()
+			var err error
+			if resume {
+				err = a.Resume(targetID)
+			} else {
+				err = a.NewSession()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+				t.Fatalf("session switch took %s past shutdown budget", took)
+			}
+			newID := a.SessionID()
+			if newID == oldID {
+				t.Fatalf("session ID did not change")
+			}
+
+			// Still pinned until the blocked hook is released.
+			oldSess.lua.mu.Lock()
+			pinsBefore := oldSess.lua.pins[oldCfg]
+			oldSess.lua.mu.Unlock()
+			if pinsBefore != 1 {
+				t.Fatalf("pins before release = %d, want 1", pinsBefore)
+			}
+
+			release()
+			drained := make(chan struct{})
+			go func() {
+				oldSess.tasks.wg.Wait()
+				close(drained)
+			}()
+			select {
+			case <-drained:
+			case <-time.After(5 * time.Second):
+				t.Fatal("abandoned subagent_end did not drain after release")
+			}
+			oldSess.lua.mu.Lock()
+			pinsAfter := len(oldSess.lua.pins)
+			oldSess.lua.mu.Unlock()
+			if pinsAfter != 0 {
+				t.Fatalf("pins after release = %d, want 0", pinsAfter)
+			}
+
+			oldEvents, _ := os.ReadFile(EventsLog(a.Home(), oldID))
+			if !strings.Contains(string(oldEvents), "subagent_end") || !strings.Contains(string(oldEvents), "stopped early") {
+				t.Fatalf("old session %s missing subagent_end warnings: %q", oldID, oldEvents)
+			}
+			newEvents, _ := os.ReadFile(EventsLog(a.Home(), newID))
+			if strings.Contains(string(newEvents), "subagent_end") || strings.Contains(string(newEvents), "stopped early") {
+				t.Fatalf("new session %s leaked old subagent_end warnings: %q", newID, newEvents)
+			}
+		})
+	}
+}
+
+// Cancelling a session.rename call blocked on SQLite's write lock must clear the
+// core Runtime's foreground Activity immediately when runLua returns, keep it clear
+// across a subsequent call, and keep later activities intact when the lock releases.
+func TestAbandonedHostCallClearsCoreActivity(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := openDB(a.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	tx, err := locker.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolledBack := false
+	rollback := func() {
+		if !rolledBack {
+			rolledBack = true
+			_ = tx.Rollback()
+		}
+	}
+	defer rollback()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan luart.Result, 1)
+	go func() {
+		done <- a.runLua(ctx, `session.rename("locked")`)
+	}()
+	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "renaming session"; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("never observed renaming session activity (got %q)", a.Activity())
+		}
+	}
+	cancel()
+
+	select {
+	case res := <-done:
+		if !res.IsError || !strings.Contains(res.Output, luart.ECANCELED) {
+			t.Fatalf("abandoned runLua = %+v", res)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runLua did not return promptly after cancel")
+	}
+	if got := a.Activity(); got != "" {
+		t.Fatalf("Activity after abandoned call = %q, want empty", got)
+	}
+
+	next := a.runLua(context.Background(), "return 42")
+	if next.IsError || !strings.HasSuffix(next.Output, "\n42") {
+		t.Fatalf("next call = %+v", next)
+	}
+	if got := a.Activity(); got != "" {
+		t.Fatalf("Activity after next call = %q, want empty", got)
+	}
+
+	// Start a third call holding a live activity, then release the SQLite write lock:
+	// the late return of session.rename must not remove the third call's activity.
+	call3 := make(chan luart.Result, 1)
+	go func() {
+		call3 <- a.runLua(context.Background(), "sleep(0.25); return 'ok'")
+	}()
+	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "sleeping 0.25 sec"; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("never observed sleeping activity (got %q)", a.Activity())
+		}
+	}
+	rollback()
+	time.Sleep(50 * time.Millisecond)
+	if got := a.Activity(); got != "sleeping 0.25 sec" {
+		t.Fatalf("late host return removed later activity: %q", got)
+	}
+	select {
+	case res := <-call3:
+		if res.IsError || res.Output != "ok" {
+			t.Fatalf("call 3 = %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call 3 did not finish")
+	}
+	if got := a.Activity(); got != "" {
+		t.Fatalf("Activity after call 3 = %q, want empty", got)
+	}
+}
+
+// Surviving environment references (from abandoned hooks, tasks, or VMs) keep
+// their own session identity across NewSession and Close, never mutate or log
+// to the replacement session, and fail cleanly when closed.
+func TestSurvivingEnvironmentWorkIsolatedAcrossSessionSwitch(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var notices []string
+	var noticeMu sync.Mutex
+	a.SetNoticeHandler(func(msg string) {
+		noticeMu.Lock()
+		notices = append(notices, msg)
+		noticeMu.Unlock()
+	})
+
+	oldEnv := luaEnv{a.session()}
+	oldID := a.SessionID()
+
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	newID := a.SessionID()
+	if newID == oldID {
+		t.Fatalf("session did not switch: %s", newID)
+	}
+
+	// Old environment retains old identity while Runtime points to the new session.
+	if got := oldEnv.Info().ID; got != oldID {
+		t.Fatalf("oldEnv.Info().ID = %q, want %q", got, oldID)
+	}
+	if got := oldEnv.ShellEnv()["ZEL_SESSION_ID"]; got != oldID {
+		t.Fatalf("oldEnv.ShellEnv = %q, want %q", got, oldID)
+	}
+	if got := a.Shell.Env()["ZEL_SESSION_ID"]; got != newID {
+		t.Fatalf("a.Shell.Env = %q, want %q", got, newID)
+	}
+
+	// Session-scoped KV stays isolated.
+	if err := oldEnv.State().Set("session", "from_old", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := (luaEnv{a.session()}).State().Get("session", "from_old"); err != nil || ok {
+		t.Fatalf("new session saw old session KV: ok=%v err=%v", ok, err)
+	}
+	if got, ok, err := oldEnv.State().Get("session", "from_old"); err != nil || !ok || got != "1" {
+		t.Fatalf("old session KV = %q, %v, %v", got, ok, err)
+	}
+
+	// Closed old environment cannot spawn tasks/agents, attach views, or rename.
+	if _, err := oldEnv.Tasks().Spawn(func(context.Context, io.Writer) (any, error) { return nil, nil }, luart.TaskOpts{Name: "late"}); err == nil {
+		t.Fatal("oldEnv.Tasks().Spawn succeeded after session switch")
+	}
+	if _, err := oldEnv.Agents().Spawn(luart.AgentOpts{Prompt: "late"}); err == nil {
+		t.Fatal("oldEnv.Agents().Spawn succeeded after session switch")
+	}
+	if err := oldEnv.View(filepath.Join(a.Home(), "missing.png")); err == nil || !strings.Contains(err.Error(), "session has ended") {
+		t.Fatalf("oldEnv.View = %v, want session has ended", err)
+	}
+	if err := oldEnv.Rename("hijack"); err == nil || !strings.Contains(err.Error(), "session has ended") {
+		t.Fatalf("oldEnv.Rename = %v, want session has ended", err)
+	}
+	if a.RunningTasks() != 0 || len(a.ActiveSubagents()) != 0 || len(a.Queue().Take()) != 0 || a.CustomTitle() != "" {
+		t.Fatal("old environment mutated new session state")
+	}
+
+	// Logs and notices route to the old session's log; UI notice handler is detached.
+	oldEnv.Log("warn", "late-old-log")
+	oldEnv.Notice("late-old-notice")
+	noticeMu.Lock()
+	gotNotices := len(notices)
+	noticeMu.Unlock()
+	if gotNotices != 0 {
+		t.Fatalf("old notice fired UI handler after session switch: %v", notices)
+	}
+	oldEvents, _ := os.ReadFile(EventsLog(a.Home(), oldID))
+	if !strings.Contains(string(oldEvents), "late-old-log") || !strings.Contains(string(oldEvents), "late-old-notice") {
+		t.Fatalf("old events log missing entries: %q", oldEvents)
+	}
+	newEvents, _ := os.ReadFile(EventsLog(a.Home(), newID))
+	if strings.Contains(string(newEvents), "late-old-log") || strings.Contains(string(newEvents), "late-old-notice") {
+		t.Fatalf("new events log leaked old entries: %q", newEvents)
+	}
+
+	// Old activity does not affect the new session's activity indicator.
+	endOldAct := oldEnv.Begin("old-work", false)
+	if got := a.Activity(); got != "" {
+		t.Fatalf("new session Activity polluted by oldEnv: %q", got)
+	}
+	endOldAct()
+
+	// Closing the runtime (twice) leaves DB calls from oldEnv safe (error, no panic/race).
+	a.Close()
+	a.Close()
+	if err := oldEnv.State().Set("session", "after_close", "1"); err == nil {
+		t.Fatal("expected DB closed error after Runtime.Close")
+	}
+	oldEnv.Log("warn", "after-close-log")
 }

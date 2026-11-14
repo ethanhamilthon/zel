@@ -8,7 +8,7 @@ type providerError struct {
 func (e *providerError) Error() string { return e.text }
 func (e *providerError) Unwrap() error { return e.cause }
 
-func (a *Runtime) safeError(err error) error {
+func (s *session) safeError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -16,5 +16,5 @@ func (a *Runtime) safeError(err error) error {
 		return err
 	}
 	text := err.Error()
-	return &providerError{text: Redact(a.Settings(), text), cause: err}
+	return &providerError{text: Redact(s.Settings(), text), cause: err}
 }

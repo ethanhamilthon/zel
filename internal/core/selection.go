@@ -19,41 +19,49 @@ func AllModels(ctx context.Context, providers map[string]Provider) ([]ModelChoic
 }
 
 func (a *Runtime) SelectSession(ctx context.Context, provider, model, effort string) error {
-	if err := a.ConfigureSession(ctx, provider, model, effort); err != nil {
+	return a.session().SelectSession(ctx, provider, model, effort)
+}
+
+func (s *session) SelectSession(ctx context.Context, provider, model, effort string) error {
+	if err := s.ConfigureSession(ctx, provider, model, effort); err != nil {
 		return err
 	}
-	c := a.cfg
+	c := s.cfg
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := SaveDefault(a.home, c.base, c.sel); err != nil {
+	if err := SaveDefault(s.home, c.base, c.sel); err != nil {
 		return fmt.Errorf("model selected for this session, but the default was not saved: %w", err)
 	}
-	if base, err := LoadConfig(a.home, a.Shell.Dir); err == nil {
-		_ = a.applyLocked(base)
+	if base, err := LoadConfig(s.home, s.dir); err == nil {
+		_ = s.applyLocked(base)
 	}
 	return nil
 }
 
-// ConfigureSession overrides this session without changing saved defaults. Call while idle.
 func (a *Runtime) ConfigureSession(ctx context.Context, provider, model, effort string) error {
+	return a.session().ConfigureSession(ctx, provider, model, effort)
+}
+
+// ConfigureSession overrides this session without changing saved defaults. Call while idle.
+func (s *session) ConfigureSession(ctx context.Context, provider, model, effort string) error {
 	if effort == "" {
 		effort = "medium"
 	}
 	if provider == "" || model == "" {
 		return errors.New("provider and model are required")
 	}
-	c := a.cfg
+	c := s.cfg
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	previous := c.sel
 	c.sel = selection{provider, model, effort}
-	err := a.applyLocked(c.base)
+	err := s.applyLocked(c.base)
 	if err == nil {
-		err = a.db.SelectModel(ctx, a.id, provider, model, effort)
+		err = s.db.SelectModel(ctx, s.id, provider, model, effort)
 	}
 	if err != nil {
 		c.sel = previous
-		_ = a.applyLocked(c.base)
+		_ = s.applyLocked(c.base)
 		return err
 	}
 

@@ -17,7 +17,7 @@ func PromptAt(runes []rune, cursor int) (start, end int, query string, ok bool) 
 
 // promptSnapshot is the current init.lua snapshot, nil when none is loaded.
 func (c *Controller) promptSnapshot() (cfg *luart.Config) {
-	c.view(func() { cfg = c.a.lua.get() })
+	c.view(func() { cfg = c.a.session().lua.get() })
 	return cfg
 }
 
@@ -49,7 +49,7 @@ func (c *Controller) ExpandPrompt(ctx context.Context, text string) (string, err
 
 // ExpandPrompt is the headless variant, for prompts that run outside a controller.
 func (a *Runtime) ExpandPrompt(ctx context.Context, text string) (string, error) {
-	return expandPrompt(ctx, a.lua.get(), text)
+	return expandPrompt(ctx, a.session().lua.get(), text)
 }
 
 // expandPrompt runs the completions of one snapshot within promptTimeout, and no

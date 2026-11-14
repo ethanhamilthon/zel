@@ -4,30 +4,32 @@ import (
 	"slices"
 )
 
-func (a *Runtime) Records() []Record {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
+func (a *Runtime) Records() []Record { return a.session().Records() }
+
+func (s *session) Records() []Record {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
 	var records []Record
-	for seq, item := range a.History {
-		meta := a.itemMeta[seq]
+	for seq, item := range s.History {
+		meta := s.itemMeta[seq]
 		for _, r := range RecordsForItem(item) {
 			if meta != nil {
 				m := *meta
 				if r.Kind == "assistant" {
-					m = a.answerMetadata(seq)
+					m = s.answerMetadata(seq)
 				}
 				r.Meta = &m
 			}
 			records = append(records, r)
 		}
 	}
-	return append(records, a.imageWarnings...)
+	return append(records, s.imageWarnings...)
 }
 
 // answerMetadata derives turn totals without counting a request once per item.
 // Legacy answers already contain turn totals and retain their original metadata.
-func (a *Runtime) answerMetadata(seq int) Metadata {
-	m := *a.itemMeta[seq]
+func (s *session) answerMetadata(seq int) Metadata {
+	m := *s.itemMeta[seq]
 	if m.RequestSeq == 0 {
 		return m
 	}
@@ -35,12 +37,12 @@ func (a *Runtime) answerMetadata(seq int) Metadata {
 	var total Usage
 	known := true
 	for i := m.TurnSeq; i <= seq; i++ {
-		for _, r := range RecordsForItem(a.History[i]) {
+		for _, r := range RecordsForItem(s.History[i]) {
 			if r.Kind == "code" || r.Kind == "reasoning" {
 				m.Steps++
 			}
 		}
-		part := a.itemMeta[i]
+		part := s.itemMeta[i]
 		if part == nil || (part.RequestSeq != 0 && part.RequestSeq != i+1) {
 			continue
 		}
@@ -66,13 +68,15 @@ func (a *Runtime) answerMetadata(seq int) Metadata {
 	return m
 }
 
+func (a *Runtime) SessionUsage() (Usage, int) { return a.session().SessionUsage() }
+
 // SessionUsage sums the token usage of every model request in the history.
 // requests counts the requests that reported usage; Cached is -1 when one omitted it.
-func (a *Runtime) SessionUsage() (total Usage, requests int) {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	for seq, m := range a.itemMeta {
-		if m == nil || m.Usage == nil || seq >= len(a.History) {
+func (s *session) SessionUsage() (total Usage, requests int) {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	for seq, m := range s.itemMeta {
+		if m == nil || m.Usage == nil || seq >= len(s.History) {
 			continue
 		}
 		// One request owns several items; count it once, on its first item.
@@ -80,7 +84,7 @@ func (a *Runtime) SessionUsage() (total Usage, requests int) {
 		if m.RequestSeq != 0 && m.RequestSeq != seq+1 {
 			continue
 		}
-		if m.RequestSeq == 0 && !slices.ContainsFunc(RecordsForItem(a.History[seq]), func(r Record) bool { return r.Kind == "assistant" }) {
+		if m.RequestSeq == 0 && !slices.ContainsFunc(RecordsForItem(s.History[seq]), func(r Record) bool { return r.Kind == "assistant" }) {
 			continue
 		}
 		requests++
@@ -95,11 +99,13 @@ func (a *Runtime) SessionUsage() (total Usage, requests int) {
 	return total, requests
 }
 
+func (a *Runtime) UserMessages() int { return a.session().UserMessages() }
+
 // UserMessages counts the user messages in the history.
-func (a *Runtime) UserMessages() (n int) {
-	a.histMu.RLock()
-	defer a.histMu.RUnlock()
-	for _, item := range a.History {
+func (s *session) UserMessages() (n int) {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
+	for _, item := range s.History {
 		for _, r := range RecordsForItem(item) {
 			if r.Kind == "user" {
 				n++
