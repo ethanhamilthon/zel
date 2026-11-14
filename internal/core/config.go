@@ -7,7 +7,6 @@ type Provider = config.Provider
 type UI = config.UI
 type Layer = config.Layer
 
-const ShellOutput = config.ShellOutput
 const APIResponses = config.APIResponses
 const APIChat = config.APIChat
 

@@ -16,7 +16,6 @@ import (
 // Defaults are the values of zel.defaults; later layers override earlier ones.
 type Defaults struct {
 	Provider, Model, Effort string
-	OutputLimit             int
 }
 
 // Param is one positional parameter of a plugin function.
@@ -74,8 +73,8 @@ var hookEvents = map[string]bool{"session_start": true, "message": true, "before
 var jobFns = []string{"spawn", "run", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
 
 var builtinFns = map[string][]string{
-	"":   {"sh", "sleep", "view"},
-	"fs": {"read", "write", "edit", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
+	"":   {"sh", "sleep", "view", "slice"},
+	"fs": {"read", "write", "edit", "patch", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
 	"json": {"encode", "decode"}, "tasks": jobFns, "agents": jobFns,
 	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename"},
 }
@@ -173,9 +172,6 @@ func (c *Config) Defaults() Defaults {
 		if l.defaults.Effort != "" {
 			d.Effort = l.defaults.Effort
 		}
-		if l.defaults.OutputLimit > 0 {
-			d.OutputLimit = l.defaults.OutputLimit
-		}
 	}
 	return d
 }
@@ -268,13 +264,6 @@ func (c *Config) zelModule(L *lua.LState) int {
 				default:
 					l.defaults.Effort = string(s)
 				}
-			case "output_limit":
-				n, ok := val.(lua.LNumber)
-				if !ok || n <= 0 {
-					err = key + " must be a positive number"
-					return
-				}
-				l.defaults.OutputLimit = int(n)
 			default:
 				err = "unknown key " + key
 			}

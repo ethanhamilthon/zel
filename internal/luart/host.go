@@ -24,9 +24,10 @@ func (v *vm) installHost() {
 	L.SetGlobal("sh", L.NewFunction(v.wrap("sh", v.sh)))
 	L.SetGlobal("sleep", L.NewFunction(v.wrap("sleep", v.sleep)))
 	L.SetGlobal("view", L.NewFunction(v.wrap("view", v.view)))
+	L.SetGlobal("slice", L.NewFunction(v.wrap("slice", slice)))
 	v.table("fs", map[string]lua.LGFunction{
 		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "list": v.fsList, "glob": v.fsGlob,
-		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp,
+		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp, "patch": v.fsPatch,
 	})
 	v.table("web", map[string]lua.LGFunction{"request": v.webRequest, "get": v.webGet, "post": v.webPost})
 	v.table("json", map[string]lua.LGFunction{"encode": v.jsonEncode, "decode": v.jsonDecode})
@@ -210,5 +211,34 @@ func (v *vm) jsonDecode(L *lua.LState) int {
 		raise(L, "json.decode", EINVAL, "%v", err)
 	}
 	L.Push(val)
+	return 1
+}
+
+// slice returns count lines of s starting at line from (1-based). A negative
+// from counts from the end (-10: the last ten lines); without count it runs to
+// the end.
+func slice(L *lua.LState) int {
+	s := L.CheckString(1)
+	from := L.OptInt(2, 1)
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if s == "" {
+		lines = nil
+	}
+	start := from - 1
+	if from < 0 {
+		start = len(lines) + from
+	}
+	start = max(start, 0)
+	if start >= len(lines) {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	end := len(lines)
+	if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
+		if n := L.CheckInt(3); n >= 0 {
+			end = min(end, start+n)
+		}
+	}
+	L.Push(lua.LString(strings.Join(lines[start:end], "\n")))
 	return 1
 }

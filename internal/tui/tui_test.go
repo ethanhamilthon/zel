@@ -1263,10 +1263,10 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	m.openSettingForm(0)
 	m.menu.form.input.SetValue("4096")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.menu.page != menuSettings || m.ctl.Settings().ShellOutput != 4096 {
-		t.Fatal("output preference not saved")
+	if m.menu.page != menuSettings || m.ctl.Settings().CompactionThreshold != 4096 {
+		t.Fatal("compaction preference not saved")
 	}
-	m.openSettingForm(1)
+	m.openSettingForm(0)
 	m.menu.form.input.SetValue("-1")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuForm || m.menu.form.err == "" {
@@ -1328,7 +1328,7 @@ func TestSingleAccent(t *testing.T) {
 func TestAccentChoiceFromSettings(t *testing.T) {
 	defer applyTheme("")
 	m := bareModel(t, t.TempDir())
-	m.menu = &menuState{page: menuSettings, selected: 4}
+	m.menu = &menuState{page: menuSettings, selected: 3}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuAccent || len(m.menuRows()) < 15 || m.menuRows()[0].detail != "current" {
 		t.Fatalf("accent page not opened: %v %v", m.menu.page, m.menuRows())
@@ -1338,8 +1338,8 @@ func TestAccentChoiceFromSettings(t *testing.T) {
 	if m.ctl.Settings().UI.Accent != "#80b3ad" || string(inputBlue) != "#80b3ad" || m.menu.page != menuSettings {
 		t.Fatalf("accent not applied: %q %q %v", m.ctl.Settings().UI.Accent, inputBlue, m.menu.page)
 	}
-	if rows := m.menuRows(); rows[4].detail != "Teal" {
-		t.Fatalf("settings row = %v", rows[4])
+	if rows := m.menuRows(); rows[3].detail != "Teal" {
+		t.Fatalf("settings row = %v", rows[3])
 	}
 }
 
@@ -2246,7 +2246,7 @@ func TestSlashMenu(t *testing.T) {
 		})
 	}
 	m := bareModel(t, "/project")
-	m.menu = &menuState{page: menuSettings, selected: 3}
+	m.menu = &menuState{page: menuSettings, selected: 2}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.ctl.Settings().UI.SlashMenu {
 		t.Fatal("setting not disabled")

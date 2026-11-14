@@ -99,9 +99,7 @@ func (a *Runtime) notify(msg string) {
 
 // runLua executes one lua tool call.
 func (a *Runtime) runLua(ctx context.Context, code string) luart.Result {
-	s := a.Settings()
-	runner := &luart.Runner{Env: luaEnv{a}, Cfg: a.lua.get(),
-		OutputLimit: s.ShellOutput}
+	runner := &luart.Runner{Env: luaEnv{a}, Cfg: a.lua.get()}
 	return runner.Run(ctx, code)
 }
 

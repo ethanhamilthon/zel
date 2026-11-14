@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	ShellOutput = 8192
 	// CompactionThreshold is the default context size, in tokens, that triggers
 	// automatic compaction; zero disables it.
 	CompactionThreshold = 400000
@@ -40,14 +39,13 @@ type Settings struct {
 	DBPath                  string `json:"-"`
 	Provider, Model, Effort string
 	ReasoningSummary        bool
-	ShellOutput             int
 	CompactionThreshold     int
 	UI                      UI
 	Providers               map[string]Provider
 }
 
 func DefaultSettings() Settings {
-	return Settings{Effort: "medium", ReasoningSummary: true, ShellOutput: ShellOutput, CompactionThreshold: CompactionThreshold,
+	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold,
 		UI: UI{SlashMenu: true}, Providers: map[string]Provider{}}
 }
 
@@ -75,9 +73,6 @@ func (s Settings) SetupHint() string {
 }
 
 func Validate(s Settings) error {
-	if s.ShellOutput < 0 {
-		return fmt.Errorf("shell_output must be >= 0 bytes (0 = no truncation)")
-	}
 	if s.CompactionThreshold < 0 {
 		return fmt.Errorf("compaction threshold must be >= 0 tokens (0 = off)")
 	}

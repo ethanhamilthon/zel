@@ -12,14 +12,15 @@ import (
 
 // BuiltinPrompt is the fixed part of the system prompt: the Lua tool and the host API.
 const BuiltinPrompt = `# Lua
-One tool: lua (raw Lua). Each call has a fixed 10 s timeout that cannot be changed: run long work with tasks.spawn/agents.spawn and check it in later calls. Fresh env per call; only state.* persists. Output = print() + return (JSON), 8 KB head/tail: filter in Lua.
+One tool: lua (raw Lua). Each call has a fixed 10 s timeout that cannot be changed: run long work with tasks.spawn/agents.spawn and check it in later calls. Fresh env per call; only state.* persists. Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = fs.read("bigfile.md"); print(slice(a, 100, 10)).
 Errors raise "fn: CODE: msg" (pcall); sh/web/tasks.run/agents.run return ok=false instead. Everything blocks.
 spawn returns a job id (string); unwaited results arrive later as <task-result>/<agent-result>.
 ## built-in
 sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check
-fs.read(path, o?) -> string  -- o: from,lines
+fs.read(path) -> string; slice(s, from, count?) -> string  -- lines from..from+count-1; from<0 counts from the end
 fs.write(path, s, o?)  -- o: append
 fs.edit(path, old, new, o?) -> n  -- exact match; o: all
+fs.patch(path, {{old, new}, ...}) -> n  -- several exact edits, all or nothing; an edit may set all=true
 fs.list(dir) -> {name,dir,size}[]; fs.glob(pat) -> string[]; fs.exists(path) -> bool,kind; fs.tmp(name?) -> path
 fs.grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
 web.get(url, o?) / web.post(url, o?) / web.request{url,method,headers,body,json,timeout} -> {ok,status,headers,body,error}

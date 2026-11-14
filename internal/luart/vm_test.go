@@ -36,8 +36,16 @@ func TestFreshEnvPerCall(t *testing.T) {
 func TestOutputBudget(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `print(string.rep("a", 20000))`)
-	if len(r.Output) > DefaultOutputLimit+200 || !strings.Contains(r.Output, "output truncated") {
+	if len(r.Output) != 20000 {
+		t.Fatalf("small output truncated: len %d", len(r.Output))
+	}
+	r = run(t, env, nil, `return string.rep("a", 2 * 1024 * 1024)`)
+	if len(r.Output) > maxOutput+200 || !strings.Contains(r.Output, "output truncated") {
 		t.Fatalf("len %d", len(r.Output))
+	}
+	r = run(t, env, nil, `local s = "1\n2\n3\n4\n5\n"; return slice(s, 2, 2) .. "|" .. slice(s, -2) .. "|" .. slice(s, 9)`)
+	if r.Output != "2\n3|4\n5|" {
+		t.Fatalf("slice: %q", r.Output)
 	}
 }
 
@@ -111,7 +119,7 @@ func TestFS(t *testing.T) {
 fs.write("a/b.txt", "one\ntwo\nthree\n")
 fs.write("a/b.txt", "four\n", {append=true})
 local out = {}
-out[#out+1] = fs.read("a/b.txt", {from=2, lines=2})
+out[#out+1] = slice(fs.read("a/b.txt"), 2, 2) .. "\n"
 out[#out+1] = fs.edit("a/b.txt", "two", "2")
 out[#out+1] = select(2, fs.exists("a")) .. select(2, fs.exists("a/b.txt"))
 local ok, e = pcall(fs.edit, "a/b.txt", "zzz", "x"); out[#out+1] = e
@@ -121,17 +129,22 @@ out[#out+1] = fs.edit("a/c.txt", "x", "y", {all=true})
 ok, e = pcall(fs.read, "nope"); out[#out+1] = e
 out[#out+1] = json.encode(fs.glob("a/*.txt"))
 out[#out+1] = json.encode(fs.list("a"))
+out[#out+1] = fs.patch("a/c.txt", {{"y y", "z"}, {old = "z", new = "patched"}})
+ok, e = pcall(fs.patch, "a/c.txt", {{"patched", "q"}, {"missing", "w"}}); out[#out+1] = e
 return out`)
 	if r.IsError {
 		t.Fatal(r.Output)
 	}
-	for _, want := range []string{`two\nthree\n`, `dirfile`, `fs.edit: ENOMATCH`, `fs.edit: EAMBIG`, `fs.read: ENOENT: nope`, `[\"a/b.txt\",\"a/c.txt\"]`, `\"name\":\"b.txt\"`} {
+	for _, want := range []string{`two\nthree\n`, `dirfile`, `fs.edit: ENOMATCH`, `fs.edit: EAMBIG`, `fs.read: ENOENT: nope`, `[\"a/b.txt\",\"a/c.txt\"]`, `\"name\":\"b.txt\"`, `fs.patch: ENOMATCH: edit #2`} {
 		if !strings.Contains(r.Output, want) {
 			t.Errorf("missing %q in %s", want, r.Output)
 		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(env.cwd, "a/b.txt")); string(data) != "one\n2\nthree\nfour\n" {
 		t.Errorf("file %q", data)
+	}
+	if data, _ := os.ReadFile(filepath.Join(env.cwd, "a/c.txt")); string(data) != "patched" {
+		t.Errorf("patched file %q", data)
 	}
 }
 

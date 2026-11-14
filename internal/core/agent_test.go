@@ -721,7 +721,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	write("v2")
 	home, _ := ZelHome(h.dir)
 	settings := h.ctl.Settings()
-	settings.ShellOutput = 4242
+	settings.CompactionThreshold = 4242
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +729,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	if !h.ctl.Status().Busy {
 		t.Fatal("reload interrupted the running turn")
 	}
-	if got := h.ctl.Settings().ShellOutput; got == 4242 {
+	if got := h.ctl.Settings().CompactionThreshold; got == 4242 {
 		t.Fatalf("config change applied mid-turn: got %d", got)
 	}
 	info, err := h.ctl.Info()

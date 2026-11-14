@@ -13,8 +13,9 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// DefaultOutputLimit is the default output budget of one call.
-const DefaultOutputLimit = 8192
+// maxOutput is the safety cap of one call's output. The model is expected to
+// filter and slice in Lua; the cap only protects memory and the context.
+const maxOutput = 1 << 20
 
 // callTimeout is the hard, non-configurable deadline of every Lua invocation,
 // including the blocking host calls made from it. It is a variable only so
@@ -68,25 +69,13 @@ type Result struct {
 
 // Runner executes tool calls.
 type Runner struct {
-	Env         Env
-	Cfg         *Config // optional: plugins and hooks
-	OutputLimit int     // default output budget in bytes (zero: DefaultOutputLimit)
+	Env Env
+	Cfg *Config // optional: plugins and hooks
 }
 
 // Run executes one tool call in a fresh Lua state.
 func (r *Runner) Run(ctx context.Context, input string) Result {
 	call := Call{Code: input}
-	defaults := Defaults{}
-	if r.Cfg != nil {
-		defaults = r.Cfg.Defaults()
-	}
-	limit := DefaultOutputLimit
-	if r.OutputLimit > 0 {
-		limit = r.OutputLimit
-	}
-	if defaults.OutputLimit > 0 {
-		limit = defaults.OutputLimit
-	}
 	if r.Cfg != nil {
 		args, deny := r.Cfg.BeforeCall(ctx, "lua", []any{call.Code})
 		if deny != "" {
@@ -99,7 +88,7 @@ func (r *Runner) Run(ctx context.Context, input string) Result {
 		}
 	}
 	started := time.Now()
-	res := r.run(ctx, call, limit)
+	res := r.run(ctx, call)
 	if r.Cfg != nil {
 		var callErr string
 		if res.IsError {
@@ -107,14 +96,14 @@ func (r *Runner) Run(ctx context.Context, input string) Result {
 		}
 		if out, ok := r.Cfg.AfterCall(ctx, "lua", []any{call.Code}, res.Output, callErr, time.Since(started)); ok {
 			if text, isText := out.(string); isText {
-				res.Output = truncate(text, limit)
+				res.Output = truncate(text, maxOutput)
 			}
 		}
 	}
 	return res
 }
 
-func (r *Runner) run(parent context.Context, call Call, limit int) Result {
+func (r *Runner) run(parent context.Context, call Call) Result {
 	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
 	v := newVM(r.Env, r.Cfg, false)
@@ -141,7 +130,7 @@ func (r *Runner) run(parent context.Context, call Call, limit int) Result {
 		if trace := traceback(err); trace != "" {
 			text += "\n" + trace
 		}
-		return Result{Output: truncate(text, limit), IsError: true}
+		return Result{Output: truncate(text, maxOutput), IsError: true}
 	}
 	var parts []string
 	if s := strings.TrimRight(v.out.String(), "\n"); s != "" {
@@ -150,7 +139,7 @@ func (r *Runner) run(parent context.Context, call Call, limit int) Result {
 	for i := 1; i <= v.L.GetTop(); i++ {
 		parts = append(parts, renderValue(v.L.Get(i)))
 	}
-	return Result{Output: truncate(strings.Join(parts, "\n"), limit)}
+	return Result{Output: truncate(strings.Join(parts, "\n"), maxOutput)}
 }
 
 func (v *vm) print(L *lua.LState) int {
@@ -222,7 +211,7 @@ func truncate(s string, limit int) string {
 	}
 	half := limit / 2
 	head, tail := strings.ToValidUTF8(s[:half], ""), strings.ToValidUTF8(s[len(s)-(limit-half):], "")
-	return head + fmt.Sprintf("\n[output truncated: %d of %d bytes omitted (limit %d); filter in Lua]\n", len(s)-len(head)-len(tail), len(s), limit) + tail
+	return head + fmt.Sprintf("\n[output truncated: %d of %d bytes omitted (safety cap %d bytes); filter or slice in Lua]\n", len(s)-len(head)-len(tail), len(s), limit) + tail
 }
 
 // resolve makes p absolute against the session directory and expands "~/".

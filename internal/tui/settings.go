@@ -48,9 +48,7 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
-	labels := []string{"Output limit in bytes (0 = unlimited)", "Auto compaction threshold in tokens (0 = off)"}
-	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.CompactionThreshold)}
-	m.startForm(&formState{kind: "setting", setting: index, fields: []string{labels[index]}, values: []string{values[index]}})
+	m.startForm(&formState{kind: "setting", setting: index, fields: []string{"Auto compaction threshold in tokens (0 = off)"}, values: []string{strconv.Itoa(s.CompactionThreshold)}})
 }
 func (m *model) openManualModel() {
 	names := slices.Sorted(maps.Keys(m.ctl.Settings().Providers))
@@ -163,12 +161,7 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 			f.err = "Enter a whole number"
 			return m, nil
 		}
-		switch f.setting {
-		case 0:
-			s.ShellOutput = n
-		default:
-			s.CompactionThreshold = n
-		}
+		s.CompactionThreshold = n
 	case "model":
 		if _, ok := s.Providers[f.values[0]]; !ok {
 			f.step = 0

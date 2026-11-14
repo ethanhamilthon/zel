@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -29,7 +30,6 @@ func (v *vm) fsErr(L *lua.LState, fn, path string, err error) {
 
 func (v *vm) fsRead(L *lua.LState) int {
 	path := L.CheckString(1)
-	o := opts(L, 2)
 	abs := v.resolve(path)
 	info, err := os.Stat(abs)
 	if err != nil {
@@ -38,33 +38,12 @@ func (v *vm) fsRead(L *lua.LState) int {
 	if info.IsDir() {
 		raise(L, "fs.read", EFAIL, "%s is a directory", path)
 	}
-	from, hasFrom := optNumber(o, "from")
-	count, hasLines := optNumber(o, "lines")
-	if !hasFrom && !hasLines && info.Size() > maxReadBytes {
-		raise(L, "fs.read", ELIMIT, "%s is %d bytes; read it in parts with {from=, lines=}", path, info.Size())
+	if info.Size() > maxReadBytes {
+		raise(L, "fs.read", ELIMIT, "%s is %d bytes, over the %d MiB safety cap; use sh (head, sed -n) for parts", path, info.Size(), maxReadBytes>>20)
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		v.fsErr(L, "fs.read", path, err)
-	}
-	if hasFrom || hasLines {
-		start := 1
-		if hasFrom {
-			start = max(int(from), 1)
-		}
-		lines := strings.SplitAfter(string(data), "\n")
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		if start > len(lines) {
-			lines = nil
-		} else {
-			lines = lines[start-1:]
-		}
-		if hasLines && int(count) >= 0 && int(count) < len(lines) {
-			lines = lines[:int(count)]
-		}
-		data = []byte(strings.Join(lines, ""))
 	}
 	L.Push(lua.LString(string(data)))
 	return 1
@@ -101,29 +80,81 @@ func (v *vm) fsWrite(L *lua.LState) int {
 func (v *vm) fsEdit(L *lua.LState) int {
 	path, old, repl := L.CheckString(1), L.CheckString(2), L.CheckString(3)
 	all := optBool(opts(L, 4), "all")
-	if old == "" {
-		raise(L, "fs.edit", EINVAL, "old text is empty")
+	abs, text := v.readForEdit(L, "fs.edit", path)
+	text, n := replaceOnce(L, "fs.edit", path, "", text, old, repl, all)
+	v.writeEdited(L, "fs.edit", path, abs, text)
+	L.Push(lua.LNumber(n))
+	return 1
+}
+
+// fsPatch applies a list of exact {old, new} edits to one file atomically:
+// every edit must match, otherwise the file stays untouched.
+func (v *vm) fsPatch(L *lua.LState) int {
+	path := L.CheckString(1)
+	edits := L.CheckTable(2)
+	if edits.Len() == 0 {
+		raise(L, "fs.patch", EINVAL, "no edits")
 	}
-	abs := v.resolve(path)
+	abs, text := v.readForEdit(L, "fs.patch", path)
+	total := 0
+	for i := 1; i <= edits.Len(); i++ {
+		e, ok := edits.RawGetInt(i).(*lua.LTable)
+		if !ok {
+			raise(L, "fs.patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
+		}
+		old, okOld := optString(e, "old")
+		repl, okNew := optString(e, "new")
+		if !okOld {
+			old, okOld = lua.LVAsString(e.RawGetInt(1)), e.RawGetInt(1).Type() == lua.LTString
+		}
+		if !okNew {
+			repl, okNew = lua.LVAsString(e.RawGetInt(2)), e.RawGetInt(2).Type() == lua.LTString
+		}
+		if !okOld || !okNew {
+			raise(L, "fs.patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
+		}
+		var n int
+		text, n = replaceOnce(L, "fs.patch", path, fmt.Sprintf("edit #%d: ", i), text, old, repl, optBool(e, "all"))
+		total += n
+	}
+	v.writeEdited(L, "fs.patch", path, abs, text)
+	L.Push(lua.LNumber(total))
+	return 1
+}
+
+func (v *vm) readForEdit(L *lua.LState, fn, path string) (abs, text string) {
+	abs = v.resolve(path)
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		v.fsErr(L, "fs.edit", path, err)
+		v.fsErr(L, fn, path, err)
 	}
-	text := string(data)
+	return abs, string(data)
+}
+
+func (v *vm) writeEdited(L *lua.LState, fn, path, abs, text string) {
+	info, err := os.Stat(abs)
+	if err != nil {
+		v.fsErr(L, fn, path, err)
+	}
+	if err := os.WriteFile(abs, []byte(text), info.Mode().Perm()); err != nil {
+		v.fsErr(L, fn, path, err)
+	}
+}
+
+// replaceOnce replaces old with repl in text; old must match exactly once
+// unless all is set.
+func replaceOnce(L *lua.LState, fn, path, prefix, text, old, repl string, all bool) (string, int) {
+	if old == "" {
+		raise(L, fn, EINVAL, "%sold text is empty", prefix)
+	}
 	n := strings.Count(text, old)
 	switch {
 	case n == 0:
-		raise(L, "fs.edit", ENOMATCH, "no match for the old text in %s", path)
+		raise(L, fn, ENOMATCH, "%sno match for the old text in %s", prefix, path)
 	case n > 1 && !all:
-		raise(L, "fs.edit", EAMBIG, "%d matches in %s; add context or pass {all=true}", n, path)
+		raise(L, fn, EAMBIG, "%s%d matches in %s; add context or pass all=true", prefix, n, path)
 	}
-	text = strings.ReplaceAll(text, old, repl)
-	info, _ := os.Stat(abs)
-	if err := os.WriteFile(abs, []byte(text), info.Mode().Perm()); err != nil {
-		v.fsErr(L, "fs.edit", path, err)
-	}
-	L.Push(lua.LNumber(n))
-	return 1
+	return strings.ReplaceAll(text, old, repl), n
 }
 
 func (v *vm) fsList(L *lua.LState) int {
