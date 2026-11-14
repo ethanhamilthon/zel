@@ -671,9 +671,11 @@ func (c *Config) SessionStart(ctx context.Context) string {
 	return c.collect(ctx, "session_start", map[string]any{})
 }
 
-// SessionEndTimeout is the budget of one session's shutdown. Running subagents are
-// cancelled first, their end hooks run next, and session_end runs last with what is
-// left, so leaving a session takes at most this long.
+// SessionEndTimeout is the lifecycle budget for stopping jobs and running end hooks
+// during session shutdown. Running subagents are cancelled first, their end hooks
+// run next, and session_end runs last with what is left. It does not bound DB or
+// config preparation/saving before shutdown, so NewSession, Resume, or save-on-quit
+// can exceed this duration under contention.
 const SessionEndTimeout = 5 * time.Second
 
 // SessionEnd runs the session_end hooks when the session is left (reason:

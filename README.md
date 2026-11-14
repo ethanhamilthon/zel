@@ -124,12 +124,16 @@ cwd, depth}`. `subagent_end` is delivered once per started subagent, after the
 subagent's result is published, with `{id, status, ok, answer, error, session,
 model, effort, ms}`; `status` is `done`, `failed`, `stopped` or `timeout`. A
 subagent keeps the init.lua snapshot that started it, so its end hook still runs
-there after a Reload. Leaving a session (quit, new or resume) has one shared
-budget of 5 s: running subagents are cancelled first, their end hooks run next,
-and `session_end` runs last with what is left. Normal and cooperative shutdown
-run each hook once; a hook that does not finish within the budget is cut short
-or skipped, and that is logged in Tracing. Neither subagent hook returns text to
-the agent: keep the data in `state` or raise a `log.notice`.
+there after a Reload. Lifecycle job and hook shutdown when leaving a session (quit, new or resume)
+shares one 5 s budget: running subagents are cancelled first, their end hooks
+run next, and `session_end` runs last with what is left. Normal and
+cooperative shutdown run each hook once; a hook that does not finish within the
+budget is cut short or skipped, and that is logged in Tracing. This budget
+applies only to lifecycle job/hook shutdown—not database or config
+preparation/saving before shutdown (or `session_start` after switching)—so
+contention can extend `NewSession`, `Resume`, or save-on-quit past 5 s. Neither
+subagent hook returns text to the agent: keep the data in `state` or raise a
+`log.notice`.
 
 Prompt completions: `zel.complete("plan", function() return "..." end)` registers
 `#plan`. Typing `#` in the composer lists the registered names; Tab or Enter

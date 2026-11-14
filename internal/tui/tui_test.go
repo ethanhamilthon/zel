@@ -2831,7 +2831,7 @@ require("zel").complete("boom", function() error("broken") end)`
 		t.Fatalf("composer changed during expansion: %q", m.input.Value())
 	}
 	next, _ = m.Update(cmd())
-	m = settle(next.(model))
+	m = awaitIdle(t, next.(model))
 	if m.promptPending != 0 || m.input.Value() != "" {
 		t.Fatalf("expanded message must be taken: pending=%d composer=%q", m.promptPending, m.input.Value())
 	}
