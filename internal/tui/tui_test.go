@@ -2715,3 +2715,18 @@ func TestTimelineSegmentsMatchReference(t *testing.T) {
 		})
 	}
 }
+
+func TestHighlightLuaWrapsAndKeepsText(t *testing.T) {
+	lines, ok := highlightLua("local x = \"abcdefgh\" -- note\n\tprint(x)\n", 10)
+	if !ok {
+		t.Fatal("lua lexer missing")
+	}
+	var plain []string
+	for _, l := range lines {
+		plain = append(plain, ansi.Strip(l))
+	}
+	want := []string{"local x = ", "\"abcdefgh\"", " -- note", "    print(", "x)"}
+	if strings.Join(plain, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", plain)
+	}
+}

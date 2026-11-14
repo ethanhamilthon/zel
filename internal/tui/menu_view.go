@@ -273,6 +273,11 @@ func (m model) textBody(w int) []string {
 
 func (m model) traceViewLines(text, kind string, width int) []string {
 	color := traceColor(kind)
+	if (kind == "lua" || kind == "code") && len(text) <= maxMarkdownBytes {
+		if lines, ok := highlightLua(text, max(1, width-2)); ok {
+			return lines
+		}
+	}
 	if (kind == "system" || kind == "user" || kind == "assistant" || kind == "agent") && len(text) <= maxMarkdownBytes {
 		if rendered, ok := renderTraceMarkdown(text, max(1, width-2), color); ok {
 			return strings.Split(strings.TrimRight(rendered, "\n"), "\n")
