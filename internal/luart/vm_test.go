@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -339,4 +340,110 @@ func TestBuiltinPromptLifecycleByDepth(t *testing.T) {
 	if !strings.Contains(sub, "agents.* is not available") {
 		t.Fatalf("subagent prompt lost the agents restriction: %q", sub[max(0, len(sub)-200):])
 	}
+}
+
+// mkfifo makes a named pipe for the tests of special files.
+func mkfifo(t *testing.T, path string) string {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// releasePipe gives a reader blocked on the named pipe its writer, then closes it.
+// It must run on its own goroutine: the open waits for the reader to arrive.
+func releasePipe(path string) {
+	if w, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		w.Close()
+	}
+}
+
+// awaitFreed waits until the Lua state of v is closed. A state is only closed by
+// the last call that runs in it, so this proves the VM was not freed under a call.
+func awaitFreed(t *testing.T, v *vm) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		v.mu.Lock()
+		freed := v.freed
+		v.mu.Unlock()
+		if freed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the VM was never freed after its call returned")
+		}
+	}
+}
+
+// Named pipes and other special files are refused by the file functions: opening or
+// reading one would wait for a peer that never comes, so the call fails at once.
+func TestSpecialFilesAreRefusedNotWaitedFor(t *testing.T) {
+	env := newEnv(t)
+	mkfifo(t, filepath.Join(env.cwd, "pipe"))
+	for _, code := range []string{
+		`return fs.read("pipe")`,
+		`return fs.list("pipe")`,
+		`return fs.write("pipe", "x")`,
+		`return fs.edit("pipe", "a", "b")`,
+		`return fs.patch("pipe", {{"a", "b"}})`,
+		`return fs.grep("x", {path = "pipe"})`,
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		start := time.Now()
+		res := (&Runner{Env: env}).Run(ctx, code)
+		cancel()
+		if !res.IsError || !strings.Contains(res.Output, "not a regular file") || time.Since(start) > 2*time.Second {
+			t.Errorf("%s: %q after %s", code, res.Output, time.Since(start))
+		}
+	}
+}
+
+// A call whose host operation never returns still ends at its deadline. Run
+// returns, the VM is dropped so the next call starts clean, and the VM is freed
+// once the blocked Lua returns.
+func TestStuckCallReturnsAtDeadlineAndVMIsFreedLater(t *testing.T) {
+	env := newEnv(t)
+	fifo := mkfifo(t, filepath.Join(env.cwd, "stuck"))
+	oldTimeout, oldGrace := callTimeout, abandonGrace
+	callTimeout, abandonGrace = 300*time.Millisecond, 50*time.Millisecond
+	defer func() { callTimeout, abandonGrace = oldTimeout, oldGrace }()
+	main := &Runner{Env: env}
+	defer main.Close()
+	main.Run(context.Background(), "x = 1")
+	parked := main.v
+	start := time.Now()
+	r := main.Run(context.Background(), `return io.open("`+fifo+`", "r"):read("a")`)
+	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) || time.Since(start) > 5*time.Second {
+		t.Fatalf("stuck call: %q after %s", r.Output, time.Since(start))
+	}
+	if out := main.Run(context.Background(), "return tostring(x)").Output; !strings.Contains(out, "timeout: globals and functions from earlier calls are gone]\nnil") {
+		t.Fatalf("after a stuck call: %q", out)
+	}
+	go releasePipe(fifo)
+	awaitFreed(t, parked)
+}
+
+// Cancelling a call that stays stuck returns at once as well.
+func TestStuckCallCancelReturnsPromptly(t *testing.T) {
+	env := newEnv(t)
+	fifo := mkfifo(t, filepath.Join(env.cwd, "stuck"))
+	oldGrace := abandonGrace
+	abandonGrace = 50 * time.Millisecond
+	defer func() { abandonGrace = oldGrace }()
+	main := &Runner{Env: env}
+	defer main.Close()
+	main.Run(context.Background(), "x = 1")
+	parked := main.v
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	r := main.Run(ctx, `return io.open("`+fifo+`", "r"):read("a")`)
+	if took := time.Since(start); !r.IsError || !strings.Contains(r.Output, ECANCELED) || took > 3*time.Second {
+		t.Fatalf("cancelled stuck call: %q after %s", r.Output, took)
+	}
+	// Reset of a VM whose call is still blocked does not wait either.
+	main.Reset("test")
+	go releasePipe(fifo)
+	awaitFreed(t, parked)
 }

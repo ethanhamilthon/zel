@@ -110,18 +110,37 @@ func LoadConfig(env Env, sources []Source) *Config {
 	c.v = newVM(env, c, roleConfig)
 	c.v.L.PreloadModule("zel", c.zelModule)
 	for _, src := range sources {
-		c.loadLayer(src)
+		if err := c.loadLayer(src); err != nil {
+			msg := fmt.Sprintf("%s skipped: it did not finish within 30 s, so the layers after it are skipped too", src.Path)
+			c.LoadErrs = append(c.LoadErrs, msg)
+			c.env.Notice(msg)
+			break
+		}
 	}
 	return c
 }
 
-// Close frees the config vm. Calls still running end at once, because their
-// contexts end with the snapshot; then the vm is freed. A closed snapshot runs
-// no more hooks or functions. Close is idempotent.
+// Close frees the config VM. It never waits for a call: the calls still running end
+// with the snapshot's shutdown context, and the VM is freed by the last of them to
+// leave, or at once when none runs. A closed snapshot runs no hooks or functions.
+// Close is idempotent.
 func (c *Config) Close() {
 	c.stop()
-	c.lock()
-	defer c.unlock()
+	select {
+	case c.sem <- struct{}{}:
+		c.free()
+		c.unlock()
+	default:
+		go func() {
+			c.lock()
+			c.free()
+			c.unlock()
+		}()
+	}
+}
+
+// free closes the VM; the caller holds the lock.
+func (c *Config) free() {
 	if !c.closed {
 		c.closed = true
 		c.v.close()
@@ -131,8 +150,8 @@ func (c *Config) Close() {
 func (c *Config) lock()   { c.sem <- struct{}{} }
 func (c *Config) unlock() { <-c.sem }
 
-// lockCtx takes the config vm unless ctx ends first, so a caller waiting behind a
-// long hook gives up with its budget. A closed snapshot fails with errClosed.
+// lockCtx takes the config VM unless ctx ends first, so a caller waiting behind a
+// long call gives up with its own budget. A closed snapshot fails with errClosed.
 func (c *Config) lockCtx(ctx context.Context) error {
 	if c.shutdown.Err() != nil {
 		return errClosed
@@ -142,7 +161,39 @@ func (c *Config) lockCtx(ctx context.Context) error {
 	}
 	select {
 	case c.sem <- struct{}{}:
+		if c.shutdown.Err() != nil || c.closed {
+			c.unlock()
+			return errClosed
+		}
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// run executes fn, which uses the config VM, on a goroutine that holds the VM lock
+// until fn returns. fn gets a context that ends with ctx, with the snapshot's
+// shutdown, and when run returns. run waits for fn or for ctx, whichever ends first,
+// so no caller is held past its own deadline. When ctx ends first, the context of
+// fn is cancelled: cooperative Lua stops at its next instruction, and a host call
+// that never returns holds only that goroutine, with the lock, until it does. The
+// VM is then freed by the last call to leave it. run returns fn's error when fn
+// completed, and the context's error otherwise. fn's results may be read only when
+// run returned nil.
+func (c *Config) run(ctx context.Context, fn func(ctx context.Context) error) error {
+	ctx, done := c.scope(ctx)
+	defer done()
+	if err := c.lockCtx(ctx); err != nil {
+		return err
+	}
+	finished := make(chan error, 1)
+	go func() {
+		defer c.unlock()
+		finished <- fn(ctx)
+	}()
+	select {
+	case err := <-finished:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -159,33 +210,42 @@ func (c *Config) scope(ctx context.Context) (context.Context, context.CancelFunc
 // errClosed is what calls into a snapshot that was reloaded away return.
 var errClosed = errors.New("init.lua was reloaded")
 
-func (c *Config) loadLayer(src Source) {
+// loadLayer runs one init.lua file in the config VM. A layer that fails to load is
+// skipped with a notice. An error return means the file did not finish within its
+// 30 s: the VM is still held by it, so the caller stops loading layers.
+func (c *Config) loadLayer(src Source) error {
 	if _, err := os.Stat(src.Path); err != nil {
-		return
+		return nil
 	}
-	c.lock()
-	defer c.unlock()
 	layer := &Layer{Name: src.Name, Path: src.Path, Dir: filepath.Dir(filepath.Dir(src.Path))}
 	if filepath.Base(filepath.Dir(src.Path)) != ".zel" {
 		layer.Dir = filepath.Dir(src.Path)
 	}
-	c.loading = layer
-	defer func() { c.loading = nil }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c.v.ctx = ctx
-	c.v.L.SetContext(ctx)
-	defer c.v.L.RemoveContext()
-	fn, err := c.v.L.LoadFile(src.Path)
-	if err == nil {
-		c.v.L.Push(fn)
-		err = c.v.L.PCall(0, 0, nil)
-	}
+	var loadErr error
+	err := c.run(ctx, func(ctx context.Context) error {
+		c.loading = layer
+		defer func() { c.loading = nil }()
+		c.v.ctx = ctx
+		c.v.L.SetContext(ctx)
+		defer c.v.L.RemoveContext()
+		fn, err := c.v.L.LoadFile(src.Path)
+		if err == nil {
+			c.v.L.Push(fn)
+			err = c.v.L.PCall(0, 0, nil)
+		}
+		loadErr = err
+		return nil
+	})
 	if err != nil {
-		msg := fmt.Sprintf("%s skipped: %s", src.Path, errorMessage(err))
+		return err
+	}
+	if loadErr != nil {
+		msg := fmt.Sprintf("%s skipped: %s", src.Path, errorMessage(loadErr))
 		c.LoadErrs = append(c.LoadErrs, msg)
 		c.env.Notice(msg)
-		return
+		return nil
 	}
 	c.layers = append(c.layers, layer)
 	for _, f := range layer.fns {
@@ -203,14 +263,16 @@ func (c *Config) loadLayer(src Source) {
 	for _, h := range layer.hooks {
 		c.hooks[h.event] = append(c.hooks[h.event], h)
 	}
-	c.installFns(c.v)
+	return c.run(ctx, func(ctx context.Context) error {
+		c.installFns(c.v)
+		return nil
+	})
 }
 
-// Defaults merges zel.defaults of all layers.
+// Defaults merges zel.defaults of all layers. The layers are final once LoadConfig
+// returns, so reading them needs no lock and never waits behind a call.
 func (c *Config) Defaults() Defaults {
 	var d Defaults
-	c.lock()
-	defer c.unlock()
 	for _, l := range c.layers {
 		if l.defaults.Provider != "" {
 			d.Provider = l.defaults.Provider
@@ -227,8 +289,6 @@ func (c *Config) Defaults() Defaults {
 
 // Fns lists the effective (merged) plugin functions in layer order.
 func (c *Config) Fns() []*FnDef {
-	c.lock()
-	defer c.unlock()
 	var out []*FnDef
 	for _, l := range c.layers {
 		for _, f := range l.fns {
@@ -271,7 +331,7 @@ func (c *Config) zelModule(L *lua.LState) int {
 			} else if !filepath.IsAbs(path) {
 				path = filepath.Join(l.Dir, path)
 			}
-			data, err := os.ReadFile(path)
+			data, err := readPlain(path)
 			if err != nil {
 				c.env.Notice("zel.instructions: cannot read " + path)
 				return 0
@@ -479,30 +539,30 @@ func (c *Config) call(v *vm, def *FnDef, L *lua.LState) int {
 var errCodeRe = regexp.MustCompile(`^[\w.:]+: E[A-Z]+: `)
 
 func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error) {
-	ctx, done := c.scope(ctx)
-	defer done()
-	if err := c.lockCtx(ctx); err != nil {
+	var out struct{ res any }
+	err := c.run(ctx, func(ctx context.Context) error {
+		L := c.v.L
+		prev := c.v.ctx
+		c.v.ctx = ctx
+		L.SetContext(ctx)
+		defer func() { c.v.ctx = prev; L.RemoveContext() }()
+		luaArgs := make([]lua.LValue, len(args))
+		for i, a := range args {
+			luaArgs[i] = toLua(L, a)
+		}
+		if err := L.CallByParam(lua.P{Fn: def.run, NRet: 1, Protect: true}, luaArgs...); err != nil {
+			return err
+		}
+		res := L.Get(-1)
+		L.Pop(1)
+		g, err := toGo(res)
+		out.res = g
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
-	defer c.unlock()
-	if c.closed {
-		return nil, errClosed
-	}
-	L := c.v.L
-	prev := c.v.ctx
-	c.v.ctx = ctx
-	L.SetContext(ctx)
-	defer func() { c.v.ctx = prev; L.RemoveContext() }()
-	luaArgs := make([]lua.LValue, len(args))
-	for i, a := range args {
-		luaArgs[i] = toLua(L, a)
-	}
-	if err := L.CallByParam(lua.P{Fn: def.run, NRet: 1, Protect: true}, luaArgs...); err != nil {
-		return nil, err
-	}
-	res := L.Get(-1)
-	L.Pop(1)
-	return toGo(res)
+	return out.res, nil
 }
 
 // ---- hooks ----------------------------------------------------------------
@@ -514,7 +574,7 @@ func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold
 	for _, h := range c.hooks[event] {
 		ret, err := c.runHook(ctx, h, ev)
 		if err != nil {
-			c.env.Log("warn", fmt.Sprintf("hook %s (%s): %v", event, h.layer, errorMessage(err)))
+			c.env.Log("warn", hookFailure(event, h.layer, err))
 			continue
 		}
 		if ret != nil && fold != nil && fold(ret) {
@@ -524,30 +584,36 @@ func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold
 }
 
 func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[string]any, error) {
-	ctx, done := c.scope(ctx)
-	defer done()
-	if err := c.lockCtx(ctx); err != nil {
-		return nil, err
-	}
-	defer c.unlock()
-	if c.closed {
-		return nil, errClosed
-	}
-	L := c.v.L
-	prev := c.v.ctx
 	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	c.v.ctx = hctx
-	L.SetContext(hctx)
-	defer func() { c.v.ctx = prev; L.RemoveContext() }()
-	hc := L.NewTable()
-	hc.RawSetString("session", L.GetGlobal("session"))
-	hc.RawSetString("layer", lua.LString(h.layer))
-	if err := L.CallByParam(lua.P{Fn: h.fn, NRet: 1, Protect: true}, toLua(L, ev), hc); err != nil {
+	var out struct{ ret map[string]any }
+	err := c.run(hctx, func(ctx context.Context) error {
+		L := c.v.L
+		prev := c.v.ctx
+		c.v.ctx = ctx
+		L.SetContext(ctx)
+		defer func() { c.v.ctx = prev; L.RemoveContext() }()
+		hc := L.NewTable()
+		hc.RawSetString("session", L.GetGlobal("session"))
+		hc.RawSetString("layer", lua.LString(h.layer))
+		if err := L.CallByParam(lua.P{Fn: h.fn, NRet: 1, Protect: true}, toLua(L, ev), hc); err != nil {
+			return err
+		}
+		res := L.Get(-1)
+		L.Pop(1)
+		ret, err := hookResult(res)
+		out.ret = ret
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
-	res := L.Get(-1)
-	L.Pop(1)
+	return out.ret, nil
+}
+
+// hookResult is what one hook returned as the map its event folds: a table as is,
+// a string as {__string = text}, anything else as nil.
+func hookResult(res lua.LValue) (map[string]any, error) {
 	t, ok := res.(*lua.LTable)
 	if !ok {
 		if s, isStr := res.(lua.LString); isStr {
@@ -564,6 +630,15 @@ func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[st
 		m = map[string]any{}
 	}
 	return m, nil
+}
+
+// hookFailure is the warning for a hook that raised an error or ended early: a
+// context ended it, or a reload closed its snapshot.
+func hookFailure(event, layer string, err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errClosed) {
+		return fmt.Sprintf("hook %s (%s) stopped early: %s", event, layer, errorMessage(err))
+	}
+	return fmt.Sprintf("hook %s (%s): %s", event, layer, errorMessage(err))
 }
 
 // notifyText is what one hook asked to tell the agent: a returned string or

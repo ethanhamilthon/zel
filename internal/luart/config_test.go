@@ -319,3 +319,34 @@ zel.on("turn_end", function() return "never" end)`)}})
 		t.Fatalf("a closed snapshot ran a hook: %q", got)
 	}
 }
+
+// A hook stuck in a host operation that never returns holds neither its caller past
+// the caller's deadline nor Close: Close returns at once, and the VM is freed when
+// the blocked Lua returns.
+func TestStuckHookDoesNotHoldCallerOrClose(t *testing.T) {
+	env := newEnv(t)
+	fifo := mkfifo(t, filepath.Join(env.cwd, "stuck"))
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
+local zel = require("zel")
+zel.on("turn_end", function() return {notify = io.open("`+fifo+`", "r"):read("a")} end)`)}})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if got := cfg.TurnEnd(ctx, "x"); got != "" {
+		t.Fatalf("a stuck hook must not reply: %q", got)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the caller waited %s behind a stuck hook", took)
+	}
+	start = time.Now()
+	cfg.Close()
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("close waited %s for a stuck hook", took)
+	}
+	cfg.Close()
+	if got := cfg.TurnEnd(context.Background(), "y"); got != "" {
+		t.Fatalf("a closed snapshot ran a hook: %q", got)
+	}
+	go releasePipe(fifo)
+	awaitFreed(t, cfg.v)
+}

@@ -5,14 +5,17 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -28,22 +31,90 @@ func (v *vm) fsErr(L *lua.LState, fn, path string, err error) {
 	}
 }
 
+// Refusals of openPlain: a directory where a file is wanted, and a named pipe,
+// device, socket or other special file, which may wait for a peer that never comes.
+var (
+	errIsDir      = errors.New("is a directory")
+	errNotRegular = errors.New("not a regular file: named pipes, devices and sockets are refused")
+)
+
+// checkPlain accepts a regular file, and a directory when dirOK.
+func checkPlain(info os.FileInfo, dirOK bool) error {
+	switch {
+	case info.IsDir():
+		if dirOK {
+			return nil
+		}
+		return errIsDir
+	case info.Mode().IsRegular():
+		return nil
+	}
+	return errNotRegular
+}
+
+// openPlain opens abs for a host file operation without ever waiting on a special
+// file: opening or reading a named pipe or device waits for a peer that may never
+// come. A stat refuses known special files; O_NONBLOCK makes the open itself return
+// at once; the type is checked again on the open descriptor, so a path replaced
+// between the two checks is refused too.
+func openPlain(abs string, flag int, perm os.FileMode, dirOK bool) (*os.File, os.FileInfo, error) {
+	if info, err := os.Stat(abs); err == nil {
+		if err := checkPlain(info, dirOK); err != nil {
+			return nil, nil, err
+		}
+	}
+	f, err := os.OpenFile(abs, flag|syscall.O_NONBLOCK, perm)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err == nil {
+		err = checkPlain(info, dirOK)
+	}
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, info, nil
+}
+
+// readPlain reads a whole regular file; special files are refused.
+func readPlain(path string) ([]byte, error) {
+	f, _, err := openPlain(path, os.O_RDONLY, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// openFile opens path for a host operation and raises the Lua error when it cannot.
+func (v *vm) openFile(L *lua.LState, fn, path string, flag int, perm os.FileMode, dirOK bool) (*os.File, os.FileInfo) {
+	f, info, err := openPlain(v.resolve(path), flag, perm, dirOK)
+	switch {
+	case errors.Is(err, errIsDir):
+		raise(L, fn, EFAIL, "%s is a directory", path)
+	case errors.Is(err, errNotRegular):
+		raise(L, fn, EINVAL, "%s: %v", path, err)
+	case err != nil:
+		v.fsErr(L, fn, path, err)
+	}
+	return f, info
+}
+
 func (v *vm) fsRead(L *lua.LState) int {
 	path := L.CheckString(1)
-	abs := v.resolve(path)
-	info, err := os.Stat(abs)
-	if err != nil {
-		v.fsErr(L, "fs.read", path, err)
-	}
-	if info.IsDir() {
-		raise(L, "fs.read", EFAIL, "%s is a directory", path)
-	}
+	f, info := v.openFile(L, "fs.read", path, os.O_RDONLY, 0, false)
+	defer f.Close()
 	if info.Size() > maxReadBytes {
 		raise(L, "fs.read", ELIMIT, "%s is %d bytes, over the %d MiB safety cap; use sh (head, sed -n) for parts", path, info.Size(), maxReadBytes>>20)
 	}
-	data, err := os.ReadFile(abs)
+	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
 	if err != nil {
 		v.fsErr(L, "fs.read", path, err)
+	}
+	if len(data) > maxReadBytes {
+		raise(L, "fs.read", ELIMIT, "%s grew past the %d MiB safety cap while it was read", path, maxReadBytes>>20)
 	}
 	L.Push(lua.LString(string(data)))
 	return 1
@@ -63,11 +134,8 @@ func (v *vm) fsWrite(L *lua.LState) int {
 	if info, err := os.Stat(abs); err == nil {
 		mode = info.Mode().Perm()
 	}
-	f, err := os.OpenFile(abs, flags, mode)
-	if err != nil {
-		v.fsErr(L, "fs.write", path, err)
-	}
-	_, err = f.WriteString(content)
+	f, _ := v.openFile(L, "fs.write", path, flags, mode, false)
+	_, err := f.WriteString(content)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -80,9 +148,9 @@ func (v *vm) fsWrite(L *lua.LState) int {
 func (v *vm) fsEdit(L *lua.LState) int {
 	path, old, repl := L.CheckString(1), L.CheckString(2), L.CheckString(3)
 	all := optBool(opts(L, 4), "all")
-	abs, text := v.readForEdit(L, "fs.edit", path)
+	text := v.readForEdit(L, "fs.edit", path)
 	text, n := replaceOnce(L, "fs.edit", path, "", text, old, repl, all)
-	v.writeEdited(L, "fs.edit", path, abs, text)
+	v.writeEdited(L, "fs.edit", path, text)
 	L.Push(lua.LNumber(n))
 	return 1
 }
@@ -95,7 +163,7 @@ func (v *vm) fsPatch(L *lua.LState) int {
 	if edits.Len() == 0 {
 		raise(L, "fs.patch", EINVAL, "no edits")
 	}
-	abs, text := v.readForEdit(L, "fs.patch", path)
+	text := v.readForEdit(L, "fs.patch", path)
 	total := 0
 	for i := 1; i <= edits.Len(); i++ {
 		e, ok := edits.RawGetInt(i).(*lua.LTable)
@@ -117,26 +185,31 @@ func (v *vm) fsPatch(L *lua.LState) int {
 		text, n = replaceOnce(L, "fs.patch", path, fmt.Sprintf("edit #%d: ", i), text, old, repl, optBool(e, "all"))
 		total += n
 	}
-	v.writeEdited(L, "fs.patch", path, abs, text)
+	v.writeEdited(L, "fs.patch", path, text)
 	L.Push(lua.LNumber(total))
 	return 1
 }
 
-func (v *vm) readForEdit(L *lua.LState, fn, path string) (abs, text string) {
-	abs = v.resolve(path)
-	data, err := os.ReadFile(abs)
+// readForEdit reads the whole file an edit changes.
+func (v *vm) readForEdit(L *lua.LState, fn, path string) string {
+	f, _ := v.openFile(L, fn, path, os.O_RDONLY, 0, false)
+	defer f.Close()
+	data, err := io.ReadAll(f)
 	if err != nil {
 		v.fsErr(L, fn, path, err)
 	}
-	return abs, string(data)
+	return string(data)
 }
 
-func (v *vm) writeEdited(L *lua.LState, fn, path, abs, text string) {
-	info, err := os.Stat(abs)
-	if err != nil {
-		v.fsErr(L, fn, path, err)
+// writeEdited writes back a file that readForEdit read. It never creates the file:
+// the path is opened for writing as an existing regular file.
+func (v *vm) writeEdited(L *lua.LState, fn, path, text string) {
+	f, _ := v.openFile(L, fn, path, os.O_WRONLY|os.O_TRUNC, 0, false)
+	_, err := f.WriteString(text)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	if err := os.WriteFile(abs, []byte(text), info.Mode().Perm()); err != nil {
+	if err != nil {
 		v.fsErr(L, fn, path, err)
 	}
 }
@@ -159,10 +232,16 @@ func replaceOnce(L *lua.LState, fn, path, prefix, text, old, repl string, all bo
 
 func (v *vm) fsList(L *lua.LState) int {
 	path := L.CheckString(1)
-	entries, err := os.ReadDir(v.resolve(path))
+	f, info := v.openFile(L, "fs.list", path, os.O_RDONLY, 0, true)
+	defer f.Close()
+	if !info.IsDir() {
+		raise(L, "fs.list", EFAIL, "%s is not a directory", path)
+	}
+	entries, err := f.ReadDir(-1)
 	if err != nil {
 		v.fsErr(L, "fs.list", path, err)
 	}
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	out := L.NewTable()
 	for _, e := range entries {
 		row := L.NewTable()
@@ -311,6 +390,11 @@ func (v *vm) fsGrep(L *lua.LState) int {
 	if path != "" {
 		root = v.resolve(path)
 	}
+	if info, err := os.Stat(root); err == nil {
+		if err := checkPlain(info, true); err != nil {
+			raise(L, "fs.grep", EINVAL, "%s: %v", path, err)
+		}
+	}
 	if !fixed {
 		if _, err := regexp.Compile(pattern); err != nil {
 			raise(L, "fs.grep", EINVAL, "bad pattern: %v", err)
@@ -407,7 +491,12 @@ func goGrep(root, pattern, glob string, fixed bool, limit int) []grepRow {
 }
 
 func grepFile(rows []grepRow, rel, abs string, re *regexp.Regexp, limit int) []grepRow {
-	data, err := os.ReadFile(abs)
+	f, _, err := openPlain(abs, os.O_RDONLY, 0, false)
+	if err != nil {
+		return rows
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 2<<20+1))
 	if err != nil || len(data) > 2<<20 || bytes.IndexByte(data, 0) >= 0 {
 		return rows
 	}

@@ -64,9 +64,7 @@ func Builtin(depth int) string {
 // Prompt renders the plugin-provided part of the system prompt: instructions and
 // dynamic pieces of every layer, in layer order.
 func (c *Config) Prompt(ctx context.Context) string {
-	c.lock()
-	layers := append([]*Layer(nil), c.layers...)
-	c.unlock()
+	layers := c.layers // final once LoadConfig returns
 	var parts []string
 	for _, l := range layers {
 		for _, text := range l.instructions {
@@ -86,39 +84,35 @@ func (c *Config) Prompt(ctx context.Context) string {
 func (c *Config) renderPrompt(ctx context.Context, l *Layer, fn *lua.LFunction) string {
 	pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	pctx, done := c.scope(pctx)
-	defer done()
-	if err := c.lockCtx(pctx); err != nil {
+	var out struct{ text string }
+	err := c.run(pctx, func(ctx context.Context) error {
+		L := c.v.L
+		prev := c.v.ctx
+		c.v.ctx = ctx
+		L.SetContext(ctx)
+		defer func() { c.v.ctx = prev; L.RemoveContext() }()
+		arg := L.NewTable()
+		arg.RawSetString("session", L.GetGlobal("session"))
+		arg.RawSetString("layer", lua.LString(l.Name))
+		if err := L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}, arg); err != nil {
+			c.env.Notice(fmt.Sprintf("%s: zel.prompt failed: %s", l.Name, errorMessage(err)))
+			return nil
+		}
+		res := L.Get(-1)
+		L.Pop(1)
+		if res != lua.LNil {
+			out.text = luaString(L, res)
+		}
+		return nil
+	})
+	if err != nil {
 		return ""
 	}
-	defer c.unlock()
-	if c.closed {
-		return ""
-	}
-	L := c.v.L
-	prev := c.v.ctx
-	c.v.ctx = pctx
-	L.SetContext(pctx)
-	defer func() { c.v.ctx = prev; L.RemoveContext() }()
-	arg := L.NewTable()
-	arg.RawSetString("session", L.GetGlobal("session"))
-	arg.RawSetString("layer", lua.LString(l.Name))
-	if err := L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}, arg); err != nil {
-		c.env.Notice(fmt.Sprintf("%s: zel.prompt failed: %s", l.Name, errorMessage(err)))
-		return ""
-	}
-	res := L.Get(-1)
-	L.Pop(1)
-	if res == lua.LNil {
-		return ""
-	}
-	return luaString(L, res)
+	return out.text
 }
 
 // FunctionDocs renders the plugin functions grouped by layer ("## name (path)").
 func (c *Config) FunctionDocs() string {
-	c.lock()
-	defer c.unlock()
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
 	for _, l := range c.layers {

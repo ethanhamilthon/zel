@@ -118,28 +118,27 @@ func (c *Config) Expand(ctx context.Context, text string) (string, error) {
 
 // runCompletion calls one completion under the vm lock and requires non-empty text.
 func (c *Config) runCompletion(ctx context.Context, def completion) (string, error) {
-	ctx, done := c.scope(ctx)
-	defer done()
-	if err := c.lockCtx(ctx); err != nil {
+	var out struct{ text string }
+	err := c.run(ctx, func(ctx context.Context) error {
+		L := c.v.L
+		prev := c.v.ctx
+		c.v.ctx = ctx
+		L.SetContext(ctx)
+		defer func() { c.v.ctx = prev; L.RemoveContext() }()
+		if err := L.CallByParam(lua.P{Fn: def.fn, NRet: 1, Protect: true}); err != nil {
+			return err
+		}
+		res := L.Get(-1)
+		L.Pop(1)
+		text, ok := res.(lua.LString)
+		if !ok || strings.TrimSpace(string(text)) == "" {
+			return errors.New("must return the instructions as non-empty text")
+		}
+		out.text = string(text)
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
-	defer c.unlock()
-	if c.closed {
-		return "", errClosed
-	}
-	L := c.v.L
-	prev := c.v.ctx
-	c.v.ctx = ctx
-	L.SetContext(ctx)
-	defer func() { c.v.ctx = prev; L.RemoveContext() }()
-	if err := L.CallByParam(lua.P{Fn: def.fn, NRet: 1, Protect: true}); err != nil {
-		return "", err
-	}
-	res := L.Get(-1)
-	L.Pop(1)
-	text, ok := res.(lua.LString)
-	if !ok || strings.TrimSpace(string(text)) == "" {
-		return "", errors.New("must return the instructions as non-empty text")
-	}
-	return string(text), nil
+	return out.text, nil
 }
