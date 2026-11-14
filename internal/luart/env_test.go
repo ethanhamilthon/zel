@@ -77,16 +77,22 @@ func (j *fakeJob) state() string {
 }
 
 type fakeEnv struct {
-	cwd     string
-	state   *memState
-	mu      sync.Mutex
-	jobs    map[string]*fakeJob
-	notices []string
-	logs    []string
-	viewed  []string
-	renamed string
-	spawned []AgentOpts
-	depth   int
+	cwd      string
+	state    *memState
+	mu       sync.Mutex
+	jobs     map[string]*fakeJob
+	notices  []string
+	logs     []string
+	viewed   []string
+	renamed  string
+	spawned  []AgentOpts
+	depth    int
+	models   []ModelInfo
+	failures map[string]string
+}
+
+func (e *fakeEnv) Models(ctx context.Context) ([]ModelInfo, map[string]string) {
+	return e.models, e.failures
 }
 
 func newEnv(t *testing.T) *fakeEnv {

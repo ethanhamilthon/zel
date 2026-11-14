@@ -44,7 +44,7 @@ func compactionSnapshot(item json.RawMessage) (compaction, bool) {
 func historyItem(item json.RawMessage) (sent, user bool) {
 	var v struct{ Type, Role string }
 	_ = json.Unmarshal(item, &v)
-	if v.Type == "instructions" || v.Type == compactionType {
+	if v.Type == "instructions" || v.Type == compactionType || v.Type == turnEndType {
 		return false, false
 	}
 	return true, v.Role == "user"

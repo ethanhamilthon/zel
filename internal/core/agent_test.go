@@ -55,6 +55,156 @@ func TestStreamFailureSurfacesAsError(t *testing.T) {
 	}
 }
 
+func TestFailedTurnClosesWithItsError(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch n {
+		case 1:
+			return luaReply("c1", `print("hi")`)
+		case 2:
+			return sse(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
+		}
+		return textReply("ok")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	if _, err := turn(t, a, "go"); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	records := a.Records()
+	closing := records[len(records)-1]
+	if closing.Kind != "turn_end" || !strings.Contains(closing.Text, "boom") || closing.Meta == nil || closing.Meta.Steps != 1 || closing.Meta.Duration <= 0 {
+		t.Fatalf("closing = %+v", closing)
+	}
+	// The closing message survives a reload from the database with its time and steps.
+	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	if err != nil || len(stored) == 0 || stored[len(stored)-1].Kind != "turn_end" || stored[len(stored)-1].Meta == nil || stored[len(stored)-1].Meta.Steps != 1 {
+		t.Fatalf("stored %+v %v", stored, err)
+	}
+	// The model never sees it.
+	if _, err := turn(t, a, "again"); err != nil {
+		t.Fatal(err)
+	}
+	reqs := fp.requests()
+	if last := reqs[len(reqs)-1]; strings.Contains(last, "boom") {
+		t.Fatalf("closing message reached the model: %s", last)
+	}
+}
+
+func TestStoppedTurnClosesWithStopNote(t *testing.T) {
+	fp := &fakeProvider{hold: true, reply: func(int, string) string { return "" }}
+	a := newTestAgent(t, fp, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []TurnEvent
+	done := make(chan error, 1)
+	go func() {
+		done <- a.Run(ctx, "hi", func(e TurnEvent) { events = append(events, e) })
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(fp.requests()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("request never sent")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("stopped turn returned no error")
+	}
+	records := a.Records()
+	if closing := records[len(records)-1]; closing.Kind != "turn_end" || closing.Text != "stopped by user" {
+		t.Fatalf("closing = %+v", closing)
+	}
+	if last := events[len(events)-1]; last.Kind != "turn_end" || last.Text != "stopped by user" {
+		t.Fatalf("last event = %+v", last)
+	}
+}
+
+func TestLuaErrorDoesNotCloseTurn(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if n == 1 {
+			return luaReply("c1", `error("boom")`)
+		}
+		return textReply("ok")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	// The failed call is tool output the model sees; the turn goes on to its answer.
+	var kinds []string
+	for _, r := range a.Records() {
+		kinds = append(kinds, r.Kind)
+	}
+	if got := strings.Join(kinds, "|"); got != "user|code|error|assistant" {
+		t.Fatalf("records = %s", got)
+	}
+}
+
+func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string {
+		return sse(
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`,
+			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"lua","call_id":"c1","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"code\":\"print(1)\"}"}`,
+			`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
+	}}
+	a := newTestAgent(t, fp, Options{})
+	events, err := turn(t, a, "go")
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	// Two streamed steps, one reasoning block and one lua call preview, count once each.
+	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 2 {
+		t.Fatalf("live closing = %+v", live)
+	}
+	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	if err != nil || len(stored) == 0 {
+		t.Fatalf("stored %+v %v", stored, err)
+	}
+	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 2 {
+		t.Fatalf("stored closing = %+v", closing)
+	}
+}
+
+func TestStoppedStreamCountsStepsSeenBeforeCancel(t *testing.T) {
+	reasoning := `{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`
+	fp := &fakeProvider{hold: true, reply: func(int, string) string { return sse(reasoning) }}
+	a := newTestAgent(t, fp, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []TurnEvent
+	seen := make(chan struct{})
+	var once sync.Once
+	done := make(chan error, 1)
+	go func() {
+		done <- a.Run(ctx, "hi", func(e TurnEvent) {
+			events = append(events, e)
+			if e.Kind == "reasoning" {
+				once.Do(func() { close(seen) })
+			}
+		})
+	}()
+	select {
+	case <-seen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reasoning was never streamed")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("stopped turn returned no error")
+	}
+	if live := events[len(events)-1]; live.Kind != "turn_end" || live.Text != "stopped by user" || live.Meta == nil || live.Meta.Steps != 1 {
+		t.Fatalf("live closing = %+v", live)
+	}
+	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	if err != nil || len(stored) == 0 {
+		t.Fatalf("stored %+v %v", stored, err)
+	}
+	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 1 {
+		t.Fatalf("stored closing = %+v", closing)
+	}
+}
+
 func TestCompletedResponseWithoutStreamClose(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{hold: true, reply: func(int, string) string { return textReply("hi") }}, Options{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -86,6 +236,8 @@ func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 	t.Cleanup(server.Close)
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
+	t.Setenv("ZEL_DEPTH", "0")
+	t.Setenv("ZEL_SESSION_ID", "")
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL, APIKey: "sk-secret-123"}
@@ -384,6 +536,8 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
 	t.Setenv("ZEL_HOME", home)
+	t.Setenv("ZEL_DEPTH", "0")
+	t.Setenv("ZEL_SESSION_ID", "")
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
 	s := DefaultSettings()
@@ -871,6 +1025,8 @@ func newHarnessWith(t *testing.T, model *fakeModel, pre func(*Runtime)) *harness
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
 	t.Setenv("ZEL_HOME", home)
+	t.Setenv("ZEL_DEPTH", "0")
+	t.Setenv("ZEL_SESSION_ID", "")
 	server := httptest.NewServer(model)
 	t.Cleanup(server.Close)
 	s := DefaultSettings()

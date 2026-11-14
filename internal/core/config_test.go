@@ -148,8 +148,7 @@ func TestSessionLockIsExclusive(t *testing.T) {
 }
 
 func TestShellEnvHasSessionAndDepthOnly(t *testing.T) {
-	t.Setenv("ZEL_DEPTH", "2")
-	a := newTestAgent(t, &fakeProvider{}, Options{})
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, func(string, string) { t.Setenv("ZEL_DEPTH", "2") })
 	env := a.Shell.Env()
 	if env["ZEL_SESSION_ID"] != a.SessionID() || env["ZEL_DEPTH"] != "2" || len(env) != 2 {
 		t.Fatalf("shell env: %v", env)

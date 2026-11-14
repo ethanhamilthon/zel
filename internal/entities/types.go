@@ -118,9 +118,9 @@ func ApplyEvent(records []Record, e Event) []Record {
 
 func RecordsForItem(item json.RawMessage) []Record {
 	var v struct {
-		Role, Type, Name, Arguments, Output string
-		Content                             json.RawMessage
-		Summary                             []struct{ Text string }
+		Role, Type, Name, Arguments, Output, Text string
+		Content                                   json.RawMessage
+		Summary                                   []struct{ Text string }
 	}
 	if json.Unmarshal(item, &v) != nil {
 		return nil
@@ -185,6 +185,8 @@ func RecordsForItem(item json.RawMessage) []Record {
 		}
 	case v.Type == "compaction":
 		return []Record{{Kind: "compaction", Text: "Context compacted"}}
+	case v.Type == "turn_end":
+		return []Record{{Kind: "turn_end", Text: v.Text}}
 	case v.Type == "function_call":
 		var args struct{ Code string }
 		_ = json.Unmarshal([]byte(v.Arguments), &args)

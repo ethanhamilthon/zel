@@ -30,10 +30,12 @@ json.encode(v, o?) / json.decode(s)
 tasks.spawn(fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; o: name,timeout
 --   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
 --   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
+--   stopped when the session changes (new/resume) or init.lua reloads
 agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
 tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
 state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
-view(path, ...); session.{id,cwd,root,depth}; log.info/notice(msg); sleep(s)`
+view(path, ...); session.{id,cwd,root,parent,depth,model,effort}; session.rename(name); log.info/warn/notice(msg); sleep(s)
+session.models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}; listed once per session, failures cached with it; listed again after a provider change`
 
 // Builtin is BuiltinPrompt for the given agent depth: subagents (depth > 0)
 // cannot start agents, so their prompt leaves agents.* out.

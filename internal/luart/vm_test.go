@@ -250,6 +250,41 @@ return {type(id), res.value, res.out, n, #t.x, st, tostring(r2), why, tasks.resu
 	}
 }
 
+func TestSessionModels(t *testing.T) {
+	env := newEnv(t)
+	env.models = []ModelInfo{{Provider: "p", Model: "m1", ContextWindow: 8000}, {Provider: "p", Model: "m2"}}
+	env.failures = map[string]string{"bad": "401 unauthorized"}
+	r := run(t, env, nil, `local m, f = session.models(); return {#m, m[1].model, m[1].context_window, m[2].context_window, f.bad}`)
+	if r.IsError || r.Output != `[2,"m1",8000,0,"401 unauthorized"]` {
+		t.Fatalf("%q", r.Output)
+	}
+	// Without models or failures both values are still tables, so pairs(failures) is safe.
+	env.models, env.failures = nil, nil
+	r = run(t, env, nil, `local m, f = session.models(); local n = 0; for _ in pairs(f) do n = n + 1 end; return {#m, n}`)
+	if r.IsError || r.Output != `[0,0]` {
+		t.Fatalf("%q", r.Output)
+	}
+}
+
+func TestBuiltinPromptNamesSessionFields(t *testing.T) {
+	for _, depth := range []int{0, 1} {
+		p := Builtin(depth)
+		for _, want := range []string{
+			"session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)",
+			"session.models() -> models, failures",
+			"log.info/warn/notice(msg)",
+			"stopped when the session changes (new/resume) or init.lua reloads",
+		} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("depth %d prompt misses %q", depth, want)
+			}
+		}
+	}
+	if !isBuiltin("session.models") {
+		t.Fatal("session.models can be overridden by a plugin")
+	}
+}
+
 func TestMiscHost(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `view("a.png", "b.png"); session.rename("name"); log.notice("hi"); log.warn("w"); return {session.id, session.model, json.decode('{"a":[1,2]}').a[2], json.encode({1}, {indent=2})}`)

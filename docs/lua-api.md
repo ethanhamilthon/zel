@@ -82,6 +82,7 @@ state.list(prefix?, scope?) -> string[]  -- ключи, отсортирован
 -- прочее
 view(path, ...) -> nil                 -- картинки уйдут в следующий запрос
 session.{id, cwd, root, parent, depth, model, effort}; session.rename(name)
+session.models() -> models, failures  -- models: {provider, model, context_window}[] (the model menu's list; context_window 0 when unknown); failures: {provider = error}; listed once per session, failures cached with it; listed again after a provider change
 log.info/warn(msg) -- только Tracing; log.notice(msg) -- уведомление в UI, модели не идёт; sleep(sec)
 ```
 
@@ -214,10 +215,12 @@ json.encode(v, o?) / json.decode(s)
 tasks.spawn(fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; o: name,timeout
 --   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
 --   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
+--   stopped when the session changes (new/resume) or init.lua reloads
 agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
 tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
 state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
-view(path, ...); session.{id,cwd,root,depth}; log.info/notice(msg); sleep(s)
+view(path, ...); session.{id,cwd,root,parent,depth,model,effort}; session.rename(name); log.info/warn/notice(msg); sleep(s)
+session.models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}; listed once per session, failures cached with it; listed again after a provider change
 ## global (~/.zel/init.lua)
 web.search(q: string, n?: integer=5) -> {title,url,body}[]  -- DuckDuckGo search via ddgs
 --   e.g. for _, h in ipairs(web.search("gopher-lua context", 3)) do print(h.url) end
@@ -279,6 +282,8 @@ zel.check(pkg?: string="./...") -> string (task id: read it with tasks.wait(id, 
 - Compatibility (0.5.2): `tasks.spawn(cmd)`, `tasks.run` and the `zel tasks` CLI are removed (wrap shell work in
   `tasks.spawn(function() return sh(cmd) end)`); `fs.read` lost `{from, lines}` (use `slice`); the output-limit
   setting and `zel.defaults{output_limit=}` are removed; hooks are `session_start`, `session_end`, `message`, `turn_end`.
+- 0.5.3: `session.models()` is new. A turn that fails or is stopped (Ctrl+D) closes in the chat with its wall-clock time, steps and
+  the error text or `stopped by user`; that closing message is kept in the saved history but never sent to the model.
 - Reload with a broken layer keeps the previous snapshot completely (not layer by layer) and raises a notice;
   the first load at session start skips only the broken layer.
 - Tracing kind of a call is `lua` (search `:lua text`). The lua output is not truncated (1 MiB safety cap) and the 30 s call timeout is fixed (0.5.2).

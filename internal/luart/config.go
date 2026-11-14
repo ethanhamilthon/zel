@@ -76,7 +76,7 @@ var builtinFns = map[string][]string{
 	"":   {"sh", "sleep", "view", "slice"},
 	"fs": {"read", "write", "edit", "patch", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
 	"json": {"encode", "decode"}, "tasks": jobFns, "agents": append([]string{"run"}, jobFns...),
-	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename"},
+	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename", "models"},
 }
 
 var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)

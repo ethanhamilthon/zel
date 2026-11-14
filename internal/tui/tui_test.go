@@ -853,6 +853,21 @@ func TestAnswerHeaderOnlyDurationAndSteps(t *testing.T) {
 	}
 }
 
+func TestTurnEndClosesInChatWithTimeStepsAndReason(t *testing.T) {
+	e := entry{Kind: "turn_end", Text: "stopped by user", Meta: &core.Metadata{Duration: 17 * time.Second, Steps: 5}}
+	lines := strings.Split(ansi.Strip(renderEntry(e, 80, -1)), "\n")
+	if len(lines) != 2 || lines[0] != "* 17s · 5 steps" || lines[1] != "stopped by user" {
+		t.Fatalf("closing rows = %q", lines)
+	}
+	m := bareModel(t, "/project")
+	m.width = 80
+	m.entries = []core.Record{{Kind: "user", Text: "go"}, e}
+	view := ansi.Strip(m.timeline())
+	if !strings.Contains(view, "* 17s · 5 steps") || !strings.Contains(view, "stopped by user") {
+		t.Fatalf("closing missing from the chat:\n%s", view)
+	}
+}
+
 func TestMenuSearchGapBelowHeader(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 80, 24
@@ -2589,7 +2604,7 @@ func (m *model) referenceTimelineRows(budget time.Duration) []string {
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		e := m.entries[i]
 		limit := 0
-		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" {
+		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" || e.Kind == "turn_end" {
 			limit = -1
 		}
 		cached := &m.cache[i]

@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,6 +52,167 @@ end)`))
 	}
 	if n := len(fp2.requests()); n != 1+maxTurnInjections {
 		t.Fatalf("requests = %d, want %d", n, 1+maxTurnInjections)
+	}
+}
+
+func TestSessionModelsListsOnceAndKeepsFailures(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case body == "": // GET /models
+			return `{"data":[{"id":"m-a","context_length":8000}]}`
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		}
+		return luaReply("c1", `local m, f = session.models(); session.models()
+print(#m .. " " .. m[1].provider .. "/" .. m[1].model .. " " .. m[1].context_window .. " " .. tostring(f.dead ~= nil))`)
+	}}
+	a := newTestAgent(t, fp, Options{})
+	// A provider that refuses connections: its failure must not fail the listing.
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL
+	dead.Close()
+	home, err := ZelHome(a.Shell.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := a.Settings()
+	s.Providers["dead"] = Provider{BaseURL: deadURL}
+	if err := WriteConfig(home, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReloadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	listings, answered := 0, false
+	for _, body := range fp.requests() {
+		if body == "" {
+			listings++
+		}
+		answered = answered || strings.Contains(body, "1 p/m-a 8000 true")
+	}
+	if listings != 1 || !answered {
+		t.Fatalf("listings %d, answered %v: %v", listings, answered, fp.requests())
+	}
+}
+
+func TestSessionModelsCancelledCallDoesNotWaitForListing(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if body == "" { // GET /models: held until the test opens the gate
+			<-gate
+			return `{"data":[{"id":"m-a"}]}`
+		}
+		return textReply("ok")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	opened := false
+	open := func() {
+		if !opened {
+			opened = true
+			close(gate)
+		}
+	}
+	t.Cleanup(open) // runs before the server closes, so a held request can end
+	listings := func() (n int) {
+		for _, body := range fp.requests() {
+			if body == "" {
+				n++
+			}
+		}
+		return n
+	}
+	// A background task starts the listing and the provider holds it.
+	if res := a.runLua(context.Background(), `return tasks.spawn(function() return #session.models() end, {name = "list"})`); res.IsError {
+		t.Fatal(res.Output)
+	}
+	for deadline := time.Now().Add(5 * time.Second); listings() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the listing never started")
+		}
+	}
+	// A main call with a short deadline gives up without waiting for the task's listing.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	answered := make(chan luart.Result, 1)
+	go func() { answered <- a.runLua(ctx, `return #session.models()`) }()
+	select {
+	case res := <-answered:
+		if !res.IsError || !strings.Contains(res.Output, "ECANCELED") {
+			t.Fatalf("cancelled call: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled call waited for the other listing")
+	}
+	// The cancelled caller neither released the held request nor started a listing of its own.
+	if _, done, _ := (luaEnv{a}).Tasks().Wait(context.Background(), "t1", 100*time.Millisecond); done || listings() != 1 {
+		t.Fatalf("task finished %v, listings %d", done, listings())
+	}
+	open()
+	if _, done, err := (luaEnv{a}).Tasks().Wait(context.Background(), "t1", 5*time.Second); !done || err != nil {
+		t.Fatalf("task after release: done %v, err %v", done, err)
+	}
+	if res := a.runLua(context.Background(), `return #session.models()`); res.IsError || res.Output != "1" || listings() != 1 {
+		t.Fatalf("answer after release %+v, listings %d", res, listings())
+	}
+}
+
+func TestSessionModelsRefreshesOnProviderChangeAndNewSession(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if body == "" {
+			return `{"data":[{"id":"m-a"}]}`
+		}
+		return textReply("ok")
+	}}
+	a := newTestAgent(t, fp, Options{})
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL
+	dead.Close()
+	listings := func() (n int) {
+		for _, body := range fp.requests() {
+			if body == "" {
+				n++
+			}
+		}
+		return n
+	}
+	answer := func() string {
+		res := a.runLua(context.Background(), `local m, f = session.models(); return #m .. " " .. tostring(f.dead ~= nil)`)
+		if res.IsError {
+			t.Fatal(res.Output)
+		}
+		return res.Output
+	}
+	if got := answer(); got != "1 false" || listings() != 1 {
+		t.Fatalf("first answer %q, listings %d", got, listings())
+	}
+	if got := answer(); got != "1 false" || listings() != 1 {
+		t.Fatalf("cached answer %q, listings %d", got, listings())
+	}
+	// A new provider changes the providers: the list is made again, with its failure.
+	home, err := ZelHome(a.Shell.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := a.Settings()
+	s.Providers["dead"] = Provider{BaseURL: deadURL}
+	if err := WriteConfig(home, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReloadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if got := answer(); got != "1 true" || listings() != 2 {
+		t.Fatalf("after provider change %q, listings %d", got, listings())
+	}
+	// A new session starts with a new list.
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if got := answer(); got != "1 true" || listings() != 3 {
+		t.Fatalf("after new session %q, listings %d", got, listings())
 	}
 }
 

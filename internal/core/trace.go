@@ -60,6 +60,9 @@ func (a *Runtime) historyTrace() (entries []TraceEntry) {
 			continue
 		}
 		for _, r := range RecordsForItem(item) {
+			if r.Kind == turnEndType {
+				continue // the TUI logs the error or stop separately
+			}
 			entries = append(entries, TraceEntry{Kind: traceKind(r.Kind), Text: r.Text, At: at})
 		}
 	}

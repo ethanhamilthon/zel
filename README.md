@@ -88,6 +88,8 @@ Host API: `sh`, `fs.*`, `web.request/get/post`, `json`, `tasks.*`, `agents.*`,
 `state.*`, `view`, `session`, `log`, `sleep`. The model sees the
 current API in the system prompt. Full reference: [docs/lua-api.md](docs/lua-api.md).
 
+`session.models()` lists the models of your providers, like the model menu does. It is listed once per session, and failing providers are cached with it: they come back in the second return value instead of failing the call. A provider change lists again.
+
 There is no sandbox, permission prompt or trust dialog: Lua runs with your user
 permissions and network access, so only use `init.lua` files you trust.
 
@@ -148,7 +150,7 @@ everything, and the chat shows a "context compacted" divider.
 
 Chat shows user messages, agent messages, and the working indicator. Tools,
 thoughts, errors, and other events belong in Tracing; there are no
-visibility toggles. Info, Tracing, and Tasks refresh while open.
+visibility toggles. A turn that fails or is stopped with Ctrl+D ends in the chat with a red line of wall-clock time and steps, then the error or "stopped by user". Info, Tracing, and Tasks refresh while open.
 
 Tracing search accepts a leading exact type, optionally followed by search text:
 `:user`, `:assistant fix tests`, `:lua go test`, `:error`. Every displayed

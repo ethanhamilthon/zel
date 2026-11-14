@@ -362,6 +362,8 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	t.Setenv("ZEL_CONFIG", "")
+	t.Setenv("ZEL_DEPTH", "0")
+	t.Setenv("ZEL_SESSION_ID", "")
 	var mu sync.Mutex
 	var prompts []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

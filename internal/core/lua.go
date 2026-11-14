@@ -26,6 +26,18 @@ type luaHolder struct {
 	cfg    *luart.Config
 	root   string
 	notice func(string)
+	models modelListing
+}
+
+// modelListing is the session's list of provider models for session.models().
+// mu guards the fields; it is never held while providers are asked.
+type modelListing struct {
+	mu       sync.Mutex
+	key      string // the providers the list was made for
+	ready    bool
+	choices  []ModelChoice
+	failures map[string]string
+	flight   chan struct{} // closed when the listing in progress ends
 }
 
 func (h *luaHolder) get() *luart.Config {
@@ -166,6 +178,55 @@ func (e luaEnv) View(path string) error {
 		return fmt.Errorf("input queue is full")
 	}
 	return nil
+}
+
+// Models lists the models of the providers, as the model menu does. The list is
+// made once per session, failures included, and again only after the providers
+// change. One listing runs at a time and never under the lock: other callers wait
+// for it or for their own ctx, whichever ends first. A cancelled listing is not
+// kept; the caller reports the cancelled call.
+func (e luaEnv) Models(ctx context.Context) ([]luart.ModelInfo, map[string]string) {
+	a := e.a
+	settings := a.Settings()
+	key := fmt.Sprint(settings.Providers)
+	m := &a.lua.models
+	for ctx.Err() == nil {
+		m.mu.Lock()
+		if m.ready && m.key == key {
+			choices, failures := m.choices, m.failures
+			m.mu.Unlock()
+			models := make([]luart.ModelInfo, 0, len(choices))
+			for _, c := range choices {
+				models = append(models, luart.ModelInfo{Provider: c.Provider, Model: c.Model, ContextWindow: c.ContextWindow})
+			}
+			return models, failures
+		}
+		if running := m.flight; running != nil {
+			m.mu.Unlock()
+			select {
+			case <-running:
+			case <-ctx.Done():
+			}
+			continue
+		}
+		done := make(chan struct{})
+		m.flight = done
+		m.mu.Unlock()
+
+		choices, errs := AllModels(ctx, settings.Providers)
+		failures := map[string]string{}
+		for name, err := range errs {
+			failures[name] = Redact(settings, err.Error())
+		}
+		m.mu.Lock()
+		if ctx.Err() == nil {
+			m.key, m.ready, m.choices, m.failures = key, true, choices, failures
+		}
+		m.flight = nil
+		close(done)
+		m.mu.Unlock()
+	}
+	return nil, nil
 }
 
 func (e luaEnv) Notice(msg string) { e.a.notify(msg) }

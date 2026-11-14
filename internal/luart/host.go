@@ -84,6 +84,7 @@ func (v *vm) installSession() {
 		t.RawSetString(k, lua.LString(val))
 	}
 	t.RawSetString("depth", lua.LNumber(info.Depth))
+	t.RawSetString("models", L.NewFunction(v.sessionModels))
 	t.RawSetString("rename", L.NewFunction(func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if strings.TrimSpace(name) == "" {
@@ -95,6 +96,30 @@ func (v *vm) installSession() {
 		return 0
 	}))
 	L.SetGlobal("session", t)
+}
+
+// sessionModels returns the models as a list of {provider, model, context_window}
+// and the failures of providers as {provider = message}.
+func (v *vm) sessionModels(L *lua.LState) int {
+	models, failures := v.env.Models(v.ctx)
+	if v.ctx.Err() != nil {
+		v.ctxErr("session.models")
+	}
+	list := L.NewTable()
+	for _, m := range models {
+		row := L.NewTable()
+		row.RawSetString("provider", lua.LString(m.Provider))
+		row.RawSetString("model", lua.LString(m.Model))
+		row.RawSetString("context_window", lua.LNumber(m.ContextWindow))
+		list.Append(row)
+	}
+	fails := L.NewTable()
+	for name, msg := range failures {
+		fails.RawSetString(name, lua.LString(msg))
+	}
+	L.Push(list)
+	L.Push(fails)
+	return 2
 }
 
 // opts reads the optional table argument at position n.

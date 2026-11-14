@@ -68,7 +68,7 @@ reset on new/resume/reload or after a timeout; init.lua runs in a separate
 config VM, every `tasks.spawn(fn)` in a fresh task VM that gets a deep copy of
 the function and its upvalues (`luart/copy.go`); the host API reaches the application through `luart.Env`
 (shell environment, key-value state in `store`, the `tasks` and `agents`
-namespaces, images, notices). Every call has a fixed 30-second deadline
+namespaces, images, model listing, notices). Every call has a fixed 30-second deadline
 (`luart.callTimeout`) that nothing can extend. Tasks and agents share the job
 bookkeeping in `core` (IDs, logs, result delivery) but are separate namespaces:
 a task is a Lua function on its own goroutine, an agent is a full child `Runtime` with its own

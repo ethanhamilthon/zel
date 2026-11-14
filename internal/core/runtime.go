@@ -81,7 +81,8 @@ type Runtime struct {
 	slots         *imageSlots
 	tasks         *tasks
 	lua           *luaHolder
-	vm            *luart.Runner // the session's main Lua VM, created on first use
+	vm            *luart.Runner   // the session's main Lua VM, created on first use
+	liveSteps     map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
 }
 
 func (a *Runtime) Home() string { return a.home }
@@ -177,10 +178,14 @@ func (a *Runtime) Run(ctx context.Context, text string, emit func(TurnEvent)) er
 }
 
 func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
+	started, turnSeq := time.Now(), -1
 	defer func() {
 		err = a.safeError(err)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			emit(TurnEvent{Kind: "error", Text: err.Error()})
+		}
+		if text, ok := turnEndText(ctx, err); ok && turnSeq >= 0 {
+			a.closeTurn(turnSeq, text, started, emit)
 		}
 		if a.HasSavedSession() {
 			if e := a.saveHistory(); e != nil {
@@ -224,7 +229,69 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 	shown.Meta = a.itemMeta[len(a.History)-1]
 	emit(shown)
 
-	return agent.Run(ctx, &turnHost{a: a, emit: emit, accept: acceptSteering, turnSeq: len(a.History) - 1})
+	turnSeq = len(a.History) - 1
+	return agent.Run(ctx, &turnHost{a: a, emit: emit, accept: acceptSteering, turnSeq: turnSeq})
+}
+
+// turnEndType is the history item that closes a turn ending with an error or a stop.
+const turnEndType = "turn_end"
+
+// turnEndText says how a turn ended unsuccessfully: the error text, or "stopped
+// by user" when it was cancelled. ok is false when the turn finished.
+func turnEndText(ctx context.Context, err error) (text string, ok bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case ctx.Err() != nil || errors.Is(err, context.Canceled):
+		return "stopped by user", true
+	}
+	return err.Error(), true
+}
+
+// closeTurn appends the closing message of a failed or stopped turn. The chat shows
+// it, also after resume; the model never sees it. Its time is the wall clock since
+// the turn started, as the working indicator shows it. Its steps are the turn's,
+// including streamed steps of a response that never committed.
+func (a *Runtime) closeTurn(turnSeq int, text string, started time.Time, emit func(TurnEvent)) {
+	item := raw(map[string]any{"type": turnEndType, "text": text})
+	a.histMu.Lock()
+	a.History = append(a.History, item)
+	seq := len(a.History) - 1
+	steps := countSteps(a.History[turnSeq:seq]) + len(a.liveSteps)
+	a.liveSteps = nil
+	a.histMu.Unlock()
+	m := Metadata{Duration: time.Since(started), Steps: steps, At: time.Now()}
+	a.setItemMeta(seq, m)
+	for _, r := range RecordsForItem(item) {
+		emit(TurnEvent{Kind: r.Kind, Text: r.Text, Meta: &m, Final: true})
+	}
+}
+
+// noteSteps remembers the steps a response streams, by item ID, so a turn that
+// ends before the response is committed still counts them. Repeated events of
+// one item, such as partial arguments or a retried stream, count once.
+func (a *Runtime) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
+	return func(e TurnEvent) {
+		if e.ID != "" && (e.Kind == "code" || e.Kind == "reasoning" || e.Kind == "reasoning_delta") {
+			if a.liveSteps == nil {
+				a.liveSteps = map[string]bool{}
+			}
+			a.liveSteps[e.ID] = true
+		}
+		emit(e)
+	}
+}
+
+// countSteps counts the lua calls and thinking blocks of items: the steps a turn summary shows.
+func countSteps(items []json.RawMessage) (steps int) {
+	for _, item := range items {
+		for _, r := range RecordsForItem(item) {
+			if r.Kind == "code" || r.Kind == "reasoning" {
+				steps++
+			}
+		}
+	}
+	return steps
 }
 
 type functionCall = entities.ToolCall
@@ -283,6 +350,7 @@ func (a *Runtime) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	a.requestedLen = len(a.History)
 	a.histMu.Unlock()
 	a.slots.sent()
+	emit = a.noteSteps(emit)
 	var completed []json.RawMessage
 	arguments := map[int64]string{}
 	names := map[int64]string{}

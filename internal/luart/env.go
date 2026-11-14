@@ -19,6 +19,12 @@ type SessionInfo struct {
 	LuaPath               []string // extra package.path directories
 }
 
+// ModelInfo is one model of a provider, as session.models() lists it.
+type ModelInfo struct {
+	Provider, Model string
+	ContextWindow   int64 // tokens; zero when the provider does not say
+}
+
 // TaskOpts are the options of tasks.spawn.
 type TaskOpts struct {
 	Name    string
@@ -95,4 +101,7 @@ type Env interface {
 	Notice(msg string)
 	Log(level, msg string)
 	Rename(name string) error
+	// Models lists the models of the configured providers. Providers that fail
+	// are reported by name in failures; they do not fail the list.
+	Models(ctx context.Context) (models []ModelInfo, failures map[string]string)
 }

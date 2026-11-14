@@ -57,6 +57,8 @@ func (h *turnHost) CommitResponse(items []json.RawMessage) error {
 			emit(TurnEvent{Kind: r.Kind, Text: r.Text, ID: a.itemID(int64(i)), Meta: &m, Final: true})
 		}
 	}
+	// The committed items are history now; their streamed steps must not count twice.
+	a.liveSteps = nil
 	if e := a.saveHistory(); e != nil {
 		return e
 	}

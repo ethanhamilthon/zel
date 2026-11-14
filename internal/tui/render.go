@@ -73,6 +73,14 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 		label := " context compacted "
 		side := max(0, width-lipgloss.Width(label)) / 2
 		return paint(strings.Repeat("─", side)+label+strings.Repeat("─", side), width, lipgloss.NoColor{}, darkGray)
+	case "turn_end":
+		// A turn that failed or was stopped: its time and steps in red, then why.
+		header := "*"
+		if e.Meta != nil {
+			header += " " + formatDuration(e.Meta.Duration) + " · " + formatSteps(e.Meta.Steps)
+		}
+		return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, errorColor) + "\n" +
+			paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, muted)
 	case "assistant":
 	default:
 		return ""
@@ -187,7 +195,7 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		e := m.entries[i]
 		limit := 0
-		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" {
+		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" || e.Kind == "turn_end" {
 			limit = -1
 		}
 		cached := &m.cache[i]
