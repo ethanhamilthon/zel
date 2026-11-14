@@ -1,7 +1,10 @@
 package luart
 
 import (
+	"context"
 	"errors"
+	"io"
+	"strings"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -27,11 +30,10 @@ func jobErr(L *lua.LState, fn string, err error) {
 	raise(L, fn, EFAIL, "%v", err)
 }
 
-func (v *vm) installJobs(name string, jobs func() Jobs, spawn lua.LGFunction, run lua.LGFunction) {
+func (v *vm) installJobs(name string, jobs func() Jobs, spawn, run lua.LGFunction) {
 	fn := func(op string) string { return name + "." + op }
-	v.table(name, map[string]lua.LGFunction{
+	fns := map[string]lua.LGFunction{
 		"spawn": spawn,
-		"run":   run,
 		"list": func(L *lua.LState) int {
 			out := L.NewTable()
 			for _, j := range jobs().List() {
@@ -102,7 +104,11 @@ func (v *vm) installJobs(name string, jobs func() Jobs, spawn lua.LGFunction, ru
 			}
 			return 0
 		},
-	})
+	}
+	if run != nil {
+		fns["run"] = run
+	}
+	v.table(name, fns)
 }
 
 func (v *vm) jobRow(namespace string, j JobInfo) *lua.LTable {
@@ -114,7 +120,6 @@ func (v *vm) jobRow(namespace string, j JobInfo) *lua.LTable {
 		row.RawSetString("prompt", lua.LString(j.Prompt))
 	} else {
 		row.RawSetString("name", lua.LString(j.Name))
-		row.RawSetString("cmd", lua.LString(j.Cmd))
 	}
 	return row
 }
@@ -159,44 +164,69 @@ func (v *vm) waitAll(L *lua.LState, fn string, jobs Jobs) int {
 	return 1
 }
 
-func (v *vm) taskOpts(L *lua.LState, o *lua.LTable) TaskOpts {
-	var t TaskOpts
-	t.Name, _ = optString(o, "name")
-	if d, ok := optString(o, "cwd"); ok {
-		t.Cwd = v.resolve(d)
+// tasksSpawn starts fn in the background: a fresh task VM on its own
+// goroutine gets a copy of fn and everything it captured.
+func (v *vm) tasksSpawn(L *lua.LState) int {
+	fn := L.CheckFunction(1)
+	if fn.IsG {
+		raise(L, "tasks.spawn", EINVAL, "expected a Lua function, got a Go function; wrap it: function() return f(...) end")
 	}
-	if env, ok := o.RawGetString("env").(*lua.LTable); ok {
-		t.Env = map[string]string{}
-		env.ForEach(func(k, val lua.LValue) { t.Env[k.String()] = val.String() })
-	}
+	o := opts(L, 2)
+	var to TaskOpts
+	to.Name, _ = optString(o, "name")
 	if n, ok := optNumber(o, "timeout"); ok && n > 0 {
-		t.Timeout = time.Duration(n * float64(time.Second))
+		to.Timeout = time.Duration(n * float64(time.Second))
 	}
-	return t
+	tv := newVM(v.env, v.cfg, roleTask)
+	copied, err := newCopier(L, tv.L).copyFunction(fn)
+	if err != nil {
+		tv.close()
+		raise(L, "tasks.spawn", EINVAL, "%v", err)
+	}
+	id, err := v.env.Tasks().Spawn(tv.task(copied), to)
+	if err != nil {
+		tv.close()
+		raise(L, "tasks.spawn", EFAIL, "%v", err)
+	}
+	L.Push(lua.LString(id))
+	return 1
 }
 
-func (v *vm) tasksSpawn(L *lua.LState) int { return v.spawnTask(L, "tasks.spawn", false) }
-
-func (v *vm) tasksRun(L *lua.LState) int { return v.spawnTask(L, "tasks.run", true) }
-
-// spawnTask pushes the new task's ID, or with waited its result.
-func (v *vm) spawnTask(L *lua.LState, fn string, waited bool) int {
-	cmd := L.CheckString(1)
-	if cmd == "" {
-		raise(L, fn, EINVAL, "empty command")
-	}
-	o := v.taskOpts(L, opts(L, 2))
-	o.Waited = waited
-	tasks := v.env.Tasks()
-	id, err := tasks.Spawn(cmd, o)
+// CodeTask compiles code into the body of a task with its own VM, for tasks
+// started from outside Lua. discard frees the VM when the task never runs.
+func CodeTask(env Env, cfg *Config, code string) (run TaskFunc, discard func(), err error) {
+	tv := newVM(env, cfg, roleTask)
+	fn, err := tv.L.Load(strings.NewReader(code), "task")
 	if err != nil {
-		raise(L, fn, EFAIL, "%v", err)
+		tv.close()
+		return nil, nil, err
 	}
-	if !waited {
-		L.Push(lua.LString(id))
-		return 1
+	return tv.task(fn), tv.close, nil
+}
+
+// task returns the body of a task: call fn in this VM, then close it. What
+// it prints goes to out; its first return value is the result.
+func (v *vm) task(fn *lua.LFunction) TaskFunc {
+	return func(ctx context.Context, out io.Writer) (any, error) {
+		defer v.close()
+		v.ctx, v.out = ctx, out
+		v.L.SetContext(ctx)
+		if err := v.L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			msg := errorMessage(err)
+			if trace := traceback(err); trace != "" {
+				msg += "\n" + trace
+			}
+			return nil, errors.New(msg)
+		}
+		ret := v.L.Get(-1)
+		if g, err := toGo(ret); err == nil {
+			return g, nil
+		}
+		return renderValue(ret), nil
 	}
-	return v.waitFinished(L, fn, tasks, id)
 }
 
 // waitFinished pushes the result of a job started by run: it waits for the end

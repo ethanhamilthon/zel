@@ -56,6 +56,18 @@ func inputEvent(input Input) TurnEvent {
 	return TurnEvent{Kind: kind, Text: input.Display()}
 }
 
+// notification is the one format of everything that wakes the agent besides
+// the user: finished tasks and agents, hook output and view() images. The
+// text stays short ("t1 finished"); the agent fetches details itself.
+func notification(text string) Input {
+	return Input{Text: "<notification>" + strings.TrimSpace(text) + "</notification>", Notice: true}
+}
+
+func withImages(input Input, images ...shell.Image) Input {
+	input.Images = append(input.Images, images...)
+	return input
+}
+
 type Steering struct {
 	mu      sync.Mutex
 	pending []Input
@@ -138,15 +150,36 @@ func (s *Steering) Take() []Input {
 	return pending
 }
 
-func (s *Steering) Pop() (Input, bool) {
+// batch merges runs of consecutive notifications into one input, keeping
+// their order relative to typed inputs.
+func batch(inputs []Input) []Input {
+	var out []Input
+	for _, in := range inputs {
+		if n := len(out); n > 0 && in.Notice && out[n-1].Notice {
+			out[n-1].Text += "\n" + in.Text
+			out[n-1].Images = append(slices.Clip(out[n-1].Images), in.Images...)
+			continue
+		}
+		out = append(out, in)
+	}
+	return out
+}
+
+// PopBatch takes the next input to start a turn with; several notifications
+// in a row arrive as one.
+func (s *Steering) PopBatch() (Input, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) == 0 {
 		return Input{}, false
 	}
-	input := s.pending[0]
-	s.pending = s.pending[1:]
-	return input, true
+	n := 1
+	for s.pending[0].Notice && n < len(s.pending) && s.pending[n].Notice {
+		n++
+	}
+	next := batch(s.pending[:n])[0]
+	s.pending = s.pending[n:]
+	return next, true
 }
 
 func (s *Steering) RemoveComposer() []Input {

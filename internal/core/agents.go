@@ -14,8 +14,8 @@ import (
 	"zel/internal/luart"
 )
 
-// MaxAgentDepth bounds nested agents.spawn so a runaway prompt cannot fork forever.
-const MaxAgentDepth = 3
+// MaxAgentDepth is how deep agents nest: subagents cannot start subagents.
+const MaxAgentDepth = 1
 
 // SubagentRun describes a running child agent. Parent is the root session of
 // the whole agent tree.

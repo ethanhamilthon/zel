@@ -225,7 +225,7 @@ func (c *Controller) deliverLocked() {
 	if c.active != nil || c.shut || c.closing {
 		return
 	}
-	if next, ok := c.a.Queue().Pop(); ok {
+	if next, ok := c.a.Queue().PopBatch(); ok {
 		c.beginTurnLocked(next)
 	}
 }

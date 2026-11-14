@@ -67,15 +67,15 @@ type Config struct {
 	LoadErrs []string
 }
 
-var hookEvents = map[string]bool{"session_start": true, "message": true, "before_call": true, "after_call": true, "turn_end": true, "bg_done": true}
+var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true}
 
-// jobFns are the functions of both the tasks and the agents namespace.
-var jobFns = []string{"spawn", "run", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
+// jobFns are the lifecycle functions of both the tasks and the agents namespace.
+var jobFns = []string{"spawn", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
 
 var builtinFns = map[string][]string{
 	"":   {"sh", "sleep", "view", "slice"},
 	"fs": {"read", "write", "edit", "patch", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
-	"json": {"encode", "decode"}, "tasks": jobFns, "agents": jobFns,
+	"json": {"encode", "decode"}, "tasks": jobFns, "agents": append([]string{"run"}, jobFns...),
 	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename"},
 }
 
@@ -101,7 +101,7 @@ func isBuiltin(name string) bool {
 // is skipped and reported through env.Notice.
 func LoadConfig(env Env, sources []Source) *Config {
 	c := &Config{env: env, fns: map[string]*FnDef{}, hooks: map[string][]hook{}}
-	c.v = newVM(env, c, true)
+	c.v = newVM(env, c, roleConfig)
 	c.v.L.PreloadModule("zel", c.zelModule)
 	for _, src := range sources {
 		c.loadLayer(src)
@@ -189,11 +189,6 @@ func (c *Config) Fns() []*FnDef {
 		}
 	}
 	return out
-}
-
-// HasCallHooks reports whether before_call or after_call hooks exist.
-func (c *Config) HasCallHooks() bool {
-	return len(c.hooks["before_call"])+len(c.hooks["after_call"]) > 0
 }
 
 // HasHook reports whether any hook listens to the event.
@@ -362,7 +357,7 @@ func (c *Config) installFns(v *vm) {
 	for _, def := range c.fns {
 		def := def
 		ns, name, dotted := strings.Cut(def.Name, ".")
-		impl := v.L.NewFunction(v.wrap(def.Name, func(L *lua.LState) int { return c.call(v, def, L) }))
+		impl := v.L.NewFunction(func(L *lua.LState) int { return c.call(v, def, L) })
 		if !dotted {
 			v.L.SetGlobal(def.Name, impl)
 			continue
@@ -389,7 +384,7 @@ func (c *Config) call(v *vm, def *FnDef, L *lua.LState) int {
 		}
 		args[i] = val
 	}
-	if v.direct {
+	if v.role == roleConfig {
 		L.Push(def.run)
 		for _, a := range args {
 			L.Push(a)
@@ -501,9 +496,42 @@ func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[st
 	return m, nil
 }
 
-// SessionStart runs the session_start hooks.
-func (c *Config) SessionStart(ctx context.Context) {
-	c.emit(ctx, "session_start", map[string]any{}, nil)
+// notifyText is what one hook asked to tell the agent: a returned string or
+// {notify = "text"}.
+func notifyText(ret map[string]any) string {
+	if s, ok := ret["__string"].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	s, _ := ret["notify"].(string)
+	return strings.TrimSpace(s)
+}
+
+// collect runs the hooks of an event and joins the notification texts they returned.
+func (c *Config) collect(ctx context.Context, event string, ev map[string]any) string {
+	var texts []string
+	c.emit(ctx, event, ev, func(ret map[string]any) bool {
+		if s := notifyText(ret); s != "" {
+			texts = append(texts, s)
+		}
+		return false
+	})
+	return strings.Join(texts, "\n")
+}
+
+// SessionStart runs the session_start hooks; returned text becomes a notification.
+func (c *Config) SessionStart(ctx context.Context) string {
+	return c.collect(ctx, "session_start", map[string]any{})
+}
+
+// SessionEndTimeout bounds all session_end hooks together.
+const SessionEndTimeout = 5 * time.Second
+
+// SessionEnd runs the session_end hooks when the session is left (reason:
+// "quit", "new" or "resume"). They get SessionEndTimeout in total.
+func (c *Config) SessionEnd(ctx context.Context, reason string) {
+	ctx, cancel := context.WithTimeout(ctx, SessionEndTimeout)
+	defer cancel()
+	c.emit(ctx, "session_end", map[string]any{"reason": reason}, nil)
 }
 
 // Message lets message hooks rewrite the user's text.
@@ -518,68 +546,8 @@ func (c *Config) Message(ctx context.Context, text string) string {
 	return ev["text"].(string)
 }
 
-// BeforeCall returns replaced arguments (nil: unchanged) or a denial reason.
-func (c *Config) BeforeCall(ctx context.Context, fn string, args []any) (newArgs []any, deny string) {
-	if !c.HasHook("before_call") {
-		return nil, ""
-	}
-	ev := map[string]any{"fn": fn, "args": args}
-	c.emit(ctx, "before_call", ev, func(ret map[string]any) bool {
-		if d, ok := ret["deny"].(string); ok && d != "" {
-			deny = d
-			return true
-		}
-		if a, ok := ret["args"].([]any); ok {
-			newArgs = a
-			ev["args"] = a
-		}
-		return false
-	})
-	return newArgs, deny
-}
-
-// AfterCall returns a replaced result when a hook supplied one.
-func (c *Config) AfterCall(ctx context.Context, fn string, args []any, result any, errText string, took time.Duration) (any, bool) {
-	if !c.HasHook("after_call") {
-		return nil, false
-	}
-	ev := map[string]any{"fn": fn, "args": args, "result": result, "ms": took.Milliseconds()}
-	if errText != "" {
-		ev["err"] = errText
-	}
-	replaced := false
-	c.emit(ctx, "after_call", ev, func(ret map[string]any) bool {
-		if r, ok := ret["result"]; ok {
-			ev["result"], replaced = r, true
-		}
-		return false
-	})
-	return ev["result"], replaced
-}
-
-// TurnEnd returns text to inject as a new user message ("" to let the turn end).
+// TurnEnd runs the turn_end hooks; returned text becomes a notification
+// ("" lets the turn end).
 func (c *Config) TurnEnd(ctx context.Context, answer string) string {
-	var inject []string
-	c.emit(ctx, "turn_end", map[string]any{"answer": answer}, func(ret map[string]any) bool {
-		if s, ok := ret["inject"].(string); ok && s != "" {
-			inject = append(inject, s)
-		}
-		return false
-	})
-	return strings.Join(inject, "\n\n")
-}
-
-// BgDone lets hooks rewrite (text) or drop a finished background result.
-func (c *Config) BgDone(ctx context.Context, kind, id string, result map[string]any) (text string, drop bool) {
-	c.emit(ctx, "bg_done", map[string]any{"kind": kind, "id": id, "result": result}, func(ret map[string]any) bool {
-		if d, ok := ret["drop"].(bool); ok && d {
-			drop = true
-			return true
-		}
-		if s, ok := ret["text"].(string); ok {
-			text = s
-		}
-		return false
-	})
-	return text, drop
+	return c.collect(ctx, "turn_end", map[string]any{"answer": answer})
 }

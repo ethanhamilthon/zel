@@ -1,1 +1,1 @@
-Run Lua code. The input is the raw Lua source. Each Lua invocation has a fixed 10-second timeout. This limit cannot be changed. The Lua API (sh, fs, web, json, tasks, agents, state, ...) is described in the system prompt.
+Run Lua code. The input is the raw Lua source. Each call has a fixed 30-second timeout that cannot be changed. The VM keeps globals and functions between calls; use state.* for values that must persist across sessions. The Lua API (sh, fs, web, json, tasks, agents, state, ...) is described in the system prompt.

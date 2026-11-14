@@ -445,12 +445,12 @@ func TestChatShowsOnlyMessages(t *testing.T) {
 		{Kind: "reasoning", Text: "thinking about it"},
 		{Kind: "code", Text: "ls -la"},
 		{Kind: "output", Text: "file.txt"},
-		{Kind: "notice", Text: "<task-result id=\"t1\" status=\"done\"></task-result>"},
+		{Kind: "notice", Text: "<notification>t1 finished</notification>"},
 		{Kind: "assistant", Text: "done"},
 		{Kind: "error", Text: "tool failure"},
 	}
 	view := ansi.Strip(m.timeline())
-	for _, hidden := range []string{"thinking about it", "ls -la", "file.txt", "task-result", "tool failure"} {
+	for _, hidden := range []string{"thinking about it", "ls -la", "file.txt", "t1 finished", "tool failure"} {
 		if strings.Contains(view, hidden) {
 			t.Fatalf("%q must stay out of the chat:\n%s", hidden, view)
 		}
@@ -1113,7 +1113,7 @@ func TestInputHasNoLineLimitAndUsesAvailableScreen(t *testing.T) {
 func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 	m, _ := freshModel(t)
 	t.Cleanup(m.ctl.Close)
-	if _, err := m.ctl.StartTask("sleep 600"); err != nil {
+	if _, err := m.ctl.StartTask("sleep(600)"); err != nil {
 		t.Fatal(err)
 	}
 	m.menu = &menuState{page: menuTasks}
@@ -1971,7 +1971,7 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	id := m.ctl.Status().Session
-	if _, err := m.ctl.StartTask("sleep 30"); err != nil {
+	if _, err := m.ctl.StartTask("sleep(30)"); err != nil {
 		t.Fatal(err)
 	}
 	next, _ := m.switchSession("")
@@ -2024,7 +2024,7 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 
 func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
 	m := bareModel(t, t.TempDir())
-	if _, err := m.ctl.StartTask("sleep 30"); err != nil {
+	if _, err := m.ctl.StartTask("sleep(30)"); err != nil {
 		t.Fatal(err)
 	}
 	m.ctl.LogEvent("notice", "older notice")

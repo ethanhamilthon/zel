@@ -68,7 +68,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "tasks", "events", "session", "init":
+	case "version", "help", "--help", "-h", "events", "session", "init":
 		return true
 	}
 	return false
@@ -137,8 +137,6 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 				fmt.Fprint(out, helpText)
 			}
 			return nil
-		case "tasks":
-			return tasksCommand(args[1:], out)
 		case "events":
 			return eventsCommand(args[1:], out)
 		case "session":

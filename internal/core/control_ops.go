@@ -257,7 +257,7 @@ func (c *Controller) UpdateSettings(s Settings) (err error) {
 	return err
 }
 
-// StartTask runs a shell command as a background task of the current session.
+// StartTask runs Lua code as a background task of the current session.
 func (c *Controller) StartTask(command string) (id string, err error) {
 	c.view(func() { id, err = c.a.StartTask(command) })
 	return id, err

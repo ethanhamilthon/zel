@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,12 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
-	"zel/internal/entities"
-	"zel/internal/store"
 
-	"zel/internal/shell"
+	"zel/internal/entities"
+	"zel/internal/luart"
+	"zel/internal/store"
 )
 
 const (
@@ -24,29 +25,27 @@ const (
 )
 
 type tasks struct {
-	db                *store.Store
-	session, dir, log string
-	env               map[string]string
-	queue             *Steering
-	mu                sync.Mutex
-	running           map[string]*proc
-	stopped           map[string]bool
-	closed            bool
-	wg                sync.WaitGroup
-	report            func(string)
-	jobs              map[string]*job
-	order             []string
-	hook              func(kind, id string, result map[string]any) (text string, drop bool)
+	db           *store.Store
+	session, log string
+	queue        *Steering
+	mu           sync.Mutex
+	running      map[string]*proc
+	stopped      map[string]bool
+	closed       bool
+	wg           sync.WaitGroup
+	report       func(string)
+	jobs         map[string]*job
+	order        []string
 }
 
 func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
-	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, hook: a.bgDone, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{}}
+	return &tasks{db: a.db, session: a.id, log: filepath.Join(a.home, "tasks"),
+		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{}}
 }
 
-// proc is one running job: a shell process or an in-process agent.
+// proc is one running job: a Lua task or an in-process agent.
 type proc struct {
 	cancel func()       // end it now
 	term   func()       // ask it to end; the caller cancels it later if it lingers
@@ -54,11 +53,9 @@ type proc struct {
 	exit   func() int   // exit code after wait; negative when unknown
 }
 
-// startOpts describe a background job: a plain task or a subagent.
+// startOpts describe a background job: a Lua task or a subagent.
 type startOpts struct {
 	kind, name, prompt, model string
-	cwd                       string
-	env                       map[string]string
 	timeout                   time.Duration
 	waited                    bool // the caller waits: no result message is queued
 }
@@ -73,42 +70,44 @@ func (t *tasks) spawnProc(command string, o startOpts, launch func(io.Writer, *j
 	return j, err
 }
 
-// spawn runs a shell command in the background as a task job.
-func (t *tasks) spawn(command string, o startOpts) (*job, error) {
-	if strings.TrimSpace(command) == "" {
-		return nil, errors.New("tasks run requires a command")
-	}
-	dir := t.dir
-	if o.cwd != "" {
-		dir = o.cwd
-	}
-	var j *job
-	_, err := t.start(command, o, func(file io.Writer, jb *job) (*proc, error) {
-		j = jb
-		env := map[string]string{}
-		for k, v := range t.env {
-			env[k] = v
-		}
-		for k, v := range o.env {
-			env[k] = v
-		}
-		cmd := shell.Command(context.Background(), dir, env, command)
-		cmd.Stdout, cmd.Stderr = file, file
-		if err := cmd.Start(); err != nil {
-			return nil, err
-		}
-		return &proc{
-			cancel: func() { _ = cmd.Cancel() },
-			term: func() {
-				if cmd.Process != nil && cmd.Process.Pid > 0 {
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+// spawnLua runs a Lua task body in the background as a task job.
+func (t *tasks) spawnLua(run luart.TaskFunc, o startOpts) (*job, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	label := cmp.Or(o.name, "lua function")
+	j, err := t.spawnProc(label, o, func(log io.Writer, j *job) (*proc, error) {
+		done := make(chan error, 1)
+		var failed atomic.Bool
+		go func() {
+			value, err := run(ctx, log)
+			j.setTaskOutcome(value, err)
+			failed.Store(err != nil)
+			done <- err
+		}()
+		return &proc{cancel: cancel, term: cancel, wait: func() error { return <-done },
+			exit: func() int {
+				if failed.Load() {
+					return 1
 				}
-			},
-			wait: func() error { return shell.Reap(cmd) },
-			exit: func() int { return cmd.ProcessState.ExitCode() },
-		}, nil
+				return 0
+			}}, nil
 	})
+	if err != nil {
+		cancel()
+	}
 	return j, err
+}
+
+// cancelLua stops the running Lua tasks; init.lua was reloaded, and they run
+// with the old snapshot.
+func (t *tasks) cancelLua() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id, p := range t.running {
+		if j := t.jobs[id]; j != nil && j.kind == "task" {
+			t.stopped[id] = true
+			p.cancel()
+		}
+	}
 }
 
 func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) (*proc, error)) (string, error) {
@@ -189,20 +188,10 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		}
 		persistErr := t.finish(id, status, exit)
 		took := time.Since(started)
-		result := j.complete(status, code, took)
-		text := j.noticeText(result, status, exit, took)
-		drop := false
-		if t.hook != nil {
-			if rewritten, d := t.hook(j.kind, id, result); d {
-				drop = true
-			} else if rewritten != "" {
-				text = rewritten
-			}
-		}
-		notice := Input{Text: text, Notice: true}
+		j.complete(status, code, took)
+		notice := notification(j.noticeText(status))
 		if persistErr != nil {
 			warning := "Task " + id + " completion could not be persisted; saved status may be stale: " + persistErr.Error()
-			notice.Text += "\n" + warning
 			if t.report != nil {
 				t.report(warning)
 			}
@@ -210,7 +199,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		// The result is queued before the task stops counting as running, so a waiting
 		// consumer cannot observe neither a task nor its result.
 		t.mu.Lock()
-		if !t.closed && !drop && !j.waited {
+		if !t.closed && !j.waited {
 			t.queue.PushNotice(notice)
 			j.pushed = notice.Text
 		}
@@ -253,19 +242,6 @@ func (t *tasks) close() {
 	t.mu.Unlock()
 	t.wg.Wait()
 }
-
-func taskResult(id, command, status string, exit *int, took time.Duration, logPath string) string {
-	attrs := fmt.Sprintf(`id=%q status=%q`, id, status)
-	if exit != nil {
-		attrs += fmt.Sprintf(` exit_code="%d"`, *exit)
-	}
-	attrs += fmt.Sprintf(` duration=%q`, took.Round(time.Second).String())
-	body := xmlText.Replace("$ " + command + "\n" + tail(logPath))
-	return "<task-result " + attrs + ">\n" + strings.TrimRight(body, "\n") + "\n[full output: " + logPath + "]\n</task-result>"
-}
-
-// xmlText escapes text inside a tag; unlike xml.EscapeText it keeps newlines and quotes.
-var xmlText = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 func tail(path string) string {
 	file, err := os.Open(path)
@@ -392,14 +368,19 @@ func (w *taskLog) Write(p []byte) (int, error) {
 	return size, nil
 }
 
-// StartTask runs a shell command as a background task of this session; its
-// result is queued like any task result.
-func (a *Runtime) StartTask(command string) (string, error) {
+// StartTask runs Lua code as a background task of this session; its result
+// is announced like any task's.
+func (a *Runtime) StartTask(code string) (string, error) {
 	if a.tasks == nil {
 		return "", errors.New("no active session")
 	}
-	j, err := a.tasks.spawn(command, startOpts{})
+	run, discard, err := luart.CodeTask(luaEnv{a}, a.lua.get(), code)
 	if err != nil {
+		return "", err
+	}
+	j, err := a.tasks.spawnLua(run, startOpts{name: oneLine(code)})
+	if err != nil {
+		discard()
 		return "", err
 	}
 	return j.id, nil

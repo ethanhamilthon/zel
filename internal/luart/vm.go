@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -17,25 +19,35 @@ import (
 // filter and slice in Lua; the cap only protects memory and the context.
 const maxOutput = 1 << 20
 
-// callTimeout is the hard, non-configurable deadline of every Lua invocation,
+// callTimeout is the hard, non-configurable deadline of every Lua tool call,
 // including the blocking host calls made from it. It is a variable only so
 // tests can shorten it.
-var callTimeout = 10 * time.Second
+var callTimeout = 30 * time.Second
 
-// vm is one Lua state with the host API installed. Agent calls get a fresh vm;
-// the long-lived config vm runs init.lua, hooks and plugin function bodies.
+// role is what a Lua state is for. Every role gets its own state; nothing is
+// shared between them except through state.* and the host.
+type role int
+
+const (
+	roleConfig role = iota // init.lua: hooks, zel.prompt and plugin function bodies
+	roleMain               // the session's tool calls; globals survive between calls
+	roleTask               // one tasks.spawn(fn) on its own goroutine
+)
+
+// vm is one Lua state with the host API installed.
 type vm struct {
-	L       *lua.LState
-	env     Env
-	cfg     *Config
-	ctx     context.Context
-	out     strings.Builder
-	noHooks bool // the config vm never runs hooks, so hooks cannot recurse
-	direct  bool // plugin functions are called in this vm without the bridge
+	L    *lua.LState
+	env  Env
+	cfg  *Config
+	ctx  context.Context
+	out  io.Writer
+	buf  strings.Builder
+	role role
 }
 
-func newVM(env Env, cfg *Config, config bool) *vm {
-	v := &vm{L: lua.NewState(), env: env, cfg: cfg, ctx: context.Background(), noHooks: config, direct: config}
+func newVM(env Env, cfg *Config, r role) *vm {
+	v := &vm{L: lua.NewState(), env: env, cfg: cfg, ctx: context.Background(), role: r}
+	v.out = &v.buf
 	v.installHost()
 	if cfg != nil {
 		cfg.installFns(v)
@@ -44,6 +56,10 @@ func newVM(env Env, cfg *Config, config bool) *vm {
 }
 
 func (v *vm) close() { v.L.Close() }
+
+// agentsAllowed reports whether agents.* works here: subagents cannot start
+// subagents of their own.
+func (v *vm) agentsAllowed() bool { return v.env.Info().Depth == 0 }
 
 // ctxErr raises the Lua error that matches why ctx ended.
 func (v *vm) ctxErr(fn string) {
@@ -57,100 +73,124 @@ func (v *vm) ctxErr(fn string) {
 	raise(v.L, fn, ECANCELED, "the call was cancelled")
 }
 
-// Call is one tool input: raw Lua code. A leading "--!" line is an ordinary
-// comment; nothing can change the deadline.
-type Call struct{ Code string }
-
 // Result is what the model sees after a call.
 type Result struct {
 	Output  string
 	IsError bool
 }
 
-// Runner executes tool calls.
+// Runner executes the tool calls of one session in its main VM. The VM lives
+// across calls, so globals and functions defined by one call are there in the
+// next. It is created on first use and thrown away by Reset or a timeout; the
+// next call then starts clean and its output says so once.
 type Runner struct {
 	Env Env
 	Cfg *Config // optional: plugins and hooks
+
+	mu   sync.Mutex
+	v    *vm
+	cfg  *Config // the config the current VM was built with
+	note string  // why the VM was reset; reported with the next call
 }
 
-// Run executes one tool call in a fresh Lua state.
-func (r *Runner) Run(ctx context.Context, input string) Result {
-	call := Call{Code: input}
-	if r.Cfg != nil {
-		args, deny := r.Cfg.BeforeCall(ctx, "lua", []any{call.Code})
-		if deny != "" {
-			return Result{Output: "lua: " + EDENIED + ": " + deny, IsError: true}
-		}
-		if len(args) > 0 {
-			if code, ok := args[0].(string); ok {
-				call.Code = code
-			}
-		}
+// Reset drops the main VM. A non-empty reason is reported to the model with
+// the next call's output.
+func (r *Runner) Reset(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.v != nil {
+		r.v.close()
+		r.v = nil
 	}
-	started := time.Now()
-	res := r.run(ctx, call)
-	if r.Cfg != nil {
-		var callErr string
-		if res.IsError {
-			callErr = res.Output
-		}
-		if out, ok := r.Cfg.AfterCall(ctx, "lua", []any{call.Code}, res.Output, callErr, time.Since(started)); ok {
-			if text, isText := out.(string); isText {
-				res.Output = truncate(text, maxOutput)
-			}
-		}
+	if reason != "" {
+		r.note = reason
+	}
+}
+
+// Close frees the main VM.
+func (r *Runner) Close() { r.Reset("") }
+
+// Run executes one tool call: raw Lua code.
+func (r *Runner) Run(ctx context.Context, code string) Result {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.v != nil && r.cfg != r.Cfg {
+		r.v.close()
+		r.v = nil
+		r.note = "init.lua was reloaded"
+	}
+	if r.v == nil {
+		r.v, r.cfg = newVM(r.Env, r.Cfg, roleMain), r.Cfg
+	}
+	note := r.note
+	r.note = ""
+	res, timedOut := r.run(ctx, code)
+	if timedOut {
+		r.v.close()
+		r.v = nil
+		r.note = "the previous call hit the " + callTimeout.String() + " timeout"
+	}
+	if note != "" {
+		res.Output = "[lua: fresh VM, " + note + ": globals and functions from earlier calls are gone]\n" + res.Output
 	}
 	return res
 }
 
-func (r *Runner) run(parent context.Context, call Call) Result {
+func (r *Runner) run(parent context.Context, code string) (Result, bool) {
 	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
-	v := newVM(r.Env, r.Cfg, false)
-	defer v.close()
+	v := r.v
 	v.ctx = ctx
+	v.buf.Reset()
+	v.installSession()
 	v.L.SetContext(ctx)
-	v.L.SetGlobal("print", v.L.NewFunction(v.print))
+	defer func() {
+		v.L.RemoveContext()
+		v.L.SetTop(0)
+		v.ctx = context.Background()
+	}()
+	timedOut := func() bool { return errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil }
 
-	fn, err := v.L.Load(strings.NewReader(call.Code), "lua")
+	fn, err := v.L.Load(strings.NewReader(code), "lua")
 	if err != nil {
-		return Result{Output: "error: " + err.Error(), IsError: true}
+		return Result{Output: "error: " + err.Error(), IsError: true}, false
 	}
 	v.L.Push(fn)
 	err = v.L.PCall(0, lua.MultRet, nil)
 	if err != nil {
 		msg := errorMessage(err)
 		switch {
-		case errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil:
-			msg = fmt.Sprintf("lua: %s: the call exceeded its fixed timeout of %s", ETIMEOUT, callTimeout)
+		case timedOut():
+			msg = fmt.Sprintf("lua: %s: the call exceeded its fixed timeout of %s; use tasks.spawn for long work", ETIMEOUT, callTimeout)
 		case parent.Err() != nil:
 			msg = "lua: " + ECANCELED + ": the call was cancelled"
 		}
-		text := v.out.String() + "error: " + msg
+		text := v.buf.String() + "error: " + msg
 		if trace := traceback(err); trace != "" {
 			text += "\n" + trace
 		}
-		return Result{Output: truncate(text, maxOutput), IsError: true}
+		return Result{Output: truncate(text, maxOutput), IsError: true}, timedOut()
 	}
 	var parts []string
-	if s := strings.TrimRight(v.out.String(), "\n"); s != "" {
+	if s := strings.TrimRight(v.buf.String(), "\n"); s != "" {
 		parts = append(parts, s)
 	}
 	for i := 1; i <= v.L.GetTop(); i++ {
 		parts = append(parts, renderValue(v.L.Get(i)))
 	}
-	return Result{Output: truncate(strings.Join(parts, "\n"), maxOutput)}
+	return Result{Output: truncate(strings.Join(parts, "\n"), maxOutput)}, false
 }
 
 func (v *vm) print(L *lua.LState) int {
-	n := L.GetTop()
-	for i := 1; i <= n; i++ {
+	var line strings.Builder
+	for i := 1; i <= L.GetTop(); i++ {
 		if i > 1 {
-			v.out.WriteByte('\t')
+			line.WriteByte('\t')
 		}
-		v.out.WriteString(luaString(L, L.Get(i)))
+		line.WriteString(luaString(L, L.Get(i)))
 	}
-	v.out.WriteByte('\n')
+	line.WriteByte('\n')
+	_, _ = io.WriteString(v.out, line.String())
 	return 0
 }
 

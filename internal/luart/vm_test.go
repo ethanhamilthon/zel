@@ -25,11 +25,22 @@ func TestOutputPrintAndReturn(t *testing.T) {
 	}
 }
 
-func TestFreshEnvPerCall(t *testing.T) {
+func TestMainVMKeepsGlobals(t *testing.T) {
 	env := newEnv(t)
-	run(t, env, nil, `leaked = 42`)
-	if r := run(t, env, nil, `return tostring(leaked)`); r.Output != "nil" {
-		t.Fatalf("global leaked: %q", r.Output)
+	r := &Runner{Env: env}
+	defer r.Close()
+	ctx := context.Background()
+	r.Run(ctx, `kept = 42; function twice(x) return 2 * x end`)
+	if out := r.Run(ctx, `return twice(kept)`).Output; out != "84" {
+		t.Fatalf("globals lost: %q", out)
+	}
+	r.Reset("init.lua was reloaded")
+	out := r.Run(ctx, `return tostring(kept)`).Output
+	if !strings.HasPrefix(out, "[lua: fresh VM, init.lua was reloaded") || !strings.HasSuffix(out, "\nnil") {
+		t.Fatalf("reset: %q", out)
+	}
+	if out := r.Run(ctx, `return 1`).Output; out != "1" {
+		t.Fatalf("reset note repeated: %q", out)
 	}
 }
 
@@ -91,15 +102,16 @@ func TestCallTimeout(t *testing.T) {
 	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) || time.Since(start) > 4*time.Second {
 		t.Fatalf("%q after %s", r.Output, time.Since(start))
 	}
-	r = (&Runner{Env: env}).Run(context.Background(), "while true do end")
+	main := &Runner{Env: env}
+	defer main.Close()
+	main.Run(context.Background(), "x = 1")
+	r = main.Run(context.Background(), "while true do end")
 	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) {
 		t.Fatalf("%q", r.Output)
 	}
-	// A pragma line is just a comment: it cannot extend the deadline.
-	start = time.Now()
-	r = (&Runner{Env: env}).Run(context.Background(), "--! timeout=600\nsh('sleep 5')")
-	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) || time.Since(start) > 4*time.Second {
-		t.Fatalf("%q after %s", r.Output, time.Since(start))
+	// The VM is replaced after a timeout, and the next call says so.
+	if out := main.Run(context.Background(), "return tostring(x)").Output; !strings.Contains(out, "timeout: globals and functions from earlier calls are gone]\nnil") {
+		t.Fatalf("after timeout: %q", out)
 	}
 }
 
@@ -195,17 +207,29 @@ return {state.get("a"), state.get("b", "project"), state.get("b"), state.list(),
 func TestJobNamespaces(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `
-local id = tasks.spawn("later")
-local st = tasks.status(id)
-local res, why = tasks.wait(id, 0.05)
-tasks.stop(id)
-local again = tasks.get(id)
+local n = 41
+local t = {x = {1, 2}}
+t.self = t
+local function inc(v) return v + 1 end
+local id = tasks.spawn(function()
+  print("hi from task")
+  t.x[3] = 3; n = n + 100
+  return {inc(n), #t.x, string.format("%d", 7), t.self == t, type(leaked)}
+end)
+leaked = 1
+local res = tasks.wait(id, 5)
+local slow = tasks.spawn(function() sleep(30) end, {name = "slow"})
+local st = tasks.status(slow)
+local r2, why = tasks.wait(slow, 0.05)
+tasks.stop(slow)
 local a = agents.run{prompt="hello", model="m"}
 local aid = agents.spawn{prompt="p2"}
 local rs = agents.wait_all({aid}, 1)
 local ok, e = pcall(agents.status, id) -- a task id is not an agent
-return {type(id), st, tostring(res), why, again.id == id, a.answer, rs[1].answer, tasks.run("instant").out, #tasks.list(), #agents.list(), tasks.tail(id, 3), tasks.result(id).out, e}`)
-	want := `["string","running","nil","timeout",true,"re: hello","re: p2","instant",2,2,"tail 3","later","agents.status: ENOENT: no such job"]`
+local co = coroutine.create(function() end)
+local ok2, e2 = pcall(tasks.spawn, function() return co end)
+return {type(id), res.value, res.out, n, #t.x, st, tostring(r2), why, tasks.result(slow).ok, a.answer, rs[1].answer, #tasks.list(), #agents.list(), e, e2, tasks.run == nil}`)
+	want := `["string",[142,3,"7",true,"nil"],"hi from task\n",41,2,"running","nil","timeout",false,"re: hello","re: p2",2,2,"agents.status: ENOENT: no such job","tasks.spawn: EINVAL: cannot copy upvalue 'co' (a thread) into the task",true]`
 	if r.Output != want {
 		t.Fatalf("%q", r.Output)
 	}
@@ -215,6 +239,14 @@ return {type(id), st, tostring(res), why, again.id == id, a.answer, rs[1].answer
 	r = run(t, env, nil, `local ok, e = pcall(agents.spawn, {prompt="boom"}); return e`)
 	if !strings.Contains(r.Output, "agents.spawn: EFAIL: no budget") {
 		t.Fatalf("%q", r.Output)
+	}
+	env.depth = 1
+	r = run(t, env, nil, `local ok, e = pcall(agents.spawn, {prompt="x"}); return e`)
+	if !strings.Contains(r.Output, "agents.spawn: EDENIED") {
+		t.Fatalf("subagent spawned an agent: %q", r.Output)
+	}
+	if p := Builtin(1); strings.Contains(p, "agents.spawn") || strings.Contains(p, "agents.run") || !strings.Contains(p, "tasks.spawn(fn") {
+		t.Fatalf("subagent prompt: %s", p)
 	}
 }
 

@@ -86,7 +86,7 @@ local zel = require("zel")
 zel.defaults{model="a", effort="low"}
 zel.instructions "global"
 zel.fn{name="f", summary="global f", run=function() return "g" end}
-zel.on("before_call", function(ev) if ev.fn == "sh" then return {deny="no sh"} end end)`)
+zel.on("session_end", function() end)`)
 	p := layerFile(t, filepath.Join(env.cwd, "p"), `
 local zel = require("zel")
 zel.defaults{model="b"}
@@ -106,9 +106,6 @@ zel.fn{name="web.get", summary="x", run=function() end}`)
 	if out := run(t, env, cfg, `return f()`).Output; out != "g" {
 		// project layer failed (web.get is builtin) and is skipped as a whole
 		t.Fatalf("f = %q", out)
-	}
-	if out := run(t, env, cfg, `return sh("echo x").out`).Output; !strings.Contains(out, "EDENIED: no sh") {
-		t.Fatalf("%q", out)
 	}
 	prompt := cfg.SystemPrompt(context.Background())
 	if !strings.HasPrefix(prompt, "global\n\n# Lua") || strings.Contains(prompt, "project f") {
@@ -137,23 +134,17 @@ func TestHooks(t *testing.T) {
 	env := newEnv(t)
 	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
 local zel = require("zel")
-zel.on("session_start", function() state.set("started", true) end)
+zel.on("session_start", function() state.set("started", true); return "welcome" end)
+zel.on("session_end", function(ev) state.set("ended", ev.reason) end)
 zel.on("message", function(ev) return ev.text:upper() end)
-zel.on("before_call", function(ev)
-  if ev.fn == "fs.write" then ev.args[2] = "patched"; return {args = ev.args} end
-  if ev.fn == "lua" and ev.args[1]:find("FORBIDDEN") then return {deny = "forbidden"} end
-end)
-zel.on("after_call", function(ev)
-  if ev.fn == "fs.read" then return {result = ev.result .. "!"} end
-  if ev.fn == "lua" and ev.err then state.set("lua_err", ev.err) end
-end)
-zel.on("turn_end", function(ev) if ev.answer == "again" then return {inject = "go on"} end end)
-zel.on("bg_done", function(ev) if ev.id == "t1" then return {drop = true} end return {text = "rewritten " .. ev.id} end)
+zel.on("turn_end", function(ev) if ev.answer == "again" then return {notify = "go on"} end end)
 zel.on("message", function() error("hook bug") end)
 `)}})
 	defer cfg.Close()
 	ctx := context.Background()
-	cfg.SessionStart(ctx)
+	if got := cfg.SessionStart(ctx); got != "welcome" {
+		t.Fatalf("session_start: %q", got)
+	}
 	if v, _, _ := env.state.Get("session", "started"); v != "true" {
 		t.Fatalf("session_start: %q", v)
 	}
@@ -163,27 +154,22 @@ zel.on("message", function() error("hook bug") end)
 	if len(env.logs) == 0 || !strings.Contains(env.logs[len(env.logs)-1], "hook bug") {
 		t.Fatalf("hook errors are logged: %v", env.logs)
 	}
-	if out := run(t, env, cfg, `fs.write("f", "orig"); return fs.read("f")`).Output; out != "patched!" {
-		t.Fatalf("call hooks: %q", out)
-	}
-	if r := run(t, env, cfg, `-- FORBIDDEN`); !r.IsError || r.Output != "lua: EDENIED: forbidden" {
-		t.Fatalf("deny: %+v", r)
-	}
-	run(t, env, cfg, `error("oops")`)
-	if v, _, _ := env.state.Get("session", "lua_err"); !strings.Contains(v, "oops") {
-		t.Fatalf("after_call err: %q", v)
-	}
 	if got := cfg.TurnEnd(ctx, "again"); got != "go on" {
 		t.Fatalf("turn_end: %q", got)
 	}
 	if got := cfg.TurnEnd(ctx, "done"); got != "" {
 		t.Fatalf("turn_end: %q", got)
 	}
-	if _, drop := cfg.BgDone(ctx, "task", "t1", nil); !drop {
-		t.Fatal("drop")
+	cfg.SessionEnd(ctx, "quit")
+	if v, _, _ := env.state.Get("session", "ended"); v != `"quit"` {
+		t.Fatalf("session_end: %q", v)
 	}
-	if text, drop := cfg.BgDone(ctx, "task", "t2", nil); drop || text != "rewritten t2" {
-		t.Fatalf("%q %v", text, drop)
+	for _, old := range []string{"before_call", "after_call", "bg_done"} {
+		bad := LoadConfig(env, []Source{{"old", layerFile(t, t.TempDir(), `require("zel").on("`+old+`", function() end)`)}})
+		if len(bad.LoadErrs) != 1 {
+			t.Errorf("%s still accepted", old)
+		}
+		bad.Close()
 	}
 }
 

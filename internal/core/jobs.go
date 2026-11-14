@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,8 @@ type job struct {
 	status string
 	result map[string]any
 	agent  agentOutcome // what an in-process agent produced; set before the job ends
+	value  any          // what a Lua task returned
+	err    error        // why a Lua task failed
 }
 
 // agentOutcome is the final report of an in-process agent.
@@ -44,6 +47,13 @@ type agentOutcome struct {
 func (j *job) setOutcome(o agentOutcome) {
 	j.mu.Lock()
 	j.agent = o
+	j.mu.Unlock()
+}
+
+// setTaskOutcome records what a Lua task returned; it runs before the job ends.
+func (j *job) setTaskOutcome(value any, err error) {
+	j.mu.Lock()
+	j.value, j.err = value, err
 	j.mu.Unlock()
 }
 
@@ -73,11 +83,19 @@ func (j *job) complete(status string, code int, took time.Duration) map[string]a
 			res["error"] = msg
 		}
 	} else {
-		res["ok"] = status == "done"
-		res["code"] = code
-		res["out"] = tailBytes(j.log, 64<<10)
-		res["log"] = j.log
+		j.mu.Lock()
+		value, err := j.value, j.err
+		j.mu.Unlock()
+		ok := status == "done"
+		res["ok"], res["value"], res["out"] = ok, value, tailBytes(j.log, 64<<10)
 		res["timed_out"] = status == "timeout"
+		if !ok {
+			msg := fmt.Sprintf("task %s", status)
+			if err != nil && status == "failed" {
+				msg = err.Error()
+			}
+			res["error"] = msg
+		}
 	}
 	j.mu.Lock()
 	j.status, j.result = status, res
@@ -85,21 +103,10 @@ func (j *job) complete(status string, code int, took time.Duration) map[string]a
 	return res
 }
 
-// noticeText is the message the model gets when nobody waited for the job.
-func (j *job) noticeText(result map[string]any, status string, exit *int, took time.Duration) string {
-	if j.kind != "agent" {
-		return taskResult(j.id, j.cmd, status, exit, took, j.log)
-	}
-	attrs := fmt.Sprintf("id=%q status=%q", j.id, status)
-	if s, _ := result["session"].(string); s != "" {
-		attrs += fmt.Sprintf(" session=%q", s)
-	}
-	attrs += fmt.Sprintf(" duration=%q", took.Round(time.Second).String())
-	body, _ := result["answer"].(string)
-	if ok, _ := result["ok"].(bool); !ok {
-		body, _ = result["error"].(string)
-	}
-	return "<agent-result " + attrs + ">\n" + strings.TrimRight(xmlText.Replace(body), "\n") + "\n</agent-result>"
+// noticeText is the notification the model gets when nobody waited for the job.
+func (j *job) noticeText(status string) string {
+	word := map[string]string{"done": "finished", "timeout": "timed out"}[status]
+	return j.id + " " + cmp.Or(word, status)
 }
 
 func (j *job) Wait(ctx context.Context, timeout time.Duration) (map[string]any, bool) {
@@ -212,7 +219,7 @@ func (s jobSet) find(id string) (*job, error) {
 }
 
 func (j *job) info() luart.JobInfo {
-	return luart.JobInfo{ID: j.id, Name: j.name, Cmd: j.cmd, Model: j.model, State: j.Status(), Prompt: j.prompt}
+	return luart.JobInfo{ID: j.id, Name: j.name, Model: j.model, State: j.Status(), Prompt: j.prompt}
 }
 
 func (s jobSet) List() []luart.JobInfo {
@@ -280,12 +287,12 @@ func (s jobSet) Stop(id string) error {
 
 type taskSet struct{ jobSet }
 
-func (s taskSet) Spawn(cmd string, o luart.TaskOpts) (string, error) {
+func (s taskSet) Spawn(run luart.TaskFunc, o luart.TaskOpts) (string, error) {
 	t := s.a.tasks
 	if t == nil {
 		return "", errors.New("no active session")
 	}
-	j, err := t.spawn(cmd, startOpts{kind: "task", name: o.Name, cwd: o.Cwd, env: o.Env, timeout: o.Timeout, waited: o.Waited})
+	j, err := t.spawnLua(run, startOpts{kind: "task", name: o.Name, timeout: o.Timeout})
 	if err != nil {
 		return "", err
 	}

@@ -7,7 +7,6 @@ USAGE
   zel session rename [-s ID] NAME...
   zel session rename ID NAME...
   zel models [--json]
-  zel tasks list|status [-s ID] [TASK]
   zel events [-s ID]
   zel init
   zel update
@@ -34,8 +33,6 @@ COMMANDS
   session rename  Rename a saved session. Positional ID NAME... works when
                   no -s and no ZEL_SESSION_ID.
   models          List PROVIDER<TAB>MODEL; --json prints {models, failures}.
-  tasks list      List a session's background tasks and agents (logs stay on disk).
-  tasks status    Show task state and output log.
   events          Print the session event log, oldest first.
   -s ID           Target a session; defaults to ZEL_SESSION_ID.
 

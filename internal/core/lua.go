@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"zel/internal/luart"
-	"zel/internal/shell"
 )
 
 //go:embed lua.md
@@ -99,17 +98,11 @@ func (a *Runtime) notify(msg string) {
 
 // runLua executes one lua tool call.
 func (a *Runtime) runLua(ctx context.Context, code string) luart.Result {
-	runner := &luart.Runner{Env: luaEnv{a}, Cfg: a.lua.get()}
-	return runner.Run(ctx, code)
-}
-
-// bgDone lets bg_done hooks rewrite or drop the result message of a finished job.
-func (a *Runtime) bgDone(kind, id string, result map[string]any) (string, bool) {
-	cfg := a.lua.get()
-	if cfg == nil || !cfg.HasHook("bg_done") {
-		return "", false
+	if a.vm == nil {
+		a.vm = &luart.Runner{Env: luaEnv{a}}
 	}
-	return cfg.BgDone(context.Background(), kind, id, result)
+	a.vm.Cfg = a.lua.get()
+	return a.vm.Run(ctx, code)
 }
 
 // luaEnv adapts the runtime to the host API of the Lua runtime.
@@ -168,7 +161,7 @@ func (e luaEnv) View(path string) error {
 	if !a.slots.reserve(1) {
 		return fmt.Errorf("at most %d new images per model request", MaxPendingImages)
 	}
-	if !a.queue.Push(Input{Text: "<view>\nImage queued by view().\n</view>", Images: []shell.Image{image}, Notice: true}) {
+	if !a.queue.Push(withImages(notification("view: "+filepath.Base(path)+" attached"), image)) {
 		a.slots.release(1)
 		return fmt.Errorf("input queue is full")
 	}
@@ -201,10 +194,20 @@ func (s kvState) List(scope, prefix string) ([]string, error) {
 }
 func (s kvState) Size(scope string) (int, error) { return s.a.db.KVSize(s.scope(scope)) }
 
-// sessionStart runs the session_start hooks once per started or resumed session.
+// sessionStart runs the session_start hooks once per started or resumed
+// session; text they return is queued as a notification.
 func (a *Runtime) sessionStart() {
 	if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_start") {
-		cfg.SessionStart(context.Background())
+		if text := cfg.SessionStart(context.Background()); text != "" {
+			a.queue.PushNotice(notification(text))
+		}
+	}
+}
+
+// sessionEnd runs the session_end hooks before the session is left.
+func (a *Runtime) sessionEnd(reason string) {
+	if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_end") {
+		cfg.SessionEnd(context.Background(), reason)
 	}
 }
 

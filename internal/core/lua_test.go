@@ -33,7 +33,7 @@ func TestTurnEndHookInjectsOnceAndIsBounded(t *testing.T) {
 local n = 0
 require("zel").on("turn_end", function(ev)
   n = n + 1
-  if n == 1 then return {inject = "CHECK-AGAIN"} end
+  if n == 1 then return {notify = "CHECK-AGAIN"} end
 end)`))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ end)`))
 	}
 
 	fp2 := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	b := newTestAgentWith(t, fp2, Options{}, initLua(t, `require("zel").on("turn_end", function() return {inject = "AGAIN"} end)`))
+	b := newTestAgentWith(t, fp2, Options{}, initLua(t, `require("zel").on("turn_end", function() return "AGAIN" end)`))
 	if _, err := turn(t, b, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -53,27 +53,28 @@ end)`))
 	}
 }
 
-func TestBeforeCallHookDeniesAndRewrites(t *testing.T) {
+func TestMainVMPersistsAcrossCalls(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
-		if n == 1 {
-			return luaReply("c1", "local ok, err = pcall(sh, 'touch denied-marker')\nprint(tostring(ok), err)\nprint(sh('echo plain').out)")
+		switch n {
+		case 1:
+			return luaReply("c1", "x = 7")
+		case 2:
+			return luaReply("c2", `return "kept-" .. x`)
 		}
 		return textReply("done")
 	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-require("zel").on("before_call", function(ev)
-  if ev.fn == "sh" and ev.args[1]:find("denied") then return {deny = "no touching"} end
-  if ev.fn == "sh" and ev.args[1] == "echo plain" then return {args = {"echo rewritten"}} end
-end)`))
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `require("zel").on("session_end", function(ev) state.set("ended", ev.reason, "project") end)`))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
-	out := fp.requests()[1]
-	if !strings.Contains(out, "EDENIED") || !strings.Contains(out, "no touching") || !strings.Contains(out, "rewritten") {
-		t.Fatalf("tool output: %s", out)
+	if req := fp.requests()[2]; !strings.Contains(req, "kept-7") {
+		t.Fatalf("globals did not survive: %s", req)
 	}
-	if _, err := os.Stat(filepath.Join(a.Shell.Dir, "denied-marker")); err == nil {
-		t.Fatal("a denied call ran")
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, _ := a.db.KVGet("project:"+a.projectRoot(), "ended"); !ok || v != `"new"` {
+		t.Fatalf("session_end: %q %v", v, ok)
 	}
 }
 
@@ -138,7 +139,7 @@ func TestUnwaitedAgentResultArrivesAsMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := awaitInput(t, a)
-	if !strings.Contains(got[0].Text, "<agent-result") || !strings.Contains(got[0].Text, "answer to: child-later") {
+	if got[0].Text != "<notification>a1 finished</notification>" {
 		t.Fatalf("message %q", got[0].Text)
 	}
 }
@@ -153,7 +154,9 @@ func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
 			<-gate
 			return textReply("late")
 		case strings.Contains(body, "child-outer") && !strings.Contains(body, `"n1"`):
-			return luaReply("n1", `print(agents.run{prompt = "child-inner"}.answer)`)
+			return luaReply("n1", `print(select(2, pcall(agents.run, {prompt = "child-inner"})))`)
+		case strings.Contains(body, "child-outer") && strings.Contains(body, "EDENIED"):
+			return textReply("outer was denied")
 		case strings.Contains(body, "child-outer"):
 			return textReply("outer saw inner")
 		case strings.Contains(body, "child-inner"):
@@ -173,7 +176,7 @@ print(agents.wait(stuck, 8).ok, agents.status(stuck))`)
 		t.Fatal(err)
 	}
 	out := fp.requests()[len(fp.requests())-1]
-	for _, want := range []string{"true\\touter saw inner", "false\\tstopped"} {
+	for _, want := range []string{"true\\touter was denied", "false\\tstopped"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
@@ -213,24 +216,24 @@ func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
 	}
 }
 
-func TestBgDoneHookDropsAndRewrites(t *testing.T) {
+func TestTaskFunctionNotifiesOnce(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `tasks.spawn("sleep 1; echo dropme", {name = "d"}); tasks.spawn("sleep 1; echo keepme", {name = "k"})`)
+			return luaReply("c1", `local tag = "v1"; tasks.spawn(function() sleep(0.2); return tag end, {name = "k"})`)
 		}
 		return textReply("done")
 	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-require("zel").on("bg_done", function(ev)
-  if ev.result.out:find("dropme") then return {drop = true} end
-  return {text = "REWRITTEN " .. ev.id}
-end)`))
+	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
 	got := awaitInput(t, a)
-	if len(got) != 1 || !strings.HasPrefix(got[0].Text, "REWRITTEN") {
+	if len(got) != 1 || got[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("messages %+v", got)
+	}
+	res, ok, err := (luaEnv{a}).Tasks().Result("t1")
+	if err != nil || !ok || res["value"] != "v1" || res["ok"] != true {
+		t.Fatalf("result %+v %v %v", res, ok, err)
 	}
 }
 
@@ -334,7 +337,7 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 
 func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
-		return luaReply("c1", "local h = tasks.spawn('sleep 30', {name='bg'})\nfs.write('spawned', h)\nsleep(20)")
+		return luaReply("c1", "local h = tasks.spawn(function() sh('sleep 30') end, {name='bg'})\nfs.write('spawned', h)\nsleep(20)")
 	}}
 	a := newTestAgent(t, fp, Options{})
 	ctx, cancel := context.WithCancel(context.Background())

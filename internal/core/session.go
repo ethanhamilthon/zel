@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"zel/internal/luart"
 	"zel/internal/store"
 )
 
@@ -34,16 +36,16 @@ func (a *Runtime) acquire() error {
 	}
 	a.owner = file
 	a.tasks = a.newTasks()
-	env := a.shellEnv()
-	a.tasks.mu.Lock()
-	a.tasks.env = env
-	a.tasks.mu.Unlock()
 	return nil
 }
 
 // release stops the jobs, drops the lock and removes the lock file of an unsaved session.
 // The database stays open: a session change hands it to the next session.
 func (a *Runtime) release() {
+	if a.vm != nil {
+		a.vm.Close()
+		a.vm = nil
+	}
 	if a.tasks != nil {
 		a.tasks.close()
 		a.tasks = nil
@@ -61,6 +63,9 @@ func (a *Runtime) release() {
 func (a *Runtime) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
 
 func (a *Runtime) Close() {
+	if a.tasks != nil {
+		a.sessionEnd("quit")
+	}
 	a.release()
 	if a.db != nil {
 		a.db.Close()
@@ -77,6 +82,12 @@ func (a *Runtime) Reload() error {
 		return err
 	}
 	a.reloadLua()
+	if a.tasks != nil {
+		a.tasks.cancelLua()
+	}
+	if a.vm != nil {
+		a.vm.Reset("init.lua was reloaded")
+	}
 	previous, frozen := a.prompt, a.promptFrozen
 	a.promptFrozen = false
 	if _, err := a.instructions(context.Background()); err != nil {
@@ -117,9 +128,18 @@ func (a *Runtime) changeSession(id string) error {
 			return err
 		}
 	}
+	reason := "new"
+	if id != "" {
+		reason = "resume"
+	}
+	a.sessionEnd(reason)
 	a.release()
 	a.lua.set(nil)
 	*a = *next
+	if id != "" {
+		a.vm = &luart.Runner{Env: luaEnv{a}}
+		a.vm.Reset("the session was resumed")
+	}
 	a.sessionStart()
 	return nil
 }

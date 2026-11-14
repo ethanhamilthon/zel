@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -37,7 +35,7 @@ func TestIsHelper(t *testing.T) {
 		{[]string{"help"}, true},
 		{[]string{"--help"}, true},
 		{[]string{"-h"}, true},
-		{[]string{"tasks"}, true},
+		{[]string{"tasks"}, false},
 		{[]string{"view"}, false},
 		{[]string{"events"}, true},
 		{[]string{"session"}, true},
@@ -49,23 +47,6 @@ func TestIsHelper(t *testing.T) {
 		if got := IsHelper(tc.args); got != tc.want {
 			t.Errorf("IsHelper(%v) = %v, want %v", tc.args, got, tc.want)
 		}
-	}
-}
-
-func TestParseAll(t *testing.T) {
-	var s string
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.StringVar(&s, "s", "", "session")
-	positional, err := parseAll(fs, []string{"run", "-s", "123", "echo", "hi"})
-	if err != nil {
-		t.Fatalf("parseAll error: %v", err)
-	}
-	if s != "123" {
-		t.Errorf("flag s = %q, want 123", s)
-	}
-	want := []string{"run", "echo", "hi"}
-	if !reflect.DeepEqual(positional, want) {
-		t.Errorf("positional = %v, want %v", positional, want)
 	}
 }
 

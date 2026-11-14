@@ -64,6 +64,7 @@ type fakeJob struct {
 	done     chan struct{}
 	result   map[string]any
 	stopped  bool
+	cancel   func()
 }
 
 func (j *fakeJob) state() string {
@@ -85,6 +86,7 @@ type fakeEnv struct {
 	viewed  []string
 	renamed string
 	spawned []AgentOpts
+	depth   int
 }
 
 func newEnv(t *testing.T) *fakeEnv {
@@ -92,7 +94,7 @@ func newEnv(t *testing.T) *fakeEnv {
 }
 
 func (e *fakeEnv) Info() SessionInfo {
-	return SessionInfo{ID: "s1", Cwd: e.cwd, Root: e.cwd, Model: "m", Effort: "low", Home: e.cwd + "/.zel", TmpDir: e.cwd + "/tmp", LuaPath: []string{e.cwd + "/.zel/lua"}}
+	return SessionInfo{ID: "s1", Cwd: e.cwd, Root: e.cwd, Model: "m", Effort: "low", Depth: e.depth, Home: e.cwd + "/.zel", TmpDir: e.cwd + "/tmp", LuaPath: []string{e.cwd + "/.zel/lua"}}
 }
 func (e *fakeEnv) ShellEnv() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }
 func (e *fakeEnv) State() StateStore           { return e.state }
@@ -173,21 +175,34 @@ func (s fakeSet) Stop(id string) error {
 		return err
 	}
 	j.stopped = true
+	if j.cancel != nil {
+		j.cancel()
+		<-j.done
+		return nil
+	}
 	close(j.done)
 	return nil
 }
 
 type fakeTasks struct{ fakeSet }
 
-func (s fakeTasks) Spawn(cmd string, o TaskOpts) (string, error) {
+func (s fakeTasks) Spawn(run TaskFunc, o TaskOpts) (string, error) {
 	e := s.e
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	j := &fakeJob{id: fmt.Sprintf("t%d", len(e.jobs)+1), kind: "task", done: make(chan struct{}), result: map[string]any{"ok": true, "out": cmd}}
+	ctx, cancel := context.WithCancel(context.Background())
+	j := &fakeJob{id: fmt.Sprintf("t%d", len(e.jobs)+1), kind: "task", done: make(chan struct{}), cancel: cancel}
 	e.jobs[j.id] = j
-	if cmd == "instant" {
+	e.mu.Unlock()
+	go func() {
+		var out strings.Builder
+		v, err := run(ctx, &out)
+		res := map[string]any{"ok": err == nil, "value": v, "out": out.String()}
+		if err != nil {
+			res["error"] = err.Error()
+		}
+		j.result = res
 		close(j.done)
-	}
+	}()
 	return j.id, nil
 }
 

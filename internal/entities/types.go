@@ -206,8 +206,12 @@ func RecordsForItem(item json.RawMessage) []Record {
 	return nil
 }
 
+// IsNotice reports whether a user-role message is a notification rather
+// than something the user typed. The other prefixes come from sessions saved
+// before 0.5.2.
 func IsNotice(text string) bool {
-	return strings.HasPrefix(text, "<task-result ") || strings.HasPrefix(text, "<agent-result ") || strings.HasPrefix(text, "<view>")
+	return strings.HasPrefix(text, "<notification>") || strings.HasPrefix(text, "<task-result ") ||
+		strings.HasPrefix(text, "<agent-result ") || strings.HasPrefix(text, "<view>")
 }
 
 const OriginalImage = "\nOriginal image (for crops): "

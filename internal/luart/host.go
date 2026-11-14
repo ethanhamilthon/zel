@@ -1,7 +1,6 @@
 package luart
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -21,32 +20,62 @@ func (v *vm) installHost() {
 		pkg.RawSetString("path", lua.LString(current))
 	}
 
-	L.SetGlobal("sh", L.NewFunction(v.wrap("sh", v.sh)))
-	L.SetGlobal("sleep", L.NewFunction(v.wrap("sleep", v.sleep)))
-	L.SetGlobal("view", L.NewFunction(v.wrap("view", v.view)))
-	L.SetGlobal("slice", L.NewFunction(v.wrap("slice", slice)))
+	if v.role == roleConfig {
+		v.out = logWriter{v.env}
+	}
+	L.SetGlobal("print", L.NewFunction(v.print))
+	L.SetGlobal("sh", L.NewFunction(v.sh))
+	L.SetGlobal("sleep", L.NewFunction(v.sleep))
+	L.SetGlobal("view", L.NewFunction(v.view))
+	L.SetGlobal("slice", L.NewFunction(slice))
 	v.table("fs", map[string]lua.LGFunction{
 		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "list": v.fsList, "glob": v.fsGlob,
 		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp, "patch": v.fsPatch,
 	})
 	v.table("web", map[string]lua.LGFunction{"request": v.webRequest, "get": v.webGet, "post": v.webPost})
 	v.table("json", map[string]lua.LGFunction{"encode": v.jsonEncode, "decode": v.jsonDecode})
-	v.installJobs("tasks", func() Jobs { return v.env.Tasks() }, v.tasksSpawn, v.tasksRun)
-	v.installJobs("agents", func() Jobs { return v.env.Agents() }, v.agentsSpawn, v.agentsRun)
+	v.installJobs("tasks", func() Jobs { return v.env.Tasks() }, v.tasksSpawn, nil)
+	if v.agentsAllowed() {
+		v.installJobs("agents", func() Jobs { return v.env.Agents() }, v.agentsSpawn, v.agentsRun)
+	} else {
+		v.disabled("agents", append([]string{"run"}, jobFns...), "subagents cannot start subagents; use tasks.spawn")
+	}
 	v.table("state", map[string]lua.LGFunction{"get": v.stateGet, "set": v.stateSet, "list": v.stateList})
 	v.table("log", map[string]lua.LGFunction{"info": v.logFn("info"), "warn": v.logFn("warn"), "notice": v.logFn("notice")})
 	v.installSession()
 }
 
-// table creates a global table whose functions run through the hook wrapper.
+// logWriter sends what the config vm prints to the session's log.
+type logWriter struct{ env Env }
+
+func (w logWriter) Write(p []byte) (int, error) {
+	w.env.Log("print", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
+// table creates a global table of host functions.
 func (v *vm) table(name string, fns map[string]lua.LGFunction) {
 	t := v.L.NewTable()
 	for fn, impl := range fns {
-		t.RawSetString(fn, v.L.NewFunction(v.wrap(name+"."+fn, impl)))
+		t.RawSetString(fn, v.L.NewFunction(impl))
 	}
 	v.L.SetGlobal(name, t)
 }
 
+// disabled installs a namespace whose functions all fail with reason.
+func (v *vm) disabled(name string, fns []string, reason string) {
+	t := v.L.NewTable()
+	for _, fn := range fns {
+		full := name + "." + fn
+		t.RawSetString(fn, v.L.NewFunction(func(L *lua.LState) int {
+			raise(L, full, EDENIED, "%s", reason)
+			return 0
+		}))
+	}
+	v.L.SetGlobal(name, t)
+}
+
+// installSession (re)builds the session table from the current session info.
 func (v *vm) installSession() {
 	L := v.L
 	info := v.env.Info()
@@ -55,7 +84,7 @@ func (v *vm) installSession() {
 		t.RawSetString(k, lua.LString(val))
 	}
 	t.RawSetString("depth", lua.LNumber(info.Depth))
-	t.RawSetString("rename", L.NewFunction(v.wrap("session.rename", func(L *lua.LState) int {
+	t.RawSetString("rename", L.NewFunction(func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if strings.TrimSpace(name) == "" {
 			raise(L, "session.rename", EINVAL, "name is empty")
@@ -64,64 +93,8 @@ func (v *vm) installSession() {
 			raise(L, "session.rename", EFAIL, "%v", err)
 		}
 		return 0
-	})))
+	}))
 	L.SetGlobal("session", t)
-}
-
-// wrap runs before_call/after_call hooks around a host function.
-func (v *vm) wrap(name string, fn lua.LGFunction) lua.LGFunction {
-	return func(L *lua.LState) int {
-		if v.noHooks || v.cfg == nil || !v.cfg.HasCallHooks() {
-			return fn(L)
-		}
-		n := L.GetTop()
-		args := make([]any, 0, n)
-		for i := 1; i <= n; i++ {
-			g, err := toGo(L.Get(i))
-			if err != nil {
-				return fn(L) // arguments hooks cannot see (functions...) skip the hooks
-			}
-			args = append(args, g)
-		}
-		newArgs, deny := v.cfg.BeforeCall(v.ctx, name, args)
-		if deny != "" {
-			raise(L, name, EDENIED, "%s", deny)
-		}
-		if newArgs != nil {
-			L.SetTop(0)
-			for _, a := range newArgs {
-				L.Push(toLua(L, a))
-			}
-			args = newArgs
-		}
-		started := time.Now()
-		nret, failure := v.protect(L, fn)
-		if failure != nil {
-			v.cfg.AfterCall(v.ctx, name, args, nil, errorMessage(failure), time.Since(started))
-			panic(failure)
-		}
-		var result any
-		if nret > 0 {
-			result, _ = toGo(L.Get(-nret))
-		}
-		if replaced, ok := v.cfg.AfterCall(v.ctx, name, args, result, "", time.Since(started)); ok && nret > 0 {
-			L.Replace(-nret, toLua(L, replaced))
-		}
-		return nret
-	}
-}
-
-func (v *vm) protect(L *lua.LState, fn lua.LGFunction) (nret int, failure error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if e, ok := r.(error); ok {
-				failure = e
-			} else {
-				failure = fmt.Errorf("%v", r)
-			}
-		}
-	}()
-	return fn(L), nil
 }
 
 // opts reads the optional table argument at position n.

@@ -30,7 +30,7 @@ func (h *turnHost) TurnEnd(ctx context.Context) bool {
 		return false
 	}
 	h.injected++
-	h.a.addInput(Input{Text: text}, h.emit)
+	h.a.addInput(notification(text), h.emit)
 	return true
 }
 func (h *turnHost) Save() error    { return h.a.saveHistory() }

@@ -5,6 +5,7 @@ package luart
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -20,23 +21,26 @@ type SessionInfo struct {
 
 // TaskOpts are the options of tasks.spawn.
 type TaskOpts struct {
-	Name, Cwd string
-	Env       map[string]string
-	Timeout   time.Duration
-	Waited    bool // the caller waits for the result: no <task-result> message is queued
+	Name    string
+	Timeout time.Duration // zero: no limit
 }
+
+// TaskFunc is the body of a task. It runs on its own goroutine in its own VM
+// until it returns or ctx ends; out receives what it prints. The value is the
+// function's first return value.
+type TaskFunc func(ctx context.Context, out io.Writer) (value any, err error)
 
 // AgentOpts are the options of agents.spawn.
 type AgentOpts struct {
 	Prompt, Model, Effort, Provider, Cwd string
 	Timeout                              time.Duration
-	Waited                               bool // the caller waits for the result: no <agent-result> message is queued
+	Waited                               bool // the caller waits for the result: no notification is queued
 }
 
-// JobInfo is one row of tasks.list / agents.list. Cmd is set for tasks, Model
+// JobInfo is one row of tasks.list / agents.list. Name is set for tasks, Model
 // and Prompt for agents.
 type JobInfo struct {
-	ID, Name, Cmd, Model, State, Prompt string
+	ID, Name, Model, State, Prompt string
 }
 
 // ErrNoJob is returned for an ID the namespace does not know.
@@ -59,10 +63,10 @@ type Jobs interface {
 	Stop(id string) error
 }
 
-// Tasks is the tasks namespace: shell commands in the background.
+// Tasks is the tasks namespace: Lua functions in the background.
 type Tasks interface {
 	Jobs
-	Spawn(cmd string, o TaskOpts) (id string, err error)
+	Spawn(run TaskFunc, o TaskOpts) (id string, err error)
 }
 
 // Agents is the agents namespace: subagents that run inside the application.

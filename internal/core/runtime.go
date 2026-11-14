@@ -81,6 +81,7 @@ type Runtime struct {
 	slots         *imageSlots
 	tasks         *tasks
 	lua           *luaHolder
+	vm            *luart.Runner // the session's main Lua VM, created on first use
 }
 
 func (a *Runtime) Home() string { return a.home }
@@ -207,7 +208,7 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 			return false
 		}
 		accepted := false
-		for _, instruction := range a.queue.Take() {
+		for _, instruction := range batch(a.queue.Take()) {
 			if strings.TrimSpace(instruction.Text) != "" || len(instruction.Images) > 0 {
 				a.addInput(a.hookInput(ctx, instruction), emit)
 				accepted = true

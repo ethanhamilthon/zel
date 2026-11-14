@@ -279,7 +279,7 @@ func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 
 func TestTaskStopAndSessionClose(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := a.tasks.spawn("sleep 30", startOpts{}); err != nil {
+	if _, err := a.StartTask("sleep(30)"); err != nil {
 		t.Fatal(err)
 	}
 	if a.RunningTasks() != 1 {
@@ -288,10 +288,10 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	if err := a.StopTask("t1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := awaitInput(t, a); !strings.HasPrefix(got[0].Text, `<task-result id="t1" status="stopped"`) {
+	if got := awaitInput(t, a); got[0].Text != "<notification>t1 stopped</notification>" {
 		t.Fatalf("result %+v", got)
 	}
-	if _, err := a.tasks.spawn("sleep 30", startOpts{}); err != nil {
+	if _, err := a.StartTask("sh('sleep 30')"); err != nil {
 		t.Fatal(err)
 	}
 	old, start := a.SessionID(), time.Now()
@@ -301,7 +301,7 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	if time.Since(start) > 5*time.Second || a.RunningTasks() != 0 || len(a.Queue().Take()) != 0 {
 		t.Fatal("session change did not stop the task quietly")
 	}
-	if list, err := SessionTasks(a.home, old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
+	if list, err := sessionTasks(a.db, old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
 		t.Fatalf("tasks %+v %v", list, err)
 	}
 }
@@ -518,7 +518,7 @@ func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
 	for i := 0; i < maxQueued; i++ {
 		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
 	}
-	if _, err := a.tasks.spawn("echo should-not-run", startOpts{}); err == nil || !strings.Contains(err.Error(), "unresolved task") {
+	if _, err := a.StartTask("return 1"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
 		t.Fatalf("admission: %v", err)
 	}
 	for i := 0; i < maxQueued; i++ {
@@ -536,13 +536,16 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	if _, err := a.db.Exec(`CREATE TRIGGER fail_task_finish BEFORE UPDATE ON tasks BEGIN SELECT RAISE(FAIL, 'completion blocked'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.tasks.spawn("echo finished", startOpts{}); err != nil {
+	if _, err := a.StartTask("return 1"); err != nil {
 		t.Fatal(err)
 	}
 	a.tasks.wg.Wait()
 	inputs := a.Queue().Take()
-	if len(inputs) != 1 || !strings.Contains(inputs[0].Text, "could not be persisted") || !strings.Contains(inputs[0].Text, "completion blocked") {
+	if len(inputs) != 1 || inputs[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("completion: %+v", inputs)
+	}
+	if data, _ := os.ReadFile(EventsLog(a.home, a.id)); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "completion blocked") {
+		t.Fatalf("persistence failure not reported: %s", data)
 	}
 }
 
@@ -596,6 +599,26 @@ func TestTurnEmitsStartedThenExactlyOneDone(t *testing.T) {
 	}
 }
 
+func TestNotificationsAreBatchedInOrder(t *testing.T) {
+	var q Steering
+	q.PushNotice(notification("t1 finished"))
+	q.PushNotice(notification("t2 failed"))
+	q.Push(Input{Text: "typed"})
+	q.PushNotice(notification("a1 finished"))
+	var got []string
+	for {
+		in, ok := q.PopBatch()
+		if !ok {
+			break
+		}
+		got = append(got, in.Text)
+	}
+	want := []string{"<notification>t1 finished</notification>\n<notification>t2 failed</notification>", "typed", "<notification>a1 finished</notification>"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestSteeringJoinsRunningTurn(t *testing.T) {
 	gate := make(chan struct{})
 	h := newHarness(t, &fakeModel{gate: gate})
@@ -615,7 +638,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	h := newHarness(t, &fakeModel{gate: gate})
 	h.send("first")
 	h.inFlight(1)
-	if _, err := h.a.tasks.spawn("echo notice A", startOpts{}); err != nil {
+	if _, err := h.a.StartTask("print('notice A')"); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); h.a.RunningTasks() > 0; time.Sleep(time.Millisecond) {
@@ -630,7 +653,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("%d requests, want 2", len(reqs))
 	}
-	a, b := strings.Index(reqs[1], "notice A"), strings.Index(reqs[1], "steer B")
+	a, b := strings.Index(reqs[1], "t1 finished"), strings.Index(reqs[1], "steer B")
 	if a < 0 || b < a {
 		t.Fatalf("notification and steering out of order: A=%d B=%d", a, b)
 	}
