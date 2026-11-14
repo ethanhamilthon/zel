@@ -22,6 +22,9 @@ type job struct {
 	started             time.Time
 	timer               *time.Timer
 	done                chan struct{}
+	// endHook runs once the job has ended and its result is published (subagents
+	// only); closing says the runtime is shutting down. Set before the job starts.
+	endHook func(status string, res map[string]any, closing bool)
 
 	// Guarded by t.mu.
 	waited   bool

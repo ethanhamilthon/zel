@@ -38,7 +38,9 @@ zel.on("turn_end", function(ev) end)</pre>
 session_start   {}                       return text (or {notify="text"}) to notify the agent
 session_end     {reason}                 quit / new / resume; 5 s for all hooks
 message         {text}                   return a new user text
-turn_end        {answer}                 return text (or {notify="text"}) to continue (at most 3 times per turn)</pre>
+turn_end        {answer}                 return text (or {notify="text"}) to continue (at most 3 times per turn)
+subagent_start  {id,prompt,model,effort,provider,cwd,depth}  runs in the background when a subagent begins; no text to the agent
+subagent_end    {id,status,ok,answer,error,session,model,effort,ms}  once per subagent: done / failed / stopped / timeout; 5 s while the session closes</pre>
 <p>Hooks of all layers run, global first; an error in a hook is logged to Tracing and ignored. Hook text reaches the agent as a <code>&lt;notification&gt;</code>. Lua output has only a 1 MiB safety cap; <code>sh().out</code> keeps up to 8 MiB.</p>
 <h2 id="ui">Interface</h2>
 <table><tr><th>Shortcut</th><th>Action</th></tr><tr><td>Ctrl+K</td><td>Menu</td></tr><tr><td>Ctrl+M</td><td>Models</td></tr><tr><td>Ctrl+R</td><td>Resume</td></tr><tr><td>Ctrl+I</td><td>Info</td></tr><tr><td>Ctrl+T</td><td>Tracing</td></tr><tr><td>Ctrl+F</td><td>Files</td></tr><tr><td>Ctrl+Q</td><td>Save and quit</td></tr><tr><td>Ctrl+Y</td><td>Copy the last answer as plain text (also in Menu)</td></tr><tr><td>Ctrl+D</td><td>Stop the active turn (does not exit)</td></tr><tr><td>Ctrl+E</td><td>External draft editor</td></tr></table>

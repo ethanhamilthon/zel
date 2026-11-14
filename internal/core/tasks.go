@@ -188,7 +188,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		}
 		persistErr := t.finish(id, status, exit)
 		took := time.Since(started)
-		j.complete(status, code, took)
+		res := j.complete(status, code, took)
 		notice := notification(j.noticeText(status))
 		if persistErr != nil {
 			warning := "Task " + id + " completion could not be persisted; saved status may be stale: " + persistErr.Error()
@@ -199,6 +199,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		// The result is queued before the task stops counting as running, so a waiting
 		// consumer cannot observe neither a task nor its result.
 		t.mu.Lock()
+		closing := t.closed
 		if !t.closed && !j.waited {
 			t.queue.PushNotice(notice)
 			j.pushed = notice.Text
@@ -206,6 +207,9 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		delete(t.running, id)
 		t.mu.Unlock()
 		close(j.done)
+		if j.endHook != nil {
+			j.endHook(status, res, closing)
+		}
 	}()
 	return id, nil
 }

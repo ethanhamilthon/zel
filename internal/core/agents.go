@@ -125,10 +125,23 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 	model := cmp.Or(o.Model, a.Settings().Model)
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
+	hooks, depth := a.lua, a.depth+1
 	j, err := a.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
+			// The lifecycle hooks run on goroutines of their own. They wait for the Lua
+			// config lock, which a plugin function can hold while it waits for this very
+			// subagent, so no hook may sit on the path to the subagent's result.
+			started := make(chan struct{})
+			j.endHook = func(status string, res map[string]any, closing bool) {
+				<-started
+				hooks.endSubagent(subagentEndInfo(j, o, status, res), closing)
+			}
 			done := make(chan error, 1)
 			go func() {
+				go func() {
+					defer close(started)
+					hooks.startSubagent(subagentStartInfo(j, o, cwd, depth))
+				}()
 				err := a.runChild(ctx, j, log, cwd, o)
 				failed = err != nil
 				done <- err
@@ -212,4 +225,22 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 	fmt.Fprintf(log, "%s\n", outcome.Answer)
 	j.setOutcome(outcome)
 	return nil
+}
+
+// subagentStartInfo is the payload of subagent_start: the identity of the
+// subagent and what it was asked to do.
+func subagentStartInfo(j *job, o luart.AgentOpts, cwd string, depth int) map[string]any {
+	return map[string]any{"id": j.id, "prompt": o.Prompt, "model": j.model, "effort": o.Effort,
+		"provider": o.Provider, "cwd": cwd, "depth": depth}
+}
+
+// subagentEndInfo is the payload of subagent_end: the final status and outcome.
+// error is present only when the subagent did not succeed.
+func subagentEndInfo(j *job, o luart.AgentOpts, status string, res map[string]any) map[string]any {
+	info := map[string]any{"id": j.id, "status": status, "ok": res["ok"], "ms": res["ms"],
+		"model": j.model, "effort": o.Effort, "answer": res["answer"], "session": res["session"]}
+	if msg, ok := res["error"].(string); ok {
+		info["error"] = msg
+	}
+	return info
 }

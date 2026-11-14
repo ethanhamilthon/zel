@@ -282,6 +282,29 @@ func (a *Runtime) hookInput(ctx context.Context, input Input) Input {
 	return input
 }
 
+// startSubagent runs the subagent_start hooks of the current snapshot.
+func (h *luaHolder) startSubagent(info map[string]any) {
+	if cfg := h.get(); cfg != nil && cfg.HasHook("subagent_start") {
+		cfg.SubagentStart(context.Background(), info)
+	}
+}
+
+// endSubagent runs the subagent_end hooks of the current snapshot. While the
+// session is closing they get the time budget of session_end.
+func (h *luaHolder) endSubagent(info map[string]any, closing bool) {
+	cfg := h.get()
+	if cfg == nil || !cfg.HasHook("subagent_end") {
+		return
+	}
+	ctx := context.Background()
+	if closing {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, luart.SessionEndTimeout)
+		defer cancel()
+	}
+	cfg.SubagentEnd(ctx, info)
+}
+
 // turnEnd runs the turn_end hooks; a returned text becomes a new user message.
 func (a *Runtime) turnEnd(ctx context.Context) string {
 	cfg := a.lua.get()

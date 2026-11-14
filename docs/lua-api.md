@@ -138,6 +138,8 @@ zel.fn{
 | `session_end` | `{reason}` (`quit`/`new`/`resume`) | ничего; на все хуки вместе 5 s |
 | `message` | `{text}` | nil или новую строку текста юзера |
 | `turn_end` | `{answer}` | nil или строку / `{notify = "текст"}` → уведомление, ход продолжается (не больше 3 раз подряд) |
+| `subagent_start` | `{id, prompt, model, effort, provider, cwd, depth}` | nothing; runs in the background when the subagent begins |
+| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; once per subagent: `done`/`failed`/`stopped`/`timeout` |
 
 С 0.5.2 хуков ровно четыре: `before_call`, `after_call` и `bg_done` удалены (`zel.on` с ними — ошибка загрузки слоя).
 Всё, что хуки сообщают агенту, приходит в одном формате `<notification>текст</notification>`.

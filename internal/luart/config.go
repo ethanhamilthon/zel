@@ -2,6 +2,7 @@ package luart
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,9 +66,10 @@ type Config struct {
 	hooks    map[string][]hook
 	loading  *Layer
 	LoadErrs []string
+	closed   bool // set by Close: a closed snapshot runs no hooks or functions
 }
 
-var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true}
+var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true, "subagent_start": true, "subagent_end": true}
 
 // jobFns are the lifecycle functions of both the tasks and the agents namespace.
 var jobFns = []string{"spawn", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
@@ -109,12 +111,16 @@ func LoadConfig(env Env, sources []Source) *Config {
 	return c
 }
 
-// Close frees the config vm.
+// Close frees the config vm. A closed snapshot runs no more hooks or functions.
 func (c *Config) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.closed = true
 	c.v.close()
 }
+
+// errClosed is what calls into a snapshot that was reloaded away return.
+var errClosed = errors.New("init.lua was reloaded")
 
 func (c *Config) loadLayer(src Source) {
 	if _, err := os.Stat(src.Path); err != nil {
@@ -423,6 +429,9 @@ var errCodeRe = regexp.MustCompile(`^[\w.:]+: E[A-Z]+: `)
 func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return nil, errClosed
+	}
 	L := c.v.L
 	prev := c.v.ctx
 	c.v.ctx = ctx
@@ -463,6 +472,9 @@ func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold
 func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[string]any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return nil, errClosed
+	}
 	L := c.v.L
 	prev := c.v.ctx
 	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -550,4 +562,16 @@ func (c *Config) Message(ctx context.Context, text string) string {
 // ("" lets the turn end).
 func (c *Config) TurnEnd(ctx context.Context, answer string) string {
 	return c.collect(ctx, "turn_end", map[string]any{"answer": answer})
+}
+
+// SubagentStart runs the subagent_start hooks when a subagent begins. info
+// describes the subagent; the hooks return nothing the agent sees.
+func (c *Config) SubagentStart(ctx context.Context, info map[string]any) {
+	c.emit(ctx, "subagent_start", info, nil)
+}
+
+// SubagentEnd runs the subagent_end hooks once a subagent has ended, with its
+// final status. Like SubagentStart, the hooks return nothing the agent sees.
+func (c *Config) SubagentEnd(ctx context.Context, info map[string]any) {
+	c.emit(ctx, "subagent_end", info, nil)
 }

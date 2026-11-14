@@ -45,7 +45,8 @@ INIT.LUA
   working directory, then --config FILE. Layers instruct (zel.instructions,
   zel.prompt), set defaults, register functions (zel.fn) shown in the system
   prompt, and hook events (session_start, session_end, message,
-  turn_end). Layers are read once per session (and on resume);
+  turn_end, subagent_start, subagent_end). Layers are read once per
+  session (and on resume);
   Menu > Reload re-reads them. ZEL.md is no longer read. See docs/lua-api.md.
 
 OUTPUT

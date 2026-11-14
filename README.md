@@ -115,8 +115,16 @@ zel.fn{                                                   -- a function for the 
   params = {{"pkg", "string?", "go package pattern", default = "./..."}},
   run = function(pkg) return sh("go vet " .. pkg).out end,
 }
-zel.on("turn_end", function(ev) end)  -- also session_start, session_end, message; returned text becomes a notification
+zel.on("turn_end", function(ev) end)  -- also session_start, session_end, message, subagent_start, subagent_end
 ```
+
+Subagent hooks run in the parent's init.lua. `subagent_start` runs in the
+background when a subagent begins, with `{id, prompt, model, effort, provider,
+cwd, depth}`. `subagent_end` runs once after the subagent's result is published,
+with `{id, status, ok, answer, error, session, model, effort, ms}`; `status` is
+`done`, `failed`, `stopped` or `timeout`. While the session closes, the end hooks
+share the 5 s budget of `session_end`. Neither hook returns text to the agent:
+keep the data in `state` or raise a `log.notice`.
 
 Registered functions are rendered into the system prompt (signature, summary,
 examples), so the model finds them without extra setup. `package.path` includes

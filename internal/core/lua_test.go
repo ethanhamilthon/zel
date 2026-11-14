@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -528,4 +529,103 @@ func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
 		t.Fatalf("the spawned task did not survive: %d running", a.RunningTasks())
 	}
 	_ = a.StopTask("t1")
+}
+
+// storedString reads a string kept by state.set in the project scope.
+func storedString(t *testing.T, a *Runtime, key string) string {
+	t.Helper()
+	raw, ok, err := a.db.KVGet("project:"+a.projectRoot(), key)
+	if err != nil || !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// awaitStored waits until a stored string reaches want.
+func awaitStored(t *testing.T, a *Runtime, key, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); storedString(t, a, key) != want; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s = %q, want %q", key, storedString(t, a, key), want)
+		}
+	}
+}
+
+func TestSubagentLifecycleHooksRunOncePerSubagent(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		case childMarker.MatchString(body):
+			return textReply("answer to: " + childMarker.FindString(body))
+		}
+		return luaReply("c1", `
+agents.run{prompt = "child-ping"}
+local stuck = agents.spawn{prompt = "child-stuck"}
+agents.stop(stuck)
+print(agents.wait(stuck, 8).ok)
+print(agents.run{prompt = "child-bad", provider = "missing"}.ok)`)
+	}}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+local zel = require("zel")
+local function record(key, value)
+	state.set(key, (state.get(key, "project") or "") .. value .. ";", "project")
+end
+zel.on("subagent_start", function(ev) record("start." .. ev.id, ev.model) end)
+zel.on("subagent_end", function(ev) record("end." .. ev.id, ev.status) end)`))
+	t.Cleanup(func() { close(gate) }) // runs before the server closes
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	// The start hooks run beside the subagents and the end hooks just after
+	// their results are published, so wait for every expected record.
+	wants := map[string]string{"start.a1": "m;", "start.a2": "m;", "start.a3": "m;", "end.a1": "done;", "end.a2": "stopped;", "end.a3": "failed;"}
+	for key, want := range wants {
+		awaitStored(t, a, key, want)
+	}
+	time.Sleep(50 * time.Millisecond) // a duplicate hook would have landed by now
+	for key, want := range wants {
+		if got := storedString(t, a, key); got != want {
+			t.Errorf("%s = %q, want %q: hooks ran more than once or out of order", key, got, want)
+		}
+	}
+}
+
+// A plugin function holds the config lock while it waits for a subagent; the
+// subagent's lifecycle hooks need that lock, so they must not block the result.
+func TestSubagentHooksDoNotBlockPluginFunctionWaiting(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case childMarker.MatchString(body):
+			return textReply("answer to: " + childMarker.FindString(body))
+		}
+		return luaReply("c1", `print(review())`)
+	}}
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
+local zel = require("zel")
+zel.fn{name = "review", summary = "runs a subagent", run = function()
+	return agents.run{prompt = "child-ping"}.answer
+end}
+zel.on("subagent_start", function(ev) sh("true") end)
+zel.on("subagent_end", function(ev) sh("true") end)`))
+	start := time.Now()
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("plugin call waited %s for its subagent", elapsed)
+	}
+	if out := fp.requests(); !strings.Contains(out[len(out)-1], "answer to: child-ping") {
+		t.Fatalf("plugin result missing: %s", out)
+	}
 }
