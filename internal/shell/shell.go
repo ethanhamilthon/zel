@@ -53,7 +53,7 @@ func Command(ctx context.Context, dir string, extra map[string]string, script st
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		// Session variables belong to this session: a sub-agent must not inherit its parent's endpoint.
-		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" || key == "ZEL_MODE" || key == "ZEL_SOURCE" || key == "ZEL_ENDPOINT" {
+		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" || key == "ZEL_MODE" || key == "ZEL_SOURCE" {
 			continue
 		}
 		cmd.Env = append(cmd.Env, entry)

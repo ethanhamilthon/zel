@@ -12,9 +12,9 @@ import (
 
 // BuiltinPrompt is the fixed part of the system prompt: the Lua tool and the host API.
 const BuiltinPrompt = `# Lua
-One tool: lua (raw Lua; optional first line --! timeout=N). Fresh env per call; only state.* persists. Output = print() + return (JSON), 8 KB head/tail: filter in Lua.
-Errors raise "fn: CODE: msg" (pcall); sh/web/tasks.run/agents.run/h:wait return ok=false instead. Everything blocks.
-tasks.spawn/agents.spawn → Handle; unwaited results arrive later as <task-result>/<agent-result>.
+One tool: lua (raw Lua). Each call has a fixed 10 s timeout that cannot be changed: run long work with tasks.spawn/agents.spawn and check it in later calls. Fresh env per call; only state.* persists. Output = print() + return (JSON), 8 KB head/tail: filter in Lua.
+Errors raise "fn: CODE: msg" (pcall); sh/web/tasks.run/agents.run return ok=false instead. Everything blocks.
+spawn returns a job id (string); unwaited results arrive later as <task-result>/<agent-result>.
 ## built-in
 sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check
 fs.read(path, o?) -> string  -- o: from,lines
@@ -24,9 +24,9 @@ fs.list(dir) -> {name,dir,size}[]; fs.glob(pat) -> string[]; fs.exists(path) -> 
 fs.grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
 web.get(url, o?) / web.post(url, o?) / web.request{url,method,headers,body,json,timeout} -> {ok,status,headers,body,error}
 json.encode(v, o?) / json.decode(s)
-tasks.spawn(cmd, o?) -> H; tasks.run(cmd, o?) -> {ok,code,out,log,timed_out}; tasks.get(id); tasks.list()
-agents.spawn{prompt,model,effort,timeout} -> H; agents.run{...} -> {ok,answer,session,error}; agents.get(id); agents.list()
-H: h.id h:status() h:wait(timeout?) h:result() h:tail(n?) h:stop(); wait_all(hs, timeout?) -> results[]
+tasks.spawn(cmd, o?) -> id; tasks.run(cmd, o?) -> {ok,code,out,log,timed_out}  -- o: name,cwd,env,timeout
+agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
+tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
 state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
 view(path, ...); session.{id,cwd,root,depth}; log.info/notice(msg); sleep(s)`
 

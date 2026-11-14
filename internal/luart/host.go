@@ -24,19 +24,17 @@ func (v *vm) installHost() {
 	L.SetGlobal("sh", L.NewFunction(v.wrap("sh", v.sh)))
 	L.SetGlobal("sleep", L.NewFunction(v.wrap("sleep", v.sleep)))
 	L.SetGlobal("view", L.NewFunction(v.wrap("view", v.view)))
-	L.SetGlobal("wait_all", L.NewFunction(v.wrap("wait_all", v.waitAll)))
 	v.table("fs", map[string]lua.LGFunction{
 		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "list": v.fsList, "glob": v.fsGlob,
 		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp,
 	})
 	v.table("web", map[string]lua.LGFunction{"request": v.webRequest, "get": v.webGet, "post": v.webPost})
 	v.table("json", map[string]lua.LGFunction{"encode": v.jsonEncode, "decode": v.jsonDecode})
-	v.table("tasks", map[string]lua.LGFunction{"spawn": v.tasksSpawn, "run": v.tasksRun, "get": v.tasksGet, "list": v.tasksList})
-	v.table("agents", map[string]lua.LGFunction{"spawn": v.agentsSpawn, "run": v.agentsRun, "get": v.agentsGet, "list": v.agentsList})
+	v.installJobs("tasks", func() Jobs { return v.env.Tasks() }, v.tasksSpawn, v.tasksRun)
+	v.installJobs("agents", func() Jobs { return v.env.Agents() }, v.agentsSpawn, v.agentsRun)
 	v.table("state", map[string]lua.LGFunction{"get": v.stateGet, "set": v.stateSet, "list": v.stateList})
 	v.table("log", map[string]lua.LGFunction{"info": v.logFn("info"), "warn": v.logFn("warn"), "notice": v.logFn("notice")})
 	v.installSession()
-	v.installHandle()
 }
 
 // table creates a global table whose functions run through the hook wrapper.

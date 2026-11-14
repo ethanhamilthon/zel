@@ -66,9 +66,7 @@ type fakeJob struct {
 	stopped  bool
 }
 
-func (j *fakeJob) ID() string   { return j.id }
-func (j *fakeJob) Kind() string { return j.kind }
-func (j *fakeJob) Status() string {
+func (j *fakeJob) state() string {
 	select {
 	case <-j.done:
 		return "done"
@@ -76,29 +74,6 @@ func (j *fakeJob) Status() string {
 		return "running"
 	}
 }
-func (j *fakeJob) Wait(ctx context.Context, timeout time.Duration) (map[string]any, bool) {
-	var limit <-chan time.Time
-	if timeout > 0 {
-		limit = time.After(timeout)
-	}
-	select {
-	case <-j.done:
-		return j.result, true
-	case <-limit:
-	case <-ctx.Done():
-	}
-	return nil, false
-}
-func (j *fakeJob) Result() (map[string]any, bool) {
-	select {
-	case <-j.done:
-		return j.result, true
-	default:
-		return nil, false
-	}
-}
-func (j *fakeJob) Tail(n int) string { return fmt.Sprint("tail ", n) }
-func (j *fakeJob) Stop()             { j.stopped = true; close(j.done) }
 
 type fakeEnv struct {
 	cwd     string
@@ -121,7 +96,91 @@ func (e *fakeEnv) Info() SessionInfo {
 }
 func (e *fakeEnv) ShellEnv() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }
 func (e *fakeEnv) State() StateStore           { return e.state }
-func (e *fakeEnv) SpawnTask(cmd string, o TaskOpts) (Job, error) {
+
+// fakeSet is one namespace of the fake env's jobs.
+type fakeSet struct {
+	e    *fakeEnv
+	kind string
+}
+
+func (e *fakeEnv) Tasks() Tasks   { return fakeTasks{fakeSet{e, "task"}} }
+func (e *fakeEnv) Agents() Agents { return fakeAgents{fakeSet{e, "agent"}} }
+
+func (s fakeSet) find(id string) (*fakeJob, error) {
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	if j, ok := s.e.jobs[id]; ok && j.kind == s.kind {
+		return j, nil
+	}
+	return nil, ErrNoJob
+}
+func (s fakeSet) List() []JobInfo {
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	var out []JobInfo
+	for _, j := range s.e.jobs {
+		if j.kind == s.kind {
+			out = append(out, JobInfo{ID: j.id, State: j.state()})
+		}
+	}
+	return out
+}
+func (s fakeSet) Get(id string) (JobInfo, bool) {
+	j, err := s.find(id)
+	if err != nil {
+		return JobInfo{}, false
+	}
+	return JobInfo{ID: j.id, State: j.state()}, true
+}
+func (s fakeSet) Wait(ctx context.Context, id string, timeout time.Duration) (map[string]any, bool, error) {
+	j, err := s.find(id)
+	if err != nil {
+		return nil, false, err
+	}
+	var limit <-chan time.Time
+	if timeout > 0 {
+		limit = time.After(timeout)
+	}
+	select {
+	case <-j.done:
+		return j.result, true, nil
+	case <-limit:
+	case <-ctx.Done():
+	}
+	return nil, false, nil
+}
+func (s fakeSet) Result(id string) (map[string]any, bool, error) {
+	j, err := s.find(id)
+	if err != nil {
+		return nil, false, err
+	}
+	select {
+	case <-j.done:
+		return j.result, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+func (s fakeSet) Tail(id string, n int) (string, error) {
+	if _, err := s.find(id); err != nil {
+		return "", err
+	}
+	return fmt.Sprint("tail ", n), nil
+}
+func (s fakeSet) Stop(id string) error {
+	j, err := s.find(id)
+	if err != nil {
+		return err
+	}
+	j.stopped = true
+	close(j.done)
+	return nil
+}
+
+type fakeTasks struct{ fakeSet }
+
+func (s fakeTasks) Spawn(cmd string, o TaskOpts) (string, error) {
+	e := s.e
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	j := &fakeJob{id: fmt.Sprintf("t%d", len(e.jobs)+1), kind: "task", done: make(chan struct{}), result: map[string]any{"ok": true, "out": cmd}}
@@ -129,39 +188,23 @@ func (e *fakeEnv) SpawnTask(cmd string, o TaskOpts) (Job, error) {
 	if cmd == "instant" {
 		close(j.done)
 	}
-	return j, nil
+	return j.id, nil
 }
-func (e *fakeEnv) SpawnAgent(o AgentOpts) (Job, error) {
+
+type fakeAgents struct{ fakeSet }
+
+func (s fakeAgents) Spawn(o AgentOpts) (string, error) {
+	e := s.e
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if o.Prompt == "boom" {
-		return nil, errors.New("no budget")
+		return "", errors.New("no budget")
 	}
 	e.spawned = append(e.spawned, o)
 	j := &fakeJob{id: fmt.Sprintf("a%d", len(e.jobs)+1), kind: "agent", done: make(chan struct{}), result: map[string]any{"ok": true, "answer": "re: " + o.Prompt}}
 	close(j.done)
 	e.jobs[j.id] = j
-	return j, nil
-}
-func (e *fakeEnv) GetJob(kind, id string) (Job, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	j, ok := e.jobs[id]
-	if !ok || j.kind != kind {
-		return nil, false
-	}
-	return j, true
-}
-func (e *fakeEnv) ListJobs(kind string) []JobInfo {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	var out []JobInfo
-	for _, j := range e.jobs {
-		if j.kind == kind {
-			out = append(out, JobInfo{ID: j.id, Kind: kind, State: j.Status()})
-		}
-	}
-	return out
+	return j.id, nil
 }
 func (e *fakeEnv) View(path string) error { e.viewed = append(e.viewed, path); return nil }
 func (e *fakeEnv) Notice(msg string)      { e.notices = append(e.notices, msg) }

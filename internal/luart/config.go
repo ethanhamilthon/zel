@@ -16,7 +16,7 @@ import (
 // Defaults are the values of zel.defaults; later layers override earlier ones.
 type Defaults struct {
 	Provider, Model, Effort string
-	Timeout, OutputLimit    int
+	OutputLimit             int
 }
 
 // Param is one positional parameter of a plugin function.
@@ -70,10 +70,13 @@ type Config struct {
 
 var hookEvents = map[string]bool{"session_start": true, "message": true, "before_call": true, "after_call": true, "turn_end": true, "bg_done": true}
 
+// jobFns are the functions of both the tasks and the agents namespace.
+var jobFns = []string{"spawn", "run", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
+
 var builtinFns = map[string][]string{
-	"":   {"sh", "sleep", "view", "wait_all"},
+	"":   {"sh", "sleep", "view"},
 	"fs": {"read", "write", "edit", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
-	"json": {"encode", "decode"}, "tasks": {"spawn", "run", "get", "list"}, "agents": {"spawn", "run", "get", "list"},
+	"json": {"encode", "decode"}, "tasks": jobFns, "agents": jobFns,
 	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename"},
 }
 
@@ -170,9 +173,6 @@ func (c *Config) Defaults() Defaults {
 		if l.defaults.Effort != "" {
 			d.Effort = l.defaults.Effort
 		}
-		if l.defaults.Timeout > 0 {
-			d.Timeout = l.defaults.Timeout
-		}
 		if l.defaults.OutputLimit > 0 {
 			d.OutputLimit = l.defaults.OutputLimit
 		}
@@ -268,17 +268,13 @@ func (c *Config) zelModule(L *lua.LState) int {
 				default:
 					l.defaults.Effort = string(s)
 				}
-			case "timeout", "output_limit":
+			case "output_limit":
 				n, ok := val.(lua.LNumber)
 				if !ok || n <= 0 {
 					err = key + " must be a positive number"
 					return
 				}
-				if key == "timeout" {
-					l.defaults.Timeout = int(n)
-				} else {
-					l.defaults.OutputLimit = int(n)
-				}
+				l.defaults.OutputLimit = int(n)
 			default:
 				err = "unknown key " + key
 			}

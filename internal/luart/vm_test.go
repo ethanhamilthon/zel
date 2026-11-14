@@ -17,21 +17,6 @@ func run(t *testing.T, env *fakeEnv, cfg *Config, code string) Result {
 	return (&Runner{Env: env, Cfg: cfg}).Run(context.Background(), code)
 }
 
-func TestParseCall(t *testing.T) {
-	c, err := ParseCall("--! timeout=300\nprint(1)")
-	if err != nil || c.Timeout != 300*time.Second || c.Code != "print(1)" {
-		t.Fatalf("%+v %v", c, err)
-	}
-	if c, _ := ParseCall("print(1)"); c.Timeout != 0 || c.Code != "print(1)" {
-		t.Fatalf("%+v", c)
-	}
-	for _, bad := range []string{"--! timeout=0\nx", "--! timeout=601\nx", "--! color=red\nx", "--! timeout=abc\nx"} {
-		if _, err := ParseCall(bad); err == nil || !strings.Contains(err.Error(), EINVAL) {
-			t.Errorf("%q: want EINVAL, got %v", bad, err)
-		}
-	}
-}
-
 func TestOutputPrintAndReturn(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `print("a", 1); print({x=1}); return {1,2,3}`)
@@ -90,14 +75,23 @@ func TestShAndErrors(t *testing.T) {
 
 func TestCallTimeout(t *testing.T) {
 	env := newEnv(t)
+	old := callTimeout
+	callTimeout = time.Second
+	defer func() { callTimeout = old }()
 	start := time.Now()
-	r := (&Runner{Env: env}).Run(context.Background(), "--! timeout=1\nsh('sleep 10')")
+	r := (&Runner{Env: env}).Run(context.Background(), "sh('sleep 10')")
 	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) || time.Since(start) > 4*time.Second {
 		t.Fatalf("%q after %s", r.Output, time.Since(start))
 	}
-	r = (&Runner{Env: env}).Run(context.Background(), "--! timeout=1\nwhile true do end")
+	r = (&Runner{Env: env}).Run(context.Background(), "while true do end")
 	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) {
 		t.Fatalf("%q", r.Output)
+	}
+	// A pragma line is just a comment: it cannot extend the deadline.
+	start = time.Now()
+	r = (&Runner{Env: env}).Run(context.Background(), "--! timeout=600\nsh('sleep 5')")
+	if !r.IsError || !strings.Contains(r.Output, ETIMEOUT) || time.Since(start) > 4*time.Second {
+		t.Fatalf("%q after %s", r.Output, time.Since(start))
 	}
 }
 
@@ -185,19 +179,20 @@ return {state.get("a"), state.get("b", "project"), state.get("b"), state.list(),
 	}
 }
 
-func TestHandles(t *testing.T) {
+func TestJobNamespaces(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `
-local h = tasks.spawn("later")
-local st = h:status()
-local res, why = h:wait(0.05)
-h:stop()
-local again = tasks.get(h.id)
+local id = tasks.spawn("later")
+local st = tasks.status(id)
+local res, why = tasks.wait(id, 0.05)
+tasks.stop(id)
+local again = tasks.get(id)
 local a = agents.run{prompt="hello", model="m"}
-local ah = agents.spawn{prompt="p2"}
-local rs = wait_all({ah, h}, 1)
-return {h.kind, st, tostring(res), why, again.id == h.id, a.answer, rs[1].answer, tasks.run("instant").out, #tasks.list(), #agents.list()}`)
-	want := `["task","running","nil","timeout",true,"re: hello","re: p2","instant",2,2]`
+local aid = agents.spawn{prompt="p2"}
+local rs = agents.wait_all({aid}, 1)
+local ok, e = pcall(agents.status, id) -- a task id is not an agent
+return {type(id), st, tostring(res), why, again.id == id, a.answer, rs[1].answer, tasks.run("instant").out, #tasks.list(), #agents.list(), tasks.tail(id, 3), tasks.result(id).out, e}`)
+	want := `["string","running","nil","timeout",true,"re: hello","re: p2","instant",2,2,"tail 3","later","agents.status: ENOENT: no such job"]`
 	if r.Output != want {
 		t.Fatalf("%q", r.Output)
 	}

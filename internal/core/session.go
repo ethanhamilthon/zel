@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,10 +34,6 @@ func (a *Runtime) acquire() error {
 	}
 	a.owner = file
 	a.tasks = a.newTasks()
-	if err := a.listenNotifications(); err != nil {
-		a.release()
-		return err
-	}
 	env := a.shellEnv()
 	a.tasks.mu.Lock()
 	a.tasks.env = env
@@ -44,10 +41,9 @@ func (a *Runtime) acquire() error {
 	return nil
 }
 
-// release closes the socket, drops the lock and removes the lock file of an unsaved session.
+// release stops the jobs, drops the lock and removes the lock file of an unsaved session.
 // The database stays open: a session change hands it to the next session.
 func (a *Runtime) release() {
-	a.StopNotifications()
 	if a.tasks != nil {
 		a.tasks.close()
 		a.tasks = nil
@@ -60,16 +56,6 @@ func (a *Runtime) release() {
 			_ = os.Remove(a.lockPath())
 		}
 	}
-}
-
-func (a *Runtime) StopNotifications() bool {
-	if a.sock == nil {
-		return false
-	}
-	a.sock.retire()
-	_ = os.Remove(a.sock.path)
-	a.sock = nil
-	return true
 }
 
 func (a *Runtime) HasSavedSession() bool { return len(a.History) > 0 || a.stored }
@@ -109,7 +95,7 @@ func (a *Runtime) changeSession(id string) error {
 		_, err := a.instructions(context.Background())
 		return err
 	}
-	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell,
+	next := &Runtime{opts: a.opts, home: a.home, db: a.db, project: a.project, Shell: a.Shell, tree: a.tree, parentRoot: a.parentRoot, depth: a.depth,
 		histMu: &sync.RWMutex{}, slots: &imageSlots{}, queue: &Steering{wake: a.queue.wake}, lua: &luaHolder{notice: a.lua.notice}}
 	if err := next.loadConfig(a.Shell.Dir); err != nil {
 		return err
@@ -138,31 +124,22 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
-// ParentSession returns the root session ID of the whole tree if running under
-// another zel instance (via ZEL_PARENT), or empty if root.
-func ParentSession() string {
-	return strings.TrimSpace(os.Getenv("ZEL_PARENT"))
-}
-
+// rootID is the root session of this runtime's agent tree: the session of the
+// top-level runtime, which agents started below it report to.
 func (a *Runtime) rootID() string {
-	if root := ParentSession(); root != "" {
-		return root
+	if a.parentRoot != "" {
+		return a.parentRoot
 	}
 	return a.id
 }
 
 // shellEnv is exported to every sh() call. API keys and settings are never exported.
-// ZEL_PARENT holds the root session ID of the whole tree.
+// ZEL_DEPTH is the agent nesting depth, so a nested `zel -p` still honors the limit.
 func (a *Runtime) shellEnv() map[string]string {
-	env := map[string]string{
+	return map[string]string{
 		"ZEL_SESSION_ID": a.SessionID(),
-		"ZEL_PARENT":     a.rootID(),
-		"ZEL_REPORT":     "", // only agents.spawn sets it for its child
+		"ZEL_DEPTH":      strconv.Itoa(a.depth),
 	}
-	if a.sock != nil {
-		env["ZEL_ENDPOINT"] = a.sock.path
-	}
-	return env
 }
 
 // RenameSession updates the title of a persisted session without opening it.

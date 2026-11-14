@@ -13,7 +13,7 @@ No provider or database is opened for standalone helpers such as `zel init`.
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | SQLite opening, migrations, preferences, session/item transactions and task records | `entities` |
 | `shell` | Command execution, process groups, cancellation, bounded output and image capture | `entities` |
-| `luart` | The Lua runtime (gopher-lua): per-call VM, host API (`sh`, `fs`, `web`, `json`, `state`, handles), the init.lua config VM with `zel.*`, hooks and system-prompt rendering. Talks to the application only through its `Env` interface | `shell` |
+| `luart` | The Lua runtime (gopher-lua): per-call VM, host API (`sh`, `fs`, `web`, `json`, `state`, `tasks`/`agents`), the init.lua config VM with `zel.*`, hooks and system-prompt rendering. Talks to the application only through its `Env` interface | `shell` |
 | `agent` | One model/tool loop, steering checkpoints, turn-end hook and cancellation boundaries | `entities` |
 | `core` | Runtime assembly, sessions, controller, queues, jobs (tasks and subagents), key-value state, persistence and application events; implements `luart.Env` | Backend packages, `luart` |
 | `cli` | Argument parsing, helper commands, output and headless execution | `core`, `entities` |
@@ -64,9 +64,14 @@ The model sees one tool, `lua`. `provider` normalizes its transport (free-form
 custom tool on Responses, JSON `{code}` elsewhere) so history always holds a
 function call with `{"code": ...}`. `core.runTool` hands the code to a fresh
 `luart` VM per call; the host API reaches the application through `luart.Env`
-(shell environment, key-value state in `store`, jobs, images, notices). Tasks and
-subagents are jobs on the same machinery: `agents.spawn` starts a child
-`zel -p` with `ZEL_REPORT`, `ZEL_DEPTH` and the parent session, and the child
-writes its answer to the report file. init.lua layers are run once per session in
+(shell environment, key-value state in `store`, the `tasks` and `agents`
+namespaces, images, notices). Every call has a fixed 10-second deadline
+(`luart.callTimeout`) that nothing can extend. Tasks and agents share the job
+bookkeeping in `core` (IDs, logs, result delivery) but are separate namespaces:
+a task is a shell process, an agent is a full child `Runtime` with its own
+session that runs in the same process. The parent owns its context,
+cancellation, progress and result; running agents live in an in-memory tree
+(`agentTree`) shared by the whole agent tree, and closing the parent cancels
+and waits for its children. There is no Unix socket and no report file. init.lua layers are run once per session in
 a long-lived config VM (snapshot); hooks and plugin functions live there. See
 [lua-api.md](lua-api.md).

@@ -44,7 +44,7 @@ func (m model) menuBack() (tea.Model, tea.Cmd) {
 	case menuEffort:
 		mu.page = menuModel
 	case menuAccent:
-		mu.page, mu.selected = menuSettings, 5
+		mu.page, mu.selected = menuSettings, 4
 		return m, nil
 	default:
 		mu.page = menuMain
@@ -287,12 +287,12 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.performSwitch(mu.target)
 		}
 	case menuSettings:
-		if index == 5 {
+		if index == 4 {
 			open(menuAccent)
 			mu.selected = accentIndex(m.ctl.Settings().UI.Accent)
-		} else if index == 3 || index == 4 {
+		} else if index == 2 || index == 3 {
 			settings := m.ctl.Settings()
-			if index == 3 {
+			if index == 2 {
 				settings.ReasoningSummary = !settings.ReasoningSummary
 			} else {
 				settings.UI.SlashMenu = !settings.UI.SlashMenu
@@ -332,7 +332,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			if err := m.ctl.UpdateSettings(settings); err != nil {
 				return m.reject(err)
 			}
-			mu.page, mu.selected = menuSettings, 5
+			mu.page, mu.selected = menuSettings, 4
 			m.refresh(false)
 		}
 	case menuEffort:

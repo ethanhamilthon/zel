@@ -39,7 +39,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Lua timeout", fmt.Sprintf("%d seconds", s.ShellTimeout)}, {"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentColors[accentIndex(s.UI.Accent)].name}}
+		rows = []menuRow{{"Output limit", fmt.Sprintf("%d bytes", s.ShellOutput)}, {"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentColors[accentIndex(s.UI.Accent)].name}}
 	case menuResume:
 		for _, s := range mu.sessions {
 			rows = append(rows, menuRow{sessionTitle(s), sessionTime(s.Updated)})

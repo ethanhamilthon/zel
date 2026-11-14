@@ -1,1 +1,1 @@
-Run Lua code. The input is the raw Lua source; an optional first line `--! timeout=N` sets the call timeout in seconds. The Lua API (sh, fs, web, json, tasks, agents, state, ...) is described in the system prompt.
+Run Lua code. The input is the raw Lua source. Each Lua invocation has a fixed 10-second timeout. This limit cannot be changed. The Lua API (sh, fs, web, json, tasks, agents, state, ...) is described in the system prompt.

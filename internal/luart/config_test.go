@@ -22,7 +22,7 @@ func layerFile(t *testing.T, dir, body string) string {
 
 const docExample = `
 local zel = require("zel")
-zel.defaults{model = "sonnet-5.5", effort = "medium", timeout = 30}
+zel.defaults{model = "sonnet-5.5", effort = "medium"}
 zel.instructions [[Read code first.]]
 zel.prompt(function(ctx) return "layer=" .. ctx.layer .. " " .. sh("echo dyn").out end)
 zel.fn{
@@ -44,7 +44,7 @@ func TestPluginFnAndPrompt(t *testing.T) {
 	if len(env.notices) != 0 {
 		t.Fatal(env.notices)
 	}
-	if d := cfg.Defaults(); d.Model != "sonnet-5.5" || d.Timeout != 30 {
+	if d := cfg.Defaults(); d.Model != "sonnet-5.5" {
 		t.Fatalf("%+v", d)
 	}
 	r := run(t, env, cfg, `return zel.check(nil, 2)`)

@@ -48,8 +48,8 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
-	labels := []string{"Output limit in bytes (0 = unlimited)", "Lua call timeout in seconds (1–600)", "Auto compaction threshold in tokens (0 = off)"}
-	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.ShellTimeout), strconv.Itoa(s.CompactionThreshold)}
+	labels := []string{"Output limit in bytes (0 = unlimited)", "Auto compaction threshold in tokens (0 = off)"}
+	values := []string{strconv.Itoa(s.ShellOutput), strconv.Itoa(s.CompactionThreshold)}
 	m.startForm(&formState{kind: "setting", setting: index, fields: []string{labels[index]}, values: []string{values[index]}})
 }
 func (m *model) openManualModel() {
@@ -166,8 +166,6 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 		switch f.setting {
 		case 0:
 			s.ShellOutput = n
-		case 1:
-			s.ShellTimeout = n
 		default:
 			s.CompactionThreshold = n
 		}

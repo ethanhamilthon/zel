@@ -1113,7 +1113,7 @@ func TestInputHasNoLineLimitAndUsesAvailableScreen(t *testing.T) {
 func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
 	m, _ := freshModel(t)
 	t.Cleanup(m.ctl.Close)
-	if _, err := core.RunTask(m.cwd, m.ctl.Status().Session, "sleep 600"); err != nil {
+	if _, err := m.ctl.StartTask("sleep 600"); err != nil {
 		t.Fatal(err)
 	}
 	m.menu = &menuState{page: menuTasks}
@@ -1267,10 +1267,10 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 		t.Fatal("output preference not saved")
 	}
 	m.openSettingForm(1)
-	m.menu.form.input.SetValue("0")
+	m.menu.form.input.SetValue("-1")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuForm || m.menu.form.err == "" {
-		t.Fatal("invalid timeout accepted")
+		t.Fatal("invalid compaction threshold accepted")
 	}
 	m.menu = &menuState{page: menuProvider, provider: "p", selected: 1}
 	next, _ := m.menuActivate()
@@ -1328,7 +1328,7 @@ func TestSingleAccent(t *testing.T) {
 func TestAccentChoiceFromSettings(t *testing.T) {
 	defer applyTheme("")
 	m := bareModel(t, t.TempDir())
-	m.menu = &menuState{page: menuSettings, selected: 5}
+	m.menu = &menuState{page: menuSettings, selected: 4}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuAccent || len(m.menuRows()) < 15 || m.menuRows()[0].detail != "current" {
 		t.Fatalf("accent page not opened: %v %v", m.menu.page, m.menuRows())
@@ -1338,8 +1338,8 @@ func TestAccentChoiceFromSettings(t *testing.T) {
 	if m.ctl.Settings().UI.Accent != "#80b3ad" || string(inputBlue) != "#80b3ad" || m.menu.page != menuSettings {
 		t.Fatalf("accent not applied: %q %q %v", m.ctl.Settings().UI.Accent, inputBlue, m.menu.page)
 	}
-	if rows := m.menuRows(); rows[5].detail != "Teal" {
-		t.Fatalf("settings row = %v", rows[5])
+	if rows := m.menuRows(); rows[4].detail != "Teal" {
+		t.Fatalf("settings row = %v", rows[4])
 	}
 }
 
@@ -1400,7 +1400,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Output, timeouts, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+		{"Settings", "Output, compaction, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)
@@ -1974,7 +1974,7 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
 	m := bareModel(t, t.TempDir())
 	id := m.ctl.Status().Session
-	if _, err := core.RunTask(m.cwd, id, "sleep 30"); err != nil {
+	if _, err := m.ctl.StartTask("sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	next, _ := m.switchSession("")
@@ -2027,7 +2027,7 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 
 func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
 	m := bareModel(t, t.TempDir())
-	if _, err := core.RunTask(m.cwd, m.ctl.Status().Session, "sleep 30"); err != nil {
+	if _, err := m.ctl.StartTask("sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	m.ctl.LogEvent("notice", "older notice")
@@ -2249,7 +2249,7 @@ func TestSlashMenu(t *testing.T) {
 		})
 	}
 	m := bareModel(t, "/project")
-	m.menu = &menuState{page: menuSettings, selected: 4}
+	m.menu = &menuState{page: menuSettings, selected: 3}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.ctl.Settings().UI.SlashMenu {
 		t.Fatal("setting not disabled")
@@ -2350,7 +2350,7 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 		Steps:   3,
 		Model:   "gpt-6-luna",
 		Effort:  "xhigh",
-		Command: "zel -p 'summarize'",
+		Command: "summarize",
 	}
 	row := m.formatSubagentRow(child)
 	stripped := ansi.Strip(row)
@@ -2403,96 +2403,6 @@ func TestSubagentIndicatorFormatting(t *testing.T) {
 	child.Model, child.Effort = "small-model", ""
 	if row := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(row, "small-model · ") {
 		t.Fatalf("model without effort: %q", row)
-	}
-}
-
-func TestSubagentIndicatorLifecycleAndUpdates(t *testing.T) {
-	t.Setenv("ZEL_PARENT", "")
-	m := bareModel(t, "/project")
-	sessionID := m.ctl.Status().Session
-
-	if got := m.subagentBlock(); got != "" {
-		t.Fatalf("expected empty subagent block, got %q", got)
-	}
-
-	// Start subagent
-	sub := core.StartSubagent(t.TempDir(), "child-1", sessionID, "zel -p 'sub'")
-	defer sub.Finish()
-
-	block := m.subagentBlock()
-	if block == "" {
-		t.Fatal("subagent block should appear while subagent is running")
-	}
-	stripped := ansi.Strip(block)
-	if !strings.Contains(stripped, "0 steps") {
-		t.Fatalf("expected initial 0 steps, got: %q", stripped)
-	}
-	if !strings.HasSuffix(block, "\n\n") {
-		t.Fatalf("expected block to end with \\n\\n, got: %q", block)
-	}
-
-	// Update step count
-	sub.AddStep()
-	block1 := ansi.Strip(m.subagentBlock())
-	if !strings.Contains(block1, "1 step") {
-		t.Fatalf("expected 1 step after AddStep, got: %q", block1)
-	}
-
-	sub.AddStep()
-	block2 := ansi.Strip(m.subagentBlock())
-	if !strings.Contains(block2, "2 steps") {
-		t.Fatalf("expected 2 steps after AddStep, got: %q", block2)
-	}
-
-	// Finish subagent -> disappears
-	sub.Finish()
-	if got := m.subagentBlock(); got != "" {
-		t.Fatalf("expected subagent block to disappear after Finish, got %q", got)
-	}
-}
-
-func TestSubagentIndicatorFromBackgroundTask(t *testing.T) {
-	m := bareModel(t, t.TempDir())
-	sessionID := m.ctl.Status().Session
-
-	if _, err := core.RunTask(m.cwd, sessionID, "sleep 30"); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.subagentBlock(); got != "" {
-		t.Fatalf("non-zel task showed subagent indicator: %q", got)
-	}
-
-	// Keep the task alive even where no zel binary is on PATH.
-	taskID, err := core.RunTask(m.cwd, sessionID, "sleep 30; zel -p 'run test'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = m.ctl.StopTask(taskID) }()
-
-	block := m.subagentBlock()
-	if block == "" {
-		t.Fatal("expected subagent indicator for zel -p task")
-	}
-	if !strings.Contains(ansi.Strip(block), "0 steps") {
-		t.Fatalf("expected 0 steps for task: %q", block)
-	}
-
-	m.ctl.SetTaskSteps(taskID, 4)
-	blockSteps := ansi.Strip(m.subagentBlock())
-	if !strings.Contains(blockSteps, "4 steps") {
-		t.Fatalf("expected 4 steps after SetTaskSteps, got: %q", blockSteps)
-	}
-
-	if err := m.ctl.StopTask(taskID); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if m.subagentBlock() == "" {
-			break
-		}
-	}
-	if got := m.subagentBlock(); got != "" {
-		t.Fatalf("expected subagent indicator to disappear after task stopped, got %q", got)
 	}
 }
 

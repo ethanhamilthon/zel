@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"zel/internal/core"
 )
 
-const tasksUsage = "usage: zel tasks run [-s ID] COMMAND... | list [-s ID] | status [-s ID] TASK | stop [-s ID] TASK"
+const tasksUsage = "usage: zel tasks list [-s ID] | status [-s ID] TASK"
 
 func parseAll(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
@@ -34,14 +33,7 @@ func tasksCommand(args []string, out io.Writer) error {
 	}
 	var session string
 	set := flagSet("tasks", func(fs *flag.FlagSet) { fs.StringVar(&session, "s", "", "session ID") })
-	var rest []string
-	var err error
-	if args[0] == "run" {
-		err = set.Parse(args[1:])
-		rest = set.Args()
-	} else {
-		rest, err = parseAll(set, args[1:])
-	}
+	rest, err := parseAll(set, args[1:])
 	if err != nil {
 		return errors.New(tasksUsage)
 	}
@@ -50,22 +42,6 @@ func tasksCommand(args []string, out io.Writer) error {
 		return err
 	}
 	switch {
-	case args[0] == "run" && len(rest) > 0:
-		id, err := core.RunTask(cwd, session, strings.Join(rest, " "))
-		if err == nil {
-			fmt.Fprintf(out, "%s started; its result arrives as <task-result id=%q> when it ends\n", id, id)
-		}
-		return err
-	case args[0] == "stop" && len(rest) == 1:
-		endpoint, err := core.Endpoint(cwd, session)
-		if err != nil {
-			return err
-		}
-		_, err = core.Send(endpoint, core.Message{Task: &core.TaskRequest{Op: "stop", ID: rest[0]}})
-		if err == nil {
-			fmt.Fprintf(out, "%s stopped\n", rest[0])
-		}
-		return err
 	case (args[0] == "list" && len(rest) == 0) || (args[0] == "status" && len(rest) == 1):
 		if session = cmp.Or(session, os.Getenv("ZEL_SESSION_ID")); session == "" {
 			return errors.New("outside a zel shell, pass -s SESSION_ID")

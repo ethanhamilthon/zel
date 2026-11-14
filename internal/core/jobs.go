@@ -2,12 +2,11 @@ package core
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"zel/internal/luart"
@@ -16,12 +15,12 @@ import (
 // job is a background task or subagent started from Lua (or the CLI). It
 // implements luart.Job on top of the tasks machinery.
 type job struct {
-	t                          *tasks
-	id, kind, name, cmd        string
-	prompt, model, log, report string
-	started                    time.Time
-	timer                      *time.Timer
-	done                       chan struct{}
+	t                   *tasks
+	id, kind, name, cmd string
+	prompt, model, log  string
+	started             time.Time
+	timer               *time.Timer
+	done                chan struct{}
 
 	// Guarded by t.mu.
 	waited   bool
@@ -31,6 +30,21 @@ type job struct {
 	mu     sync.Mutex
 	status string
 	result map[string]any
+	agent  agentOutcome // what an in-process agent produced; set before the job ends
+}
+
+// agentOutcome is the final report of an in-process agent.
+type agentOutcome struct {
+	OK      bool
+	Answer  string
+	Session string
+	Error   string
+}
+
+func (j *job) setOutcome(o agentOutcome) {
+	j.mu.Lock()
+	j.agent = o
+	j.mu.Unlock()
 }
 
 func (j *job) ID() string   { return j.id }
@@ -46,13 +60,15 @@ func (j *job) Status() string {
 func (j *job) complete(status string, code int, took time.Duration) map[string]any {
 	res := map[string]any{"id": j.id, "ms": took.Milliseconds()}
 	if j.kind == "agent" {
-		report := j.readReport()
+		j.mu.Lock()
+		report := j.agent
+		j.mu.Unlock()
 		ok := status == "done" && report.OK
 		res["ok"], res["answer"], res["session"] = ok, report.Answer, report.Session
 		if !ok {
 			msg := report.Error
 			if msg == "" {
-				msg = fmt.Sprintf("agent %s (exit %d): %s", status, code, strings.TrimSpace(tailLines(j.log, 5)))
+				msg = fmt.Sprintf("agent %s", status)
 			}
 			res["error"] = msg
 		}
@@ -67,26 +83,6 @@ func (j *job) complete(status string, code int, took time.Duration) map[string]a
 	j.status, j.result = status, res
 	j.mu.Unlock()
 	return res
-}
-
-// agentReport is what a `zel -p` child writes to $ZEL_REPORT when it ends.
-type agentReport struct {
-	OK      bool   `json:"ok"`
-	Answer  string `json:"answer"`
-	Session string `json:"session"`
-	Error   string `json:"error"`
-}
-
-func (j *job) readReport() (r agentReport) {
-	if j.report == "" {
-		return r
-	}
-	data, err := os.ReadFile(j.report)
-	if err == nil {
-		_ = json.Unmarshal(data, &r)
-	}
-	_ = os.Remove(j.report)
-	return r
 }
 
 // noticeText is the message the model gets when nobody waited for the job.
@@ -154,20 +150,19 @@ func (j *job) Result() (map[string]any, bool) {
 
 func (j *job) Tail(n int) string { return tailLines(j.log, n) }
 
-// Stop asks the process group to end with SIGTERM and kills it after 5 seconds.
+// Stop asks the job to end gracefully (SIGTERM for a process, context
+// cancellation for an agent) and forces it after 5 seconds.
 func (j *job) Stop() {
 	t := j.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	cmd, ok := t.running[j.id]
+	p, ok := t.running[j.id]
 	if !ok {
 		return
 	}
 	t.stopped[j.id] = true
-	if cmd.Process != nil && cmd.Process.Pid > 0 {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	time.AfterFunc(5*time.Second, func() { _ = cmd.Cancel() })
+	p.term()
+	time.AfterFunc(5*time.Second, p.cancel)
 }
 
 func tailBytes(path string, limit int) string {
@@ -193,4 +188,116 @@ func tailLines(path string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-var _ luart.Job = (*job)(nil)
+// jobSet is one namespace of jobs of a session, "task" or "agent". It
+// implements the lifecycle half of luart.Tasks and luart.Agents.
+type jobSet struct {
+	a    *Runtime
+	kind string
+}
+
+func (e luaEnv) Tasks() luart.Tasks   { return taskSet{jobSet{e.a, "task"}} }
+func (e luaEnv) Agents() luart.Agents { return agentSet{jobSet{e.a, "agent"}} }
+
+func (s jobSet) find(id string) (*job, error) {
+	t := s.a.tasks
+	if t == nil {
+		return nil, luart.ErrNoJob
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if j, ok := t.jobs[id]; ok && j.kind == s.kind {
+		return j, nil
+	}
+	return nil, fmt.Errorf("%w: %q", luart.ErrNoJob, id)
+}
+
+func (j *job) info() luart.JobInfo {
+	return luart.JobInfo{ID: j.id, Name: j.name, Cmd: j.cmd, Model: j.model, State: j.Status(), Prompt: j.prompt}
+}
+
+func (s jobSet) List() []luart.JobInfo {
+	t := s.a.tasks
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	var jobs []*job
+	for _, id := range t.order {
+		if j := t.jobs[id]; j != nil && j.kind == s.kind {
+			jobs = append(jobs, j)
+		}
+	}
+	t.mu.Unlock()
+	out := make([]luart.JobInfo, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, j.info())
+	}
+	return out
+}
+
+func (s jobSet) Get(id string) (luart.JobInfo, bool) {
+	j, err := s.find(id)
+	if err != nil {
+		return luart.JobInfo{}, false
+	}
+	return j.info(), true
+}
+
+func (s jobSet) Wait(ctx context.Context, id string, timeout time.Duration) (map[string]any, bool, error) {
+	j, err := s.find(id)
+	if err != nil {
+		return nil, false, err
+	}
+	res, ok := j.Wait(ctx, timeout)
+	return res, ok, nil
+}
+
+func (s jobSet) Result(id string) (map[string]any, bool, error) {
+	j, err := s.find(id)
+	if err != nil {
+		return nil, false, err
+	}
+	res, ok := j.Result()
+	return res, ok, nil
+}
+
+func (s jobSet) Tail(id string, n int) (string, error) {
+	j, err := s.find(id)
+	if err != nil {
+		return "", err
+	}
+	return j.Tail(n), nil
+}
+
+func (s jobSet) Stop(id string) error {
+	j, err := s.find(id)
+	if err != nil {
+		return err
+	}
+	j.Stop()
+	return nil
+}
+
+type taskSet struct{ jobSet }
+
+func (s taskSet) Spawn(cmd string, o luart.TaskOpts) (string, error) {
+	t := s.a.tasks
+	if t == nil {
+		return "", errors.New("no active session")
+	}
+	j, err := t.spawn(cmd, startOpts{kind: "task", name: o.Name, cwd: o.Cwd, env: o.Env, timeout: o.Timeout, waited: o.Waited})
+	if err != nil {
+		return "", err
+	}
+	return j.id, nil
+}
+
+type agentSet struct{ jobSet }
+
+func (s agentSet) Spawn(o luart.AgentOpts) (string, error) {
+	j, err := s.a.spawnAgent(o)
+	if err != nil {
+		return "", err
+	}
+	return j.id, nil
+}

@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"zel/internal/entities"
 	"zel/internal/store"
@@ -30,12 +29,11 @@ type tasks struct {
 	env               map[string]string
 	queue             *Steering
 	mu                sync.Mutex
-	running           map[string]*exec.Cmd
+	running           map[string]*proc
 	stopped           map[string]bool
 	closed            bool
 	wg                sync.WaitGroup
 	report            func(string)
-	steps             map[string]int
 	jobs              map[string]*job
 	order             []string
 	hook              func(kind, id string, result map[string]any) (text string, drop bool)
@@ -45,27 +43,37 @@ func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
 	return &tasks{db: a.db, session: a.id, dir: a.Shell.Dir, log: filepath.Join(a.home, "tasks"), env: a.shellEnv(),
-		queue: a.queue, hook: a.bgDone, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*exec.Cmd{}, stopped: map[string]bool{}, steps: map[string]int{}, jobs: map[string]*job{}}
+		queue: a.queue, hook: a.bgDone, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{}}
 }
 
-func (t *tasks) run(command string) (string, error) {
-	j, err := t.spawn(command, startOpts{})
-	if err != nil {
-		return "", err
-	}
-	return j.id, nil
+// proc is one running job: a shell process or an in-process agent.
+type proc struct {
+	cancel func()       // end it now
+	term   func()       // ask it to end; the caller cancels it later if it lingers
+	wait   func() error // blocks until it ended
+	exit   func() int   // exit code after wait; negative when unknown
 }
 
 // startOpts describe a background job: a plain task or a subagent.
 type startOpts struct {
-	kind, name, prompt, model, report string
-	cwd                               string
-	env                               map[string]string
-	timeout                           time.Duration
-	waited                            bool // the caller waits: no result message is queued
+	kind, name, prompt, model string
+	cwd                       string
+	env                       map[string]string
+	timeout                   time.Duration
+	waited                    bool // the caller waits: no result message is queued
 }
 
-// spawn runs command in the background as a task or subagent job.
+// spawnProc starts a job whose process is created by launch.
+func (t *tasks) spawnProc(command string, o startOpts, launch func(io.Writer, *job) (*proc, error)) (*job, error) {
+	var j *job
+	_, err := t.start(command, o, func(file io.Writer, jb *job) (*proc, error) {
+		j = jb
+		return launch(file, jb)
+	})
+	return j, err
+}
+
+// spawn runs a shell command in the background as a task job.
 func (t *tasks) spawn(command string, o startOpts) (*job, error) {
 	if strings.TrimSpace(command) == "" {
 		return nil, errors.New("tasks run requires a command")
@@ -75,7 +83,7 @@ func (t *tasks) spawn(command string, o startOpts) (*job, error) {
 		dir = o.cwd
 	}
 	var j *job
-	_, err := t.start(command, o, func(file io.Writer, jb *job) (*exec.Cmd, func() error, error) {
+	_, err := t.start(command, o, func(file io.Writer, jb *job) (*proc, error) {
 		j = jb
 		env := map[string]string{}
 		for k, v := range t.env {
@@ -87,21 +95,23 @@ func (t *tasks) spawn(command string, o startOpts) (*job, error) {
 		cmd := shell.Command(context.Background(), dir, env, command)
 		cmd.Stdout, cmd.Stderr = file, file
 		if err := cmd.Start(); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return cmd, func() error { return shell.Reap(cmd) }, nil
+		return &proc{
+			cancel: func() { _ = cmd.Cancel() },
+			term: func() {
+				if cmd.Process != nil && cmd.Process.Pid > 0 {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+				}
+			},
+			wait: func() error { return shell.Reap(cmd) },
+			exit: func() int { return cmd.ProcessState.ExitCode() },
+		}, nil
 	})
 	return j, err
 }
 
-func (t *tasks) adopt(command string, bg *shell.Background) (string, error) {
-	return t.start(command, startOpts{}, func(file io.Writer, _ *job) (*exec.Cmd, func() error, error) {
-		bg.Redirect(file)
-		return bg.Cmd, bg.Wait, nil
-	})
-}
-
-func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) (*exec.Cmd, func() error, error)) (string, error) {
+func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) (*proc, error)) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -135,13 +145,13 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		return "", err
 	}
 	j := &job{t: t, id: id, kind: o.kind, name: o.name, cmd: command, prompt: o.prompt, model: o.model, log: logPath,
-		report: o.report, started: started, waited: o.waited, done: make(chan struct{}), status: "running"}
-	cmd, wait, err := launch(&taskLog{file: file}, j)
+		started: started, waited: o.waited, done: make(chan struct{}), status: "running"}
+	p, err := launch(&taskLog{file: file}, j)
 	if err != nil {
 		file.Close()
 		return "", errors.Join(err, t.finish(id, "failed", nil))
 	}
-	t.running[id] = cmd
+	t.running[id] = p
 	t.jobs[id] = j
 	t.order = append(t.order, id)
 	if o.timeout > 0 {
@@ -149,14 +159,14 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 			t.mu.Lock()
 			j.timedOut = true
 			t.mu.Unlock()
-			_ = cmd.Cancel()
+			p.cancel()
 		})
 		j.timer = timer
 	}
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		err := wait()
+		err := p.wait()
 		file.Close()
 		if j.timer != nil {
 			j.timer.Stop()
@@ -164,7 +174,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		t.mu.Lock()
 		stopped, timedOut := t.stopped[id], j.timedOut
 		t.mu.Unlock()
-		status, code := "done", cmd.ProcessState.ExitCode()
+		status, code := "done", p.exit()
 		switch {
 		case timedOut:
 			status = "timeout"
@@ -218,12 +228,13 @@ func (t *tasks) finish(id, status string, exit *int) error {
 func (t *tasks) stop(id string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	cmd, ok := t.running[id]
+	p, ok := t.running[id]
 	if !ok {
 		return fmt.Errorf("task %s is not running", id)
 	}
 	t.stopped[id] = true
-	return cmd.Cancel()
+	p.cancel()
+	return nil
 }
 
 func (t *tasks) Running() int {
@@ -235,9 +246,9 @@ func (t *tasks) Running() int {
 func (t *tasks) close() {
 	t.mu.Lock()
 	t.closed = true
-	for id, cmd := range t.running {
+	for id, p := range t.running {
 		t.stopped[id] = true
-		_ = cmd.Cancel()
+		p.cancel()
 	}
 	t.mu.Unlock()
 	t.wg.Wait()
@@ -341,64 +352,6 @@ func (a *Runtime) StopTask(id string) error {
 	return a.tasks.stop(id)
 }
 
-func (a *Runtime) SetTaskSteps(id string, steps int) {
-	if a.tasks != nil {
-		a.tasks.mu.Lock()
-		a.tasks.steps[id] = steps
-		a.tasks.mu.Unlock()
-	}
-}
-
-func (a *Runtime) TaskSteps(id string) int {
-	if a.tasks != nil {
-		a.tasks.mu.Lock()
-		defer a.tasks.mu.Unlock()
-		return a.tasks.steps[id]
-	}
-	return 0
-}
-
-func (a *Runtime) StartSubagent(command string) *SubagentHandle {
-	h := StartSubagent(a.home, a.id, ParentSession(), command)
-	s := a.Settings()
-	h.SetModel(s.Model, s.Effort)
-	return h
-}
-
-// ActiveSubagents lists the running zel -p children of this session tree. A child
-// is seen twice: as the shell command that launched it (tool call or background
-// task) and as its own registered run. The two views are paired by start order so
-// each child shows once. A registered run's step count is authoritative, even at zero.
-func (a *Runtime) ActiveSubagents() []SubagentRun {
-	rootID := a.rootID()
-	byStart := func(a, b SubagentRun) int {
-		if c := a.Started.Compare(b.Started); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	}
-	registered := ActiveSubagentsForParent(a.home, rootID)
-	var launched []SubagentRun
-	if a.tasks != nil {
-		tasks, _ := a.Tasks()
-		for _, t := range tasks {
-			if t.Status == "running" && strings.Contains(t.Command, "zel -p") {
-				launched = append(launched, SubagentRun{ID: t.ID, Parent: rootID, Started: t.Started, Steps: a.TaskSteps(t.ID), Command: t.Command})
-			}
-		}
-	}
-	slices.SortFunc(registered, byStart)
-	slices.SortFunc(launched, byStart)
-	list := registered
-	for i, l := range launched {
-		if i >= len(registered) {
-			list = append(list, l)
-		}
-	}
-	slices.SortFunc(list, byStart)
-	return list
-}
-
 func sessionTasks(db *store.Store, session string) ([]Task, error) { return db.Tasks(session) }
 
 func TaskOutput(task Task) string { return tail(task.Log) }
@@ -437,4 +390,17 @@ func (w *taskLog) Write(p []byte) (int, error) {
 		w.truncated = true
 	}
 	return size, nil
+}
+
+// StartTask runs a shell command as a background task of this session; its
+// result is queued like any task result.
+func (a *Runtime) StartTask(command string) (string, error) {
+	if a.tasks == nil {
+		return "", errors.New("no active session")
+	}
+	j, err := a.tasks.spawn(command, startOpts{})
+	if err != nil {
+		return "", err
+	}
+	return j.id, nil
 }

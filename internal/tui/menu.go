@@ -51,7 +51,7 @@ var mainRows = []menuRow{
 	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Output, timeouts, accent"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Output, compaction, accent"},
 	{"Copy", "Agent answer to input, Ctrl+Y"},
 }
 

@@ -206,7 +206,7 @@ func TestMockupFrames(t *testing.T) {
 		other.Close()
 	}
 	for _, command := range []string{"sleep 600", "make test"} {
-		if _, err := core.RunTask(f.project, f.a.SessionID(), command); err != nil {
+		if _, err := f.a.StartTask(command); err != nil {
 			t.Fatal(err)
 		}
 	}

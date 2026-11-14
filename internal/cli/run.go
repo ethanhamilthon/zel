@@ -68,7 +68,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "tasks", "view", "events", "session", "init":
+	case "version", "help", "--help", "-h", "tasks", "events", "session", "init":
 		return true
 	}
 	return false
@@ -139,8 +139,6 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			return nil
 		case "tasks":
 			return tasksCommand(args[1:], out)
-		case "view":
-			return viewCommand(args[1:])
 		case "events":
 			return eventsCommand(args[1:], out)
 		case "session":
@@ -180,40 +178,6 @@ func parseWithConfig(fs *flag.FlagSet, args []string) error {
 		return err
 	}
 	return os.Setenv("ZEL_CONFIG", path)
-}
-
-func viewCommand(args []string) error {
-	var session string
-	fs := flagSet("view", func(fs *flag.FlagSet) { fs.StringVar(&session, "s", "", "session ID") })
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("view: %w", err)
-	}
-	if fs.NArg() == 0 {
-		return errors.New("usage: zel view [-s ID] PATH [PATH ...]")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	endpoint, err := core.Endpoint(cwd, session)
-	if err != nil {
-		return err
-	}
-	home, err := core.ZelHome(cwd)
-	if err != nil {
-		return err
-	}
-	for _, path := range fs.Args() {
-		image, err := core.CaptureImageCopy(path, filepath.Join(home, "attachments"))
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
-		if _, err = core.Send(endpoint, core.Message{Image: &image}); err != nil {
-			_ = os.Remove(image.Path)
-			return fmt.Errorf("%s: %w", path, err)
-		}
-	}
-	return nil
 }
 
 func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Writer) error {
@@ -317,13 +281,9 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	}
 	defer a.Close()
 	if headless {
-		sub := a.StartSubagent(prompt)
-		defer sub.Finish()
-		if err := a.Run(ctx, prompt, sub.TrackEvent); err != nil {
-			writeReport(a, "", err)
+		if err := a.Run(ctx, prompt, func(core.TurnEvent) {}); err != nil {
 			return cancelledOr(ctx, err)
 		}
-		writeReport(a, a.FinalText(), nil)
 		_, err := fmt.Fprintln(out, a.FinalText())
 		return cancelledOr(ctx, err)
 	}
@@ -410,22 +370,4 @@ func readSessionCommand(args []string, out io.Writer) error {
 		}
 	}
 	return nil
-}
-
-// writeReport tells the parent session that started this run through
-// agents.spawn how it ended: the file named by ZEL_REPORT gets one JSON object.
-func writeReport(a *core.Runtime, answer string, runErr error) {
-	path := os.Getenv("ZEL_REPORT")
-	if path == "" {
-		return
-	}
-	report := map[string]any{"ok": runErr == nil, "answer": answer, "session": a.SessionID()}
-	if runErr != nil {
-		report["error"] = runErr.Error()
-	}
-	data, _ := json.Marshal(report)
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
 }

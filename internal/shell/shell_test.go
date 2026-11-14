@@ -96,15 +96,14 @@ func TestPipeHoldingDescendantIsKilled(t *testing.T) {
 func TestBlockOnlyVariablesAreNotInherited(t *testing.T) {
 	t.Setenv("ZEL_MODE", "tui")
 	t.Setenv("ZEL_SOURCE", "startup")
-	t.Setenv("ZEL_ENDPOINT", "/run/inherited.sock")
-	const script = `echo "mode=$ZEL_MODE source=$ZEL_SOURCE endpoint=$ZEL_ENDPOINT"`
+	const script = `echo "mode=$ZEL_MODE source=$ZEL_SOURCE"`
 	dir := t.TempDir()
 	got, err := Command(context.Background(), dir, nil, script).Output()
-	if err != nil || string(got) != "mode= source= endpoint=\n" {
+	if err != nil || string(got) != "mode= source=\n" {
 		t.Fatalf("inherited: %q %v", got, err)
 	}
-	got, err = Command(context.Background(), dir, map[string]string{"ZEL_MODE": "print", "ZEL_SOURCE": "new", "ZEL_ENDPOINT": "/run/own.sock"}, script).Output()
-	if err != nil || string(got) != "mode=print source=new endpoint=/run/own.sock\n" {
+	got, err = Command(context.Background(), dir, map[string]string{"ZEL_MODE": "print", "ZEL_SOURCE": "new"}, script).Output()
+	if err != nil || string(got) != "mode=print source=new\n" {
 		t.Fatalf("block env: %q %v", got, err)
 	}
 }

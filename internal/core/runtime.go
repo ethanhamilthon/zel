@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type Options struct {
 	Mode                    string               // tui or headless, exported as ZEL_MODE
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
 	SessionReady            func(*Runtime) error // May persist and announce the session.
+	link                    *agentLink           // set for in-process agents
 }
 
 type Runtime struct {
@@ -72,7 +74,9 @@ type Runtime struct {
 	requestedLen  int        // History length when lastRequest was sent
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
-	sock          *sessionSocket
+	tree          *agentTree // running agents of this session tree
+	parentRoot    string     // root session of the tree when this runtime is an agent
+	depth         int        // agent nesting depth
 	queue         *Steering
 	slots         *imageSlots
 	tasks         *tasks
@@ -89,7 +93,12 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{opts: opts, home: home, histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}}
+	a := &Runtime{opts: opts, home: home, tree: newAgentTree(), histMu: &sync.RWMutex{}, Shell: &shell.Runner{Dir: dir}, slots: &imageSlots{}, queue: &Steering{}, lua: &luaHolder{}}
+	if opts.link != nil {
+		a.tree, a.parentRoot, a.depth = opts.link.tree, opts.link.root, opts.link.depth
+	} else {
+		a.depth, _ = strconv.Atoi(os.Getenv("ZEL_DEPTH"))
+	}
 	a.Shell.Env = a.shellEnv
 	if err := a.loadConfig(dir); err != nil {
 		return nil, err
@@ -403,7 +412,7 @@ func (a *Runtime) SessionID() string { return a.id }
 func luaParameters() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"properties":           map[string]any{"code": map[string]any{"type": "string", "description": "Lua source; optional first line --! timeout=N"}},
+		"properties":           map[string]any{"code": map[string]any{"type": "string", "description": "Lua source"}},
 		"required":             []string{"code"},
 		"additionalProperties": false,
 	}

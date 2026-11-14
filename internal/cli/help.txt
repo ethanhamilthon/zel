@@ -7,9 +7,7 @@ USAGE
   zel session rename [-s ID] NAME...
   zel session rename ID NAME...
   zel models [--json]
-  zel tasks run [-s ID] COMMAND...
-  zel tasks list|status|stop [-s ID] [TASK]
-  zel view [-s ID] PATH...
+  zel tasks list|status [-s ID] [TASK]
   zel events [-s ID]
   zel init
   zel update
@@ -36,18 +34,15 @@ COMMANDS
   session rename  Rename a saved session. Positional ID NAME... works when
                   no -s and no ZEL_SESSION_ID.
   models          List PROVIDER<TAB>MODEL; --json prints {models, failures}.
-  tasks run       Start a background command in a running session. Its result
-                  arrives as a <task-result>; task logs stay on disk.
-  tasks list      List the target session's background tasks.
+  tasks list      List a session's background tasks and agents (logs stay on disk).
   tasks status    Show task state and output log.
-  tasks stop      Stop a task and its process group.
-  view            Queue PNG/JPEG images without blocking the active turn.
   events          Print the session event log, oldest first.
-  -s ID           Target a running session; defaults to ZEL_ENDPOINT.
+  -s ID           Target a session; defaults to ZEL_SESSION_ID.
 
 INIT.LUA
-  The model has one tool: lua (raw Lua code, optional first line
-  "--! timeout=N"). There is no bash tool; shell runs through sh().
+  The model has one tool: lua (raw Lua code; every
+  invocation has a fixed 10-second timeout). There is no bash tool; shell runs
+  through sh(); subagents (agents.*) run inside the application.
   Config is Lua: ~/.zel/init.lua, then the nearest .zel/init.lua up from the
   working directory, then --config FILE. Layers instruct (zel.instructions,
   zel.prompt), set defaults, register functions (zel.fn) shown in the system
@@ -60,12 +55,11 @@ OUTPUT
   budget: 8192 bytes keeps the first 4096 + marker + last 4096; zero is unlimited.
 
 ENVIRONMENT
-  ZEL_HOME        State directory, default ~/.zel: zel.db, init.lua, locks/, run/,
+  ZEL_HOME        State directory, default ~/.zel: zel.db, init.lua, locks/,
                   attachments/, tasks/, and events/.
   ZEL_CONFIG      Explicit init.lua file; set by --config, inherited by tools.
   ZEL_SESSION_ID  Active session ID, exported to sh().
-  ZEL_PARENT      Root session ID of the whole tree, exported to sh().
-  ZEL_ENDPOINT    Active session's helper socket; never inherited from a parent.
+  ZEL_DEPTH       Agent nesting depth, exported to sh().
 
 INTERFACE
   Ctrl+K Menu, Ctrl+M Models, Ctrl+R Resume, Ctrl+I Info, Ctrl+T Tracing,

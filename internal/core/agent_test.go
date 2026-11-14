@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 	"zel/internal/shell"
@@ -279,38 +277,21 @@ func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 	}
 }
 
-func TestSocketValidates(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{reply: func(int, string) string { return "" }}, Options{})
-	for _, m := range []Message{
-		{},
-		{Task: &TaskRequest{Op: "run", Command: " "}},
-		{Task: &TaskRequest{Op: "stop", ID: "t9"}},
-		{Image: &shell.Image{URL: "data:image/svg+xml;base64,PHN2Zy8+"}},
-	} {
-		if _, err := Send(a.sock.path, m); err == nil {
-			t.Fatalf("accepted %+v", m)
-		}
-	}
-	if got := a.Queue().Take(); len(got) != 0 {
-		t.Fatalf("queued %+v", got)
-	}
-}
-
 func TestTaskStopAndSessionClose(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := Send(a.sock.path, Message{Task: &TaskRequest{Op: "run", Command: "sleep 30"}}); err != nil {
+	if _, err := a.tasks.spawn("sleep 30", startOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if a.RunningTasks() != 1 {
 		t.Fatal("task not running")
 	}
-	if _, err := Send(a.sock.path, Message{Task: &TaskRequest{Op: "stop", ID: "t1"}}); err != nil {
+	if err := a.StopTask("t1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := awaitInput(t, a); !strings.HasPrefix(got[0].Text, `<task-result id="t1" status="stopped"`) {
 		t.Fatalf("result %+v", got)
 	}
-	if _, err := Send(a.sock.path, Message{Task: &TaskRequest{Op: "run", Command: "sleep 30"}}); err != nil {
+	if _, err := a.tasks.spawn("sleep 30", startOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	old, start := a.SessionID(), time.Now()
@@ -322,62 +303,6 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	}
 	if list, err := SessionTasks(a.home, old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
 		t.Fatalf("tasks %+v %v", list, err)
-	}
-}
-
-func TestConnectionAcceptedBeforeNewSessionIsRetired(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{reply: func(int, string) string { return "" }}, Options{})
-	payload, err := json.Marshal(Message{Image: &shell.Image{URL: pngURL()}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := net.Dial("unix", a.sock.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.Write(payload[:len(payload)/2]); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		a.sock.mu.Lock()
-		accepted := a.sock.current != nil
-		a.sock.mu.Unlock()
-		if accepted {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("connection not accepted")
-		}
-	}
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = conn.Write(payload[len(payload)/2:])
-	var status string
-	if err := json.NewDecoder(conn).Decode(&status); err == nil && status == "" {
-		t.Fatal("retired connection was acknowledged")
-	}
-	if pendingImages(a) != 0 || len(a.Queue().Take()) != 0 {
-		t.Fatal("image from the retired connection reached the new session")
-	}
-}
-
-func TestStaleSocketIsReplaced(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	path := a.sock.path
-	a.sock.retire()
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l.(*net.UnixListener).SetUnlinkOnClose(false)
-	l.Close()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.listenNotifications(); err != nil {
-		t.Fatalf("stale socket blocked listening: %v", err)
 	}
 }
 
@@ -593,7 +518,7 @@ func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
 	for i := 0; i < maxQueued; i++ {
 		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
 	}
-	if _, err := a.tasks.run("echo should-not-run"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
+	if _, err := a.tasks.spawn("echo should-not-run", startOpts{}); err == nil || !strings.Contains(err.Error(), "unresolved task") {
 		t.Fatalf("admission: %v", err)
 	}
 	for i := 0; i < maxQueued; i++ {
@@ -611,7 +536,7 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	if _, err := a.db.Exec(`CREATE TRIGGER fail_task_finish BEFORE UPDATE ON tasks BEGIN SELECT RAISE(FAIL, 'completion blocked'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.tasks.run("echo finished"); err != nil {
+	if _, err := a.tasks.spawn("echo finished", startOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	a.tasks.wg.Wait()
@@ -690,7 +615,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	h := newHarness(t, &fakeModel{gate: gate})
 	h.send("first")
 	h.inFlight(1)
-	if _, err := RunTask(h.dir, h.a.SessionID(), "echo notice A"); err != nil {
+	if _, err := h.a.tasks.spawn("echo notice A", startOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); h.a.RunningTasks() > 0; time.Sleep(time.Millisecond) {
@@ -796,7 +721,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	write("v2")
 	home, _ := ZelHome(h.dir)
 	settings := h.ctl.Settings()
-	settings.ShellTimeout = 42
+	settings.ShellOutput = 4242
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +729,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 	if !h.ctl.Status().Busy {
 		t.Fatal("reload interrupted the running turn")
 	}
-	if got := h.ctl.Settings().ShellTimeout; got == 42 {
+	if got := h.ctl.Settings().ShellOutput; got == 4242 {
 		t.Fatalf("config change applied mid-turn: got %d", got)
 	}
 	info, err := h.ctl.Info()
@@ -1059,126 +984,6 @@ func TestResumeMissingSessionKeepsCurrentSession(t *testing.T) {
 }
 
 const retryAttempts = 3
-
-func TestActiveSubagentsPruning(t *testing.T) {
-	home := t.TempDir()
-	subDir := filepath.Join(home, "subagents")
-	locksDir := filepath.Join(home, "locks")
-	if err := os.MkdirAll(subDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(locksDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-
-	parentID := "root-123"
-	oldTime := time.Now().Add(-10 * time.Second)
-
-	// 1. Dead subagent with missing lock file and old mtime -> pruned
-	data, _ := json.Marshal(SubagentRun{ID: "dead-1", Parent: parentID, Started: oldTime})
-	if err := os.WriteFile(filepath.Join(subDir, "dead-1.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Chtimes(filepath.Join(subDir, "dead-1.json"), oldTime, oldTime)
-
-	// 2. Dead subagent with unlocked lock file and old mtime -> pruned
-	data, _ = json.Marshal(SubagentRun{ID: "dead-2", Parent: parentID, Started: oldTime})
-	if err := os.WriteFile(filepath.Join(subDir, "dead-2.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Chtimes(filepath.Join(subDir, "dead-2.json"), oldTime, oldTime)
-	if err := os.WriteFile(filepath.Join(locksDir, "dead-2.lock"), []byte(""), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	// 3. Live subagent with exclusively locked lock file -> retained
-	data, _ = json.Marshal(SubagentRun{ID: "live-1", Parent: parentID, Started: time.Now()})
-	if err := os.WriteFile(filepath.Join(subDir, "live-1.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	lockFile, err := os.OpenFile(filepath.Join(locksDir, "live-1.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatal(err)
-	}
-
-	// 4. Just-started subagent with missing lock file and fresh mtime -> retained (not pruned)
-	data, _ = json.Marshal(SubagentRun{ID: "starting-1", Parent: parentID, Started: time.Now()})
-	if err := os.WriteFile(filepath.Join(subDir, "starting-1.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	list := ActiveSubagentsForParent(home, parentID)
-	if len(list) != 2 {
-		t.Fatalf("expected 2 active subagents, got %+v", list)
-	}
-
-	// Check dead files were removed
-	if _, err := os.Stat(filepath.Join(subDir, "dead-1.json")); !os.IsNotExist(err) {
-		t.Fatal("dead-1.json was not pruned")
-	}
-	if _, err := os.Stat(filepath.Join(subDir, "dead-2.json")); !os.IsNotExist(err) {
-		t.Fatal("dead-2.json was not pruned")
-	}
-	if _, err := os.Stat(filepath.Join(subDir, "live-1.json")); err != nil {
-		t.Fatal("live-1.json was pruned unexpectedly")
-	}
-	if _, err := os.Stat(filepath.Join(subDir, "starting-1.json")); err != nil {
-		t.Fatal("starting-1.json was pruned unexpectedly")
-	}
-}
-
-func TestSubagentHandleConcurrentAddStepFinish(t *testing.T) {
-	for i := 0; i < 50; i++ {
-		h := StartSubagent(t.TempDir(), fmt.Sprintf("sub-%d", i), "parent", "cmd")
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
-				h.AddStep()
-				h.SetSteps(j)
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			h.Finish()
-		}()
-		wg.Wait()
-	}
-}
-
-func TestSubagentCommittedStepsAndModel(t *testing.T) {
-	home := t.TempDir()
-	h := StartSubagent(home, "progress-child", "progress-parent", "prompt")
-	defer h.Finish()
-	h.SetModel("gpt-6-luna", "xhigh")
-	for i := 0; i < 15; i++ {
-		h.TrackEvent(TurnEvent{Kind: "code", ID: "call-1", Provisional: true, Final: i == 14})
-	}
-	h.TrackEvent(TurnEvent{Kind: "code", ID: "call-1", Final: true})
-	list := ActiveSubagentsForParent(home, "progress-parent")
-	if len(list) != 1 || list[0].Steps != 1 {
-		t.Fatalf("previews inflated committed steps: %+v", list)
-	}
-	h.TrackEvent(TurnEvent{Kind: "reasoning_delta", Provisional: true})
-	h.TrackEvent(TurnEvent{Kind: "reasoning", Final: true})
-	h.TrackEvent(TurnEvent{Kind: "assistant", Final: true})
-	data, err := os.ReadFile(filepath.Join(home, "subagents", "progress-child.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var run SubagentRun
-	if err := json.Unmarshal(data, &run); err != nil {
-		t.Fatal(err)
-	}
-	if run.Steps != 2 || run.Model != "gpt-6-luna" || run.Effort != "xhigh" {
-		t.Fatalf("incorrect persisted progress: %+v", run)
-	}
-}
 
 func TestCompactionZones(t *testing.T) {
 	big := func(id string) json.RawMessage {

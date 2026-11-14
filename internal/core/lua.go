@@ -7,10 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"zel/internal/luart"
 	"zel/internal/shell"
@@ -21,9 +19,6 @@ var luaMD string
 
 // LuaToolDescription is the description of the one tool the model gets.
 var LuaToolDescription = strings.TrimSpace(luaMD)
-
-// MaxAgentDepth bounds nested agents.spawn so a runaway prompt cannot fork forever.
-const MaxAgentDepth = 3
 
 // luaHolder keeps the config VM of init.lua layers. It is shared by pointer so a
 // session switch and Reload see the same value.
@@ -106,7 +101,7 @@ func (a *Runtime) notify(msg string) {
 func (a *Runtime) runLua(ctx context.Context, code string) luart.Result {
 	s := a.Settings()
 	runner := &luart.Runner{Env: luaEnv{a}, Cfg: a.lua.get(),
-		Timeout: time.Duration(s.ShellTimeout) * time.Second, OutputLimit: s.ShellOutput}
+		OutputLimit: s.ShellOutput}
 	return runner.Run(ctx, code)
 }
 
@@ -125,9 +120,8 @@ type luaEnv struct{ a *Runtime }
 func (e luaEnv) Info() luart.SessionInfo {
 	a := e.a
 	s := a.Settings()
-	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
 	cwd := a.Shell.Dir
-	info := luart.SessionInfo{ID: a.id, Cwd: cwd, Root: a.projectRoot(), Parent: ParentSession(), Depth: depth,
+	info := luart.SessionInfo{ID: a.id, Cwd: cwd, Root: a.projectRoot(), Parent: a.parentRoot, Depth: a.depth,
 		Model: s.Model, Effort: s.Effort, Home: a.home, TmpDir: filepath.Join(os.TempDir(), "zel-"+a.id)}
 	info.LuaPath = []string{filepath.Join(a.home, "lua")}
 	for d := filepath.Clean(cwd); ; d = filepath.Dir(d) {
@@ -161,102 +155,10 @@ func (a *Runtime) projectRoot() string {
 }
 
 func (e luaEnv) ShellEnv() map[string]string {
-	env := e.a.shellEnv()
-	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
-	env["ZEL_DEPTH"] = strconv.Itoa(depth)
-	return env
+	return e.a.shellEnv()
 }
 
 func (e luaEnv) State() luart.StateStore { return kvState{e.a} }
-
-func (e luaEnv) SpawnTask(cmd string, o luart.TaskOpts) (luart.Job, error) {
-	if e.a.tasks == nil {
-		return nil, fmt.Errorf("no active session")
-	}
-	j, err := e.a.tasks.spawn(cmd, startOpts{kind: "task", name: o.Name, cwd: o.Cwd, env: o.Env, timeout: o.Timeout, waited: o.Waited})
-	if err != nil {
-		return nil, err
-	}
-	return j, nil
-}
-
-// zelBinary is the executable children of agents.spawn run: this very binary when
-// it is called zel (so a child always matches its parent), else zel from PATH.
-func zelBinary() string {
-	if exe, err := os.Executable(); err == nil && filepath.Base(exe) == "zel" {
-		return exe
-	}
-	return "zel"
-}
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
-func (e luaEnv) SpawnAgent(o luart.AgentOpts) (luart.Job, error) {
-	a := e.a
-	if a.tasks == nil {
-		return nil, fmt.Errorf("no active session")
-	}
-	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
-	if depth+1 > MaxAgentDepth {
-		return nil, fmt.Errorf("agents are nested too deeply (max depth %d)", MaxAgentDepth)
-	}
-	reports := filepath.Join(a.home, "reports")
-	if err := os.MkdirAll(reports, 0o700); err != nil {
-		return nil, err
-	}
-	report := filepath.Join(reports, fmt.Sprintf("%s-%d.json", a.id, time.Now().UnixNano()))
-	command := shellQuote(zelBinary()) + ` -p "$ZEL_AGENT_PROMPT"`
-	for _, f := range [][2]string{{"--model", o.Model}, {"--effort", o.Effort}, {"--provider", o.Provider}} {
-		if f[1] != "" {
-			command += " " + f[0] + " " + shellQuote(f[1])
-		}
-	}
-	model := o.Model
-	if model == "" {
-		model = a.Settings().Model
-	}
-	env := map[string]string{"ZEL_AGENT_PROMPT": o.Prompt, "ZEL_DEPTH": strconv.Itoa(depth + 1), "ZEL_REPORT": report}
-	j, err := a.tasks.spawn(command, startOpts{kind: "agent", prompt: o.Prompt, model: model, cwd: o.Cwd, env: env, timeout: o.Timeout, waited: o.Waited, report: report})
-	if err != nil {
-		return nil, err
-	}
-	return j, nil
-}
-
-func (e luaEnv) GetJob(kind, id string) (luart.Job, bool) {
-	t := e.a.tasks
-	if t == nil {
-		return nil, false
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	j, ok := t.jobs[id]
-	if !ok || j.kind != kind {
-		return nil, false
-	}
-	return j, true
-}
-
-func (e luaEnv) ListJobs(kind string) []luart.JobInfo {
-	t := e.a.tasks
-	if t == nil {
-		return nil
-	}
-	t.mu.Lock()
-	ids := append([]string(nil), t.order...)
-	jobs := make([]*job, 0, len(ids))
-	for _, id := range ids {
-		if j := t.jobs[id]; j != nil && j.kind == kind {
-			jobs = append(jobs, j)
-		}
-	}
-	t.mu.Unlock()
-	out := make([]luart.JobInfo, 0, len(jobs))
-	for _, j := range jobs {
-		out = append(out, luart.JobInfo{ID: j.id, Kind: j.kind, Name: j.name, Cmd: j.cmd, Model: j.model, State: j.Status(), Prompt: j.prompt})
-	}
-	return out
-}
 
 // View attaches an image to the next model request, like `zel view`.
 func (e luaEnv) View(path string) error {

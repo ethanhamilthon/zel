@@ -1,120 +1,156 @@
 package luart
 
 import (
+	"errors"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// Handles are plain tables {id, kind} with a shared metatable, so tasks.get(id)
-// in a later call yields an equal handle and handles survive JSON copies.
+// The tasks and agents namespaces share their lifecycle operations but not
+// their identity: each function below is installed once per namespace and
+// talks to that namespace only. IDs are plain strings ("t1", "a1").
 
-func (v *vm) installHandle() {
-	L := v.L
-	methods := L.NewTable()
-	methods.RawSetString("status", L.NewFunction(v.wrap("h:status", v.hStatus)))
-	methods.RawSetString("wait", L.NewFunction(v.wrap("h:wait", v.hWait)))
-	methods.RawSetString("result", L.NewFunction(v.wrap("h:result", v.hResult)))
-	methods.RawSetString("tail", L.NewFunction(v.wrap("h:tail", v.hTail)))
-	methods.RawSetString("stop", L.NewFunction(v.wrap("h:stop", v.hStop)))
-	v.mt = L.NewTable()
-	v.mt.RawSetString("__index", methods)
-}
-
-func (v *vm) handle(j Job) lua.LValue {
-	t := v.L.NewTable()
-	t.RawSetString("id", lua.LString(j.ID()))
-	t.RawSetString("kind", lua.LString(j.Kind()))
-	v.L.SetMetatable(t, v.mt)
-	return t
-}
-
-func (v *vm) jobOf(L *lua.LState, fn string, n int) Job {
-	t := L.CheckTable(n)
-	kind, _ := optString(t, "kind")
-	id, _ := optString(t, "id")
-	j, ok := v.env.GetJob(kind, id)
-	if !ok {
-		raise(L, fn, ENOENT, "no such %s %q", kind, id)
+// seconds converts an optional timeout argument; nil or zero means no limit.
+func seconds(L *lua.LState, n int) time.Duration {
+	if L.GetTop() >= n && L.Get(n) != lua.LNil {
+		return time.Duration(float64(L.CheckNumber(n)) * float64(time.Second))
 	}
-	return j
-}
-
-func (v *vm) hStatus(L *lua.LState) int {
-	L.Push(lua.LString(v.jobOf(L, "h:status", 1).Status()))
-	return 1
-}
-
-func (v *vm) hWait(L *lua.LState) int {
-	j := v.jobOf(L, "h:wait", 1)
-	var timeout time.Duration
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		timeout = time.Duration(float64(L.CheckNumber(2)) * float64(time.Second))
-	}
-	res, ok := j.Wait(v.ctx, timeout)
-	if !ok {
-		v.ctxErr("h:wait")
-		L.Push(lua.LNil)
-		L.Push(lua.LString("timeout"))
-		return 2
-	}
-	L.Push(toLua(L, res))
-	return 1
-}
-
-func (v *vm) hResult(L *lua.LState) int {
-	res, ok := v.jobOf(L, "h:result", 1).Result()
-	if !ok {
-		L.Push(lua.LNil)
-		return 1
-	}
-	L.Push(toLua(L, res))
-	return 1
-}
-
-func (v *vm) hTail(L *lua.LState) int {
-	j := v.jobOf(L, "h:tail", 1)
-	n := 20
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		n = L.CheckInt(2)
-	}
-	L.Push(lua.LString(j.Tail(n)))
-	return 1
-}
-
-func (v *vm) hStop(L *lua.LState) int {
-	v.jobOf(L, "h:stop", 1).Stop()
 	return 0
 }
 
-func (v *vm) waitAll(L *lua.LState) int {
+// jobErr raises the Lua error for a failed Jobs call.
+func jobErr(L *lua.LState, fn string, err error) {
+	if errors.Is(err, ErrNoJob) {
+		raise(L, fn, ENOENT, "%v", err)
+	}
+	raise(L, fn, EFAIL, "%v", err)
+}
+
+func (v *vm) installJobs(name string, jobs func() Jobs, spawn lua.LGFunction, run lua.LGFunction) {
+	fn := func(op string) string { return name + "." + op }
+	v.table(name, map[string]lua.LGFunction{
+		"spawn": spawn,
+		"run":   run,
+		"list": func(L *lua.LState) int {
+			out := L.NewTable()
+			for _, j := range jobs().List() {
+				out.Append(v.jobRow(name, j))
+			}
+			L.Push(out)
+			return 1
+		},
+		"get": func(L *lua.LState) int {
+			j, ok := jobs().Get(L.CheckString(1))
+			if !ok {
+				L.Push(lua.LNil)
+				return 1
+			}
+			L.Push(v.jobRow(name, j))
+			return 1
+		},
+		"status": func(L *lua.LState) int {
+			j, ok := jobs().Get(L.CheckString(1))
+			if !ok {
+				jobErr(L, fn("status"), ErrNoJob)
+			}
+			L.Push(lua.LString(j.State))
+			return 1
+		},
+		"wait": func(L *lua.LState) int {
+			res, ok, err := jobs().Wait(v.ctx, L.CheckString(1), seconds(L, 2))
+			if err != nil {
+				jobErr(L, fn("wait"), err)
+			}
+			if !ok {
+				v.ctxErr(fn("wait"))
+				L.Push(lua.LNil)
+				L.Push(lua.LString("timeout"))
+				return 2
+			}
+			L.Push(toLua(L, res))
+			return 1
+		},
+		"wait_all": func(L *lua.LState) int { return v.waitAll(L, fn("wait_all"), jobs()) },
+		"result": func(L *lua.LState) int {
+			res, ok, err := jobs().Result(L.CheckString(1))
+			if err != nil {
+				jobErr(L, fn("result"), err)
+			}
+			if !ok {
+				L.Push(lua.LNil)
+				return 1
+			}
+			L.Push(toLua(L, res))
+			return 1
+		},
+		"tail": func(L *lua.LState) int {
+			n := 20
+			if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+				n = L.CheckInt(2)
+			}
+			text, err := jobs().Tail(L.CheckString(1), n)
+			if err != nil {
+				jobErr(L, fn("tail"), err)
+			}
+			L.Push(lua.LString(text))
+			return 1
+		},
+		"stop": func(L *lua.LState) int {
+			if err := jobs().Stop(L.CheckString(1)); err != nil {
+				jobErr(L, fn("stop"), err)
+			}
+			return 0
+		},
+	})
+}
+
+func (v *vm) jobRow(namespace string, j JobInfo) *lua.LTable {
+	row := v.L.NewTable()
+	row.RawSetString("id", lua.LString(j.ID))
+	row.RawSetString("state", lua.LString(j.State))
+	if namespace == "agents" {
+		row.RawSetString("model", lua.LString(j.Model))
+		row.RawSetString("prompt", lua.LString(j.Prompt))
+	} else {
+		row.RawSetString("name", lua.LString(j.Name))
+		row.RawSetString("cmd", lua.LString(j.Cmd))
+	}
+	return row
+}
+
+// waitAll waits for every ID of the list against one shared deadline and
+// returns the results by position; unfinished jobs leave a hole.
+func (v *vm) waitAll(L *lua.LState, fn string, jobs Jobs) int {
 	list := L.CheckTable(1)
 	var deadline time.Time
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		deadline = time.Now().Add(time.Duration(float64(L.CheckNumber(2)) * float64(time.Second)))
+	if d := seconds(L, 2); d > 0 {
+		deadline = time.Now().Add(d)
 	}
 	out := L.NewTable()
 	for i := 1; i <= list.Len(); i++ {
-		h, ok := list.RawGetInt(i).(*lua.LTable)
+		id, ok := list.RawGetInt(i).(lua.LString)
 		if !ok {
-			raise(L, "wait_all", EINVAL, "item #%d is not a handle", i)
+			raise(L, fn, EINVAL, "item #%d is not a job id", i)
 		}
-		kind, _ := optString(h, "kind")
-		id, _ := optString(h, "id")
-		j, found := v.env.GetJob(kind, id)
-		if !found {
-			raise(L, "wait_all", ENOENT, "no such %s %q", kind, id)
+		var left time.Duration
+		if !deadline.IsZero() {
+			if left = time.Until(deadline); left <= 0 {
+				res, done, err := jobs.Result(string(id))
+				if err != nil {
+					jobErr(L, fn, err)
+				}
+				if done {
+					out.RawSetInt(i, toLua(L, res))
+				}
+				continue
+			}
 		}
-		var res map[string]any
-		var done bool
-		if deadline.IsZero() {
-			res, done = j.Wait(v.ctx, 0)
-		} else if left := time.Until(deadline); left > 0 {
-			res, done = j.Wait(v.ctx, left)
-		} else {
-			res, done = j.Result()
+		res, done, err := jobs.Wait(v.ctx, string(id), left)
+		if err != nil {
+			jobErr(L, fn, err)
 		}
-		v.ctxErr("wait_all")
+		v.ctxErr(fn)
 		if done {
 			out.RawSetInt(i, toLua(L, res))
 		}
@@ -141,13 +177,9 @@ func (v *vm) taskOpts(L *lua.LState, o *lua.LTable) TaskOpts {
 
 func (v *vm) tasksSpawn(L *lua.LState) int { return v.spawnTask(L, "tasks.spawn", false) }
 
-func (v *vm) tasksRun(L *lua.LState) int {
-	if n := v.spawnTask(L, "tasks.run", true); n == 0 {
-		return 0
-	}
-	return v.waitPushed(L, "tasks.run")
-}
+func (v *vm) tasksRun(L *lua.LState) int { return v.spawnTask(L, "tasks.run", true) }
 
+// spawnTask pushes the new task's ID, or with waited its result.
 func (v *vm) spawnTask(L *lua.LState, fn string, waited bool) int {
 	cmd := L.CheckString(1)
 	if cmd == "" {
@@ -155,71 +187,31 @@ func (v *vm) spawnTask(L *lua.LState, fn string, waited bool) int {
 	}
 	o := v.taskOpts(L, opts(L, 2))
 	o.Waited = waited
-	j, err := v.env.SpawnTask(cmd, o)
+	tasks := v.env.Tasks()
+	id, err := tasks.Spawn(cmd, o)
 	if err != nil {
 		raise(L, fn, EFAIL, "%v", err)
 	}
-	L.Push(v.handle(j))
-	return 1
+	if !waited {
+		L.Push(lua.LString(id))
+		return 1
+	}
+	return v.waitFinished(L, fn, tasks, id)
 }
 
-// waitPushed replaces the handle on top of the stack with the job's result.
-func (v *vm) waitPushed(L *lua.LState, fn string) int {
-	h := L.Get(-1).(*lua.LTable)
-	L.Pop(1)
-	kind, _ := optString(h, "kind")
-	id, _ := optString(h, "id")
-	j, ok := v.env.GetJob(kind, id)
-	if !ok {
-		raise(L, fn, ENOENT, "no such %s %q", kind, id)
+// waitFinished pushes the result of a job started by run: it waits for the end
+// or raises when the invocation is cancelled or out of time. The job itself
+// keeps running then; its result arrives as a message.
+func (v *vm) waitFinished(L *lua.LState, fn string, jobs Jobs, id string) int {
+	res, done, err := jobs.Wait(v.ctx, id, 0)
+	if err != nil {
+		jobErr(L, fn, err)
 	}
-	res, done := j.Wait(v.ctx, 0)
 	if !done {
 		v.ctxErr(fn)
 		raise(L, fn, EFAIL, "job did not finish")
 	}
 	L.Push(toLua(L, res))
-	return 1
-}
-
-func (v *vm) tasksGet(L *lua.LState) int  { return v.getJob(L, "task") }
-func (v *vm) agentsGet(L *lua.LState) int { return v.getJob(L, "agent") }
-
-func (v *vm) getJob(L *lua.LState, kind string) int {
-	j, ok := v.env.GetJob(kind, L.CheckString(1))
-	if !ok {
-		L.Push(lua.LNil)
-		return 1
-	}
-	L.Push(v.handle(j))
-	return 1
-}
-
-func (v *vm) tasksList(L *lua.LState) int {
-	out := L.NewTable()
-	for _, j := range v.env.ListJobs("task") {
-		row := L.NewTable()
-		row.RawSetString("id", lua.LString(j.ID))
-		row.RawSetString("name", lua.LString(j.Name))
-		row.RawSetString("cmd", lua.LString(j.Cmd))
-		row.RawSetString("state", lua.LString(j.State))
-		out.Append(row)
-	}
-	L.Push(out)
-	return 1
-}
-
-func (v *vm) agentsList(L *lua.LState) int {
-	out := L.NewTable()
-	for _, j := range v.env.ListJobs("agent") {
-		row := L.NewTable()
-		row.RawSetString("id", lua.LString(j.ID))
-		row.RawSetString("model", lua.LString(j.Model))
-		row.RawSetString("state", lua.LString(j.State))
-		row.RawSetString("prompt", lua.LString(j.Prompt))
-		out.Append(row)
-	}
-	L.Push(out)
 	return 1
 }
 
@@ -247,19 +239,19 @@ func (v *vm) agentOpts(L *lua.LState, fn string, waited bool) AgentOpts {
 }
 
 func (v *vm) agentsSpawn(L *lua.LState) int {
-	j, err := v.env.SpawnAgent(v.agentOpts(L, "agents.spawn", false))
+	id, err := v.env.Agents().Spawn(v.agentOpts(L, "agents.spawn", false))
 	if err != nil {
 		raise(L, "agents.spawn", EFAIL, "%v", err)
 	}
-	L.Push(v.handle(j))
+	L.Push(lua.LString(id))
 	return 1
 }
 
 func (v *vm) agentsRun(L *lua.LState) int {
-	j, err := v.env.SpawnAgent(v.agentOpts(L, "agents.run", true))
+	agents := v.env.Agents()
+	id, err := agents.Spawn(v.agentOpts(L, "agents.run", true))
 	if err != nil {
 		raise(L, "agents.run", EFAIL, "%v", err)
 	}
-	L.Push(v.handle(j))
-	return v.waitPushed(L, "agents.run")
+	return v.waitFinished(L, "agents.run", agents, id)
 }

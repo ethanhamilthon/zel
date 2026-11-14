@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"zel/internal/luart"
 )
 
 func initLua(t *testing.T, code string) func(home, dir string) {
@@ -74,37 +77,42 @@ end)`))
 	}
 }
 
-// A fake zel binary stands in for the child process of agents.spawn.
-func fakeZelOnPath(t *testing.T, body string) {
-	t.Helper()
-	bin := t.TempDir()
-	writeFile(t, filepath.Join(bin, "zel"), "#!/bin/sh\n"+body+"\n")
-	if err := os.Chmod(filepath.Join(bin, "zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+var childMarker = regexp.MustCompile(`child-\w+`)
+
+// agentProvider plays both the parent (a lua call, then "done") and its
+// children (an answer naming their prompt): children never see the call id c1.
+func agentProvider(parentCode string, onChild func(prompt string)) *fakeProvider {
+	return &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case childMarker.MatchString(body):
+			prompt := childMarker.FindString(body)
+			if onChild != nil {
+				onChild(prompt)
+			}
+			return textReply("answer to: " + prompt)
+		}
+		return luaReply("c1", parentCode)
+	}}
 }
 
 func TestAgentsRunAndSpawn(t *testing.T) {
-	fakeZelOnPath(t, `printf '{"ok":true,"answer":"answer to: %s","session":"s1"}' "$2" > "$ZEL_REPORT"; echo "$2"`)
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		if n == 1 {
-			return luaReply("c1", `
-local r = agents.run{prompt = "ping", model = "haiku-5.5"}
-print(r.ok, r.answer, r.session)
-local h = agents.spawn{prompt = "pong"}
-print(h.kind, #agents.list())
-local res = h:wait(30)
-print(res.ok, res.answer, h:status())`)
-		}
-		return textReply("done")
-	}}
+	t.Setenv("PATH", t.TempDir()) // agents run in-process: no zel executable needed
+	fp := agentProvider(`
+local r = agents.run{prompt = "child-ping"}
+print(r.ok, r.answer, r.session ~= "")
+local id = agents.spawn{prompt = "child-pong"}
+print(type(id), #agents.list(), agents.get(id).prompt)
+local res = agents.wait(id, 8)
+print(res.ok, res.answer, agents.status(id), agents.result(id).answer)
+print(agents.tail(id, 5))`, nil)
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
-	out := fp.requests()[1]
-	for _, want := range []string{"answer to: ping", "answer to: pong", "agent"} {
+	out := fp.requests()[len(fp.requests())-1]
+	for _, want := range []string{"true\\tanswer to: child-ping\\ttrue", "string\\t2\\tchild-pong", "true\\tanswer to: child-pong\\tdone\\tanswer to: child-pong"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
@@ -114,23 +122,94 @@ print(res.ok, res.answer, h:status())`)
 	if got := a.Queue().Take(); len(got) != 0 {
 		t.Fatalf("waited results were queued too: %+v", got)
 	}
+	// The children ran in this process, as sessions of their own.
+	if list, err := a.Tasks(); err != nil || len(list) != 2 || !strings.HasPrefix(list[0].Command, "agent: child-ping") {
+		t.Fatalf("tasks %+v %v", list, err)
+	}
+	if got := a.ActiveSubagents(); len(got) != 0 {
+		t.Fatalf("finished agents still active: %+v", got)
+	}
 }
 
 func TestUnwaitedAgentResultArrivesAsMessage(t *testing.T) {
-	fakeZelOnPath(t, `sleep 1; printf '{"ok":true,"answer":"bg answer","session":"s2"}' > "$ZEL_REPORT"`)
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		if n == 1 {
-			return luaReply("c1", `agents.spawn{prompt = "later"}`)
-		}
-		return textReply("done")
-	}}
+	fp := agentProvider(`agents.spawn{prompt = "child-later"}`, nil)
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
 	got := awaitInput(t, a)
-	if !strings.Contains(got[0].Text, "<agent-result") || !strings.Contains(got[0].Text, "bg answer") {
+	if !strings.Contains(got[0].Text, "<agent-result") || !strings.Contains(got[0].Text, "answer to: child-later") {
 		t.Fatalf("message %q", got[0].Text)
+	}
+}
+
+func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		case strings.Contains(body, "child-outer") && !strings.Contains(body, `"n1"`):
+			return luaReply("n1", `print(agents.run{prompt = "child-inner"}.answer)`)
+		case strings.Contains(body, "child-outer"):
+			return textReply("outer saw inner")
+		case strings.Contains(body, "child-inner"):
+			return textReply("inner answer")
+		}
+		return luaReply("c1", `
+local nested = agents.spawn{prompt = "child-outer"}
+local stuck = agents.spawn{prompt = "child-stuck"}
+local r = agents.wait_all({nested}, 8)
+print(r[1].ok, r[1].answer)
+local x = agents.stop(stuck)
+print(agents.wait(stuck, 8).ok, agents.status(stuck))`)
+	}}
+	a := newTestAgent(t, fp, Options{})
+	t.Cleanup(func() { close(gate) }) // runs before the server closes
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	out := fp.requests()[len(fp.requests())-1]
+	for _, want := range []string{"true\\touter saw inner", "false\\tstopped"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
+	gate := make(chan struct{})
+	fp := &fakeProvider{reply: func(n int, body string) string {
+		if strings.Contains(body, "child-hang") {
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-hang"}`)
+	}}
+	a := newTestAgent(t, fp, Options{})
+	t.Cleanup(func() { close(gate) })
+	a.depth = MaxAgentDepth
+	if _, err := (luaEnv{a}).Agents().Spawn(luart.AgentOpts{Prompt: "x"}); err == nil || !strings.Contains(err.Error(), "nested too deeply") {
+		t.Fatalf("depth limit: %v", err)
+	}
+	a.depth = 0
+	id, err := (luaEnv{a}).Agents().Spawn(luart.AgentOpts{Prompt: "child-hang"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(a.ActiveSubagents()) == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("agent never became active")
+		}
+	}
+	// Closing the parent cancels the child and waits for it.
+	start := time.Now()
+	a.release()
+	if time.Since(start) > 5*time.Second || len(a.ActiveSubagents()) != 0 {
+		t.Fatalf("shutdown left agent %s running after %s", id, time.Since(start))
 	}
 }
 
@@ -255,7 +334,7 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 
 func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
-		return luaReply("c1", "local h = tasks.spawn('sleep 30', {name='bg'})\nfs.write('spawned', h.id)\nsleep(20)")
+		return luaReply("c1", "local h = tasks.spawn('sleep 30', {name='bg'})\nfs.write('spawned', h)\nsleep(20)")
 	}}
 	a := newTestAgent(t, fp, Options{})
 	ctx, cancel := context.WithCancel(context.Background())

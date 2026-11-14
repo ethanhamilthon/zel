@@ -4,6 +4,7 @@ package luart
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -32,23 +33,42 @@ type AgentOpts struct {
 	Waited                               bool // the caller waits for the result: no <agent-result> message is queued
 }
 
-// JobInfo is one row of tasks.list / agents.list.
+// JobInfo is one row of tasks.list / agents.list. Cmd is set for tasks, Model
+// and Prompt for agents.
 type JobInfo struct {
-	ID, Kind, Name, Cmd, Model, State, Prompt string
+	ID, Name, Cmd, Model, State, Prompt string
 }
 
-// Job is a background task or subagent.
-type Job interface {
-	ID() string
-	Kind() string // "task" | "agent"
-	Status() string
+// ErrNoJob is returned for an ID the namespace does not know.
+var ErrNoJob = errors.New("no such job")
+
+// Jobs is the lifecycle of one namespace of background work, "tasks" or
+// "agents". The namespaces are independent: an ID belongs to exactly one of
+// them and stays valid for the whole session. Every method returns ErrNoJob
+// for an unknown ID.
+type Jobs interface {
+	List() []JobInfo
+	Get(id string) (JobInfo, bool)
 	// Wait blocks until the job ends, the timeout passes (zero: no limit) or ctx
-	// ends. A wait that gives up must not kill the job.
-	Wait(ctx context.Context, timeout time.Duration) (map[string]any, bool)
-	// Result is the final result without blocking.
-	Result() (map[string]any, bool)
-	Tail(n int) string
-	Stop()
+	// ends. ok is false when it gave up; that must not stop the job. The result
+	// is delivered here instead of as a queued message, exactly once.
+	Wait(ctx context.Context, id string, timeout time.Duration) (res map[string]any, ok bool, err error)
+	// Result is the final result without blocking; ok is false while running.
+	Result(id string) (res map[string]any, ok bool, err error)
+	Tail(id string, n int) (string, error)
+	Stop(id string) error
+}
+
+// Tasks is the tasks namespace: shell commands in the background.
+type Tasks interface {
+	Jobs
+	Spawn(cmd string, o TaskOpts) (id string, err error)
+}
+
+// Agents is the agents namespace: subagents that run inside the application.
+type Agents interface {
+	Jobs
+	Spawn(o AgentOpts) (id string, err error)
 }
 
 // StateStore keeps the values behind state.get/set/list.
@@ -65,10 +85,8 @@ type Env interface {
 	Info() SessionInfo
 	ShellEnv() map[string]string
 	State() StateStore
-	SpawnTask(cmd string, o TaskOpts) (Job, error)
-	SpawnAgent(o AgentOpts) (Job, error)
-	GetJob(kind, id string) (Job, bool)
-	ListJobs(kind string) []JobInfo
+	Tasks() Tasks
+	Agents() Agents
 	View(path string) error
 	Notice(msg string)
 	Log(level, msg string)

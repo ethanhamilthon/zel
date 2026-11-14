@@ -44,7 +44,7 @@ Effort defaults to `medium`.
 Ctrl+K opens the main menu. Typing `/` into an empty composer also opens it
 without inserting the slash; disable this in Settings → Slash opens menu.
 Providers lets you add, edit, or delete providers;
-Settings controls the Lua output budget, Lua call timeout, auto compaction,
+Settings controls the Lua output budget, auto compaction,
 reasoning summaries, and the accent color (20 presets). Providers, keys, defaults, preferences, sessions, and
 tasks live in the private SQLite database `~/.zel/zel.db`. API keys are stored
 locally, not encrypted; keep this directory private. Keys may reference an
@@ -52,21 +52,22 @@ environment variable with `{{$VARIABLE}}`.
 
 ## The lua tool
 
-The model has exactly one tool, `lua`. Its input is raw Lua code; an optional
-first line `--! timeout=N` sets the call timeout in seconds (default 120, max 600).
+The model has exactly one tool, `lua`. Its input is raw Lua code. Each Lua
+invocation has a fixed 10-second timeout that cannot be changed; long work belongs in
+`tasks.spawn` / `agents.spawn` and is checked in later calls.
 Providers with free-form tools (OpenAI Responses) get the code as raw text, the
 others a JSON `{"code": "..."}`; both are normalized to the same call.
 
 Every call gets a fresh Lua state: globals do not survive, only `state.get/set/list`
 does (scope `session` or `project`, stored in `zel.db`). Output is whatever the
 code `print()`s plus the returned value. Everything blocks, except
-`tasks.spawn` and `agents.spawn`, which return handles for work that continues in
-the background; unclaimed results arrive later as `<task-result>` or
+`tasks.spawn` and `agents.spawn`, which return a job ID for work that continues in
+the background (`tasks.wait/wait_all/result/status/tail/stop` and the same under `agents`); unclaimed results arrive later as `<task-result>` or
 `<agent-result>` messages. Messages you type during a call are queued until the
 call ends; Ctrl+D (stop the turn) cancels the running call; background work keeps running.
 
 Host API: `sh`, `fs.*`, `web.request/get/post`, `json`, `tasks.*`, `agents.*`,
-`wait_all`, `state.*`, `view`, `session`, `log`, `sleep`. The model sees the
+`state.*`, `view`, `session`, `log`, `sleep`. The model sees the
 current API in the system prompt. Full reference: [docs/lua-api.md](docs/lua-api.md).
 
 There is no sandbox, permission prompt or trust dialog: Lua runs with your user
@@ -192,7 +193,7 @@ session only; they never change defaults for later sessions. `--config` keeps it
 usual highest-priority instruction layer. Headless mode reuses the normal agent,
 tools and session store; it is not an interactive request protocol.
 
-`zel tasks` manages background commands, `zel view` queues images, and `zel models`
+`zel tasks list|status` inspects a session's background commands and `zel models`
 checks providers (including `--json` output). Run `zel --help` for details.
 
 Task logs retain the first 8 MiB plus an explicit truncation marker; further

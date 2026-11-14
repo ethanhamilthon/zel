@@ -3,21 +3,18 @@ local zel = require("zel")
 zel.instructions{file = "AGENTS.md"}
 zel.prompt(function() return "git status:\n" .. sh("git status --short").out end)
 
+-- A Lua call lives 10 s, so the slow checks run as one background task.
 zel.fn{
-  name = "zel.check", summary = "gofmt + vet + race tests, returns only failures",
+  name = "zel.check", summary = "start gofmt + vet + race tests in the background, returns the task id",
   params = {{"pkg", "string?", "go package pattern", default = "./..."}},
-  returns = "{ok:boolean, failures:string[]}",
-  examples = {'local r = zel.check("./internal/agent/...")'},
+  returns = "string (task id: read it with tasks.wait(id, 8) or wait for the <task-result>)",
+  examples = {'local id = zel.check("./internal/agent/...")'},
   run = function(pkg)
-    local fails = {}
-    local function add(out, pat)
-      for l in out:gmatch("[^\n]+") do if not pat or l:find(pat) then fails[#fails + 1] = l end end
-    end
-    add(sh("gofmt -l .").out)                                   -- любой вывод = неотформатированный файл
-    local v = sh("go vet " .. pkg); if not v.ok then add(v.out, "%.go:") end
-    local t = sh("go test -race -count=1 " .. pkg, {timeout = 300}); if not t.ok then add(t.out, "FAIL") end
-    state.set("last_check", {ok = #fails == 0, at = os.time()}, "project")
-    return {ok = #fails == 0, failures = fails}
+    pkg = pkg or "./..."
+    local id = tasks.spawn('test -z "$(gofmt -l .)" && go vet ' .. pkg .. ' && go test -race -count=1 ' .. pkg,
+      {name = "check", timeout = 600})
+    state.set("last_check", {id = id, at = os.time()}, "project")
+    return id
   end,
 }
 

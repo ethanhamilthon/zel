@@ -7,19 +7,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// Limits of one call.
-const (
-	DefaultTimeout     = 120 * time.Second
-	MaxTimeout         = 600 * time.Second
-	DefaultOutputLimit = 8192
-)
+// DefaultOutputLimit is the default output budget of one call.
+const DefaultOutputLimit = 8192
+
+// callTimeout is the hard, non-configurable deadline of every Lua invocation,
+// including the blocking host calls made from it. It is a variable only so
+// tests can shorten it.
+var callTimeout = 10 * time.Second
 
 // vm is one Lua state with the host API installed. Agent calls get a fresh vm;
 // the long-lived config vm runs init.lua, hooks and plugin function bodies.
@@ -31,7 +31,6 @@ type vm struct {
 	out     strings.Builder
 	noHooks bool // the config vm never runs hooks, so hooks cannot recurse
 	direct  bool // plugin functions are called in this vm without the bridge
-	mt      *lua.LTable
 }
 
 func newVM(env Env, cfg *Config, config bool) *vm {
@@ -57,36 +56,9 @@ func (v *vm) ctxErr(fn string) {
 	raise(v.L, fn, ECANCELED, "the call was cancelled")
 }
 
-// Call is a parsed tool input: Lua code and the options of its pragma line.
-type Call struct {
-	Code    string
-	Timeout time.Duration // zero: the default
-}
-
-// ParseCall splits the optional first line "--! timeout=N" from the code.
-func ParseCall(input string) (Call, error) {
-	call := Call{Code: input}
-	first, rest, _ := strings.Cut(input, "\n")
-	trimmed := strings.TrimSpace(first)
-	if !strings.HasPrefix(trimmed, "--!") {
-		return call, nil
-	}
-	for _, field := range strings.Fields(strings.TrimPrefix(trimmed, "--!")) {
-		key, value, _ := strings.Cut(field, "=")
-		switch key {
-		case "timeout":
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 1 || n > int(MaxTimeout/time.Second) {
-				return call, fmt.Errorf("lua: %s: timeout must be 1..%d seconds", EINVAL, int(MaxTimeout/time.Second))
-			}
-			call.Timeout = time.Duration(n) * time.Second
-		default:
-			return call, fmt.Errorf("lua: %s: unknown option %q in the --! line", EINVAL, key)
-		}
-	}
-	call.Code = rest
-	return call, nil
-}
+// Call is one tool input: raw Lua code. A leading "--!" line is an ordinary
+// comment; nothing can change the deadline.
+type Call struct{ Code string }
 
 // Result is what the model sees after a call.
 type Result struct {
@@ -97,30 +69,16 @@ type Result struct {
 // Runner executes tool calls.
 type Runner struct {
 	Env         Env
-	Cfg         *Config       // optional: plugins and hooks
-	Timeout     time.Duration // default call timeout (zero: DefaultTimeout)
-	OutputLimit int           // default output budget in bytes (zero: DefaultOutputLimit)
+	Cfg         *Config // optional: plugins and hooks
+	OutputLimit int     // default output budget in bytes (zero: DefaultOutputLimit)
 }
 
 // Run executes one tool call in a fresh Lua state.
 func (r *Runner) Run(ctx context.Context, input string) Result {
-	call, err := ParseCall(input)
-	if err != nil {
-		return Result{Output: err.Error(), IsError: true}
-	}
+	call := Call{Code: input}
 	defaults := Defaults{}
 	if r.Cfg != nil {
 		defaults = r.Cfg.Defaults()
-	}
-	timeout := call.Timeout
-	if timeout == 0 {
-		timeout = DefaultTimeout
-		if r.Timeout > 0 {
-			timeout = min(r.Timeout, MaxTimeout)
-		}
-		if defaults.Timeout > 0 {
-			timeout = min(time.Duration(defaults.Timeout)*time.Second, MaxTimeout)
-		}
 	}
 	limit := DefaultOutputLimit
 	if r.OutputLimit > 0 {
@@ -141,7 +99,7 @@ func (r *Runner) Run(ctx context.Context, input string) Result {
 		}
 	}
 	started := time.Now()
-	res := r.run(ctx, call, timeout, limit)
+	res := r.run(ctx, call, limit)
 	if r.Cfg != nil {
 		var callErr string
 		if res.IsError {
@@ -156,8 +114,8 @@ func (r *Runner) Run(ctx context.Context, input string) Result {
 	return res
 }
 
-func (r *Runner) run(parent context.Context, call Call, timeout time.Duration, limit int) Result {
-	ctx, cancel := context.WithTimeout(parent, timeout)
+func (r *Runner) run(parent context.Context, call Call, limit int) Result {
+	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
 	v := newVM(r.Env, r.Cfg, false)
 	defer v.close()
@@ -175,7 +133,7 @@ func (r *Runner) run(parent context.Context, call Call, timeout time.Duration, l
 		msg := errorMessage(err)
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil:
-			msg = fmt.Sprintf("lua: %s: the call exceeded its timeout of %s", ETIMEOUT, timeout)
+			msg = fmt.Sprintf("lua: %s: the call exceeded its fixed timeout of %s", ETIMEOUT, callTimeout)
 		case parent.Err() != nil:
 			msg = "lua: " + ECANCELED + ": the call was cancelled"
 		}

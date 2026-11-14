@@ -38,7 +38,7 @@ func TestIsHelper(t *testing.T) {
 		{[]string{"--help"}, true},
 		{[]string{"-h"}, true},
 		{[]string{"tasks"}, true},
-		{[]string{"view"}, true},
+		{[]string{"view"}, false},
 		{[]string{"events"}, true},
 		{[]string{"session"}, true},
 		{[]string{"write"}, false},

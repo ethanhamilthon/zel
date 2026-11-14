@@ -8,7 +8,7 @@ zel.fn{
   examples = {'for _, h in ipairs(web.search("gopher-lua context", 3)) do print(h.url) end'},
   run = function(q, n)
     local out = fs.tmp("ddgs.json")
-    sh(("ddgs text -q %q -m %d -nc -o %s"):format(q, n, out), {check = true, timeout = 30})
+    sh(("ddgs text -q %q -m %d -nc -o %s"):format(q, n, out), {check = true, timeout = 8})
     local hits = {}
     for i, h in ipairs(json.decode(fs.read(out))) do hits[i] = {title = h.title, url = h.href, body = h.body} end
     return hits
@@ -19,7 +19,7 @@ zel.fn{
   params = {{"url", "string"}, {"max", "integer?", "cut to N bytes", default = 20000}},
   returns = "string",
   run = function(url, max)
-    local r = sh(("trafilatura -u %q --markdown --no-comments --links"):format(url), {timeout = 40})
+    local r = sh(("trafilatura -u %q --markdown --no-comments --links"):format(url), {timeout = 8})
     if not r.ok or r.out == "" then r = sh(("crwl crawl %q -o markdown"):format(url), {check = true}) end
     return r.out:sub(1, max)
   end,

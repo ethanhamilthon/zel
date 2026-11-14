@@ -203,16 +203,6 @@ func (c *Controller) ActiveSubagents() (list []SubagentRun) {
 	return list
 }
 
-func (c *Controller) SetTaskSteps(id string, steps int) {
-	c.view(func() { c.a.SetTaskSteps(id, steps) })
-}
-
-func (c *Controller) TaskSteps(id string) int {
-	var n int
-	c.view(func() { n = c.a.TaskSteps(id) })
-	return n
-}
-
 func (c *Controller) StopTask(id string) error {
 	var err error
 	c.view(func() {
@@ -262,4 +252,10 @@ func (c *Controller) UpdateSettings(s Settings) (err error) {
 		err = c.a.UpdateSettings(s)
 	})
 	return err
+}
+
+// StartTask runs a shell command as a background task of the current session.
+func (c *Controller) StartTask(command string) (id string, err error) {
+	c.view(func() { id, err = c.a.StartTask(command) })
+	return id, err
 }
