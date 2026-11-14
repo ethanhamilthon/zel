@@ -312,18 +312,18 @@ func (a *Runtime) sessionStart() {
 	}
 }
 
-// sessionEnd runs the session_end hooks before the session is left. The session's
-// shutdown budget starts here: the hooks, the end hooks of running subagents and the
-// stop of the jobs all share it (see tasks.close).
+// sessionEnd leaves the session: its jobs are cancelled, their end hooks run, and then
+// the session_end hooks run with what is left of the shutdown budget (see tasks.close).
 func (a *Runtime) sessionEnd(reason string) {
 	t := a.tasks
 	if t == nil {
 		return
 	}
-	t.startBudget()
-	if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_end") {
-		cfg.SessionEnd(t.life, reason)
-	}
+	t.close(func(ctx context.Context) {
+		if cfg := a.lua.get(); cfg != nil && cfg.HasHook("session_end") {
+			cfg.SessionEnd(ctx, reason)
+		}
+	})
 }
 
 // hookInput lets message hooks observe notifications or rewrite what the user typed.

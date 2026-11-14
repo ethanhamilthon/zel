@@ -668,9 +668,9 @@ func (c *Config) SessionStart(ctx context.Context) string {
 	return c.collect(ctx, "session_start", map[string]any{})
 }
 
-// SessionEndTimeout is the budget of one session's shutdown: the session_end
-// hooks, the end hooks of subagents still running and the wait for running jobs
-// share it, so leaving a session takes at most this long.
+// SessionEndTimeout is the budget of one session's shutdown. Running subagents are
+// cancelled first, their end hooks run next, and session_end runs last with what is
+// left, so leaving a session takes at most this long.
 const SessionEndTimeout = 5 * time.Second
 
 // SessionEnd runs the session_end hooks when the session is left (reason:

@@ -113,6 +113,9 @@ type agentLink struct {
 	root  string
 	depth int
 	id    string
+	// budget is the shutdown budget of the parent session; the child's session
+	// shares it (see lifeParent).
+	budget context.Context
 }
 
 // ActiveSubagents lists the running agents of this session tree. It only reads
@@ -144,6 +147,7 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
 	holder, depth, budget := a.lua, a.depth+1, a.tasks.life
+	startCtx, stopStart := context.WithCancel(budget)
 	j, err := a.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
 			// The lifecycle hooks run on goroutines of their own. They wait for the Lua
@@ -151,21 +155,25 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 			// subagent, so no hook may sit on the path to the subagent's result. Both
 			// hooks use the snapshot pinned here, which the end hook releases: a reload
 			// or a session change never sends an end hook to a snapshot that did not
-			// run its start hook. Both are bounded by the session's shutdown budget.
+			// run its start hook. Both are bounded by the session's shutdown budget; the
+			// start hook alone is also cancelled when the shutdown begins (see tasks.close).
 			cfg := holder.pin()
 			started := make(chan struct{})
+			j.stopStart = stopStart
 			j.endHook = func(status string, res map[string]any) {
 				defer holder.unpin(cfg)
 				<-started
 				deliverSubagent(budget, cfg, "subagent_end", subagentEndInfo(j, o, status, res))
+				j.runDeferredClose()
 			}
 			done := make(chan error, 1)
 			go func() {
 				go func() {
 					defer close(started)
-					deliverSubagent(budget, cfg, "subagent_start", subagentStartInfo(j, o, cwd, depth))
+					defer stopStart()
+					deliverSubagent(startCtx, cfg, "subagent_start", subagentStartInfo(j, o, cwd, depth))
 				}()
-				err := a.runChild(ctx, j, log, cwd, o)
+				err := a.runChild(ctx, j, log, cwd, o, budget)
 				failed = err != nil
 				done <- err
 			}()
@@ -179,13 +187,14 @@ func (a *Runtime) spawnAgent(o luart.AgentOpts) (*job, error) {
 		})
 	if err != nil {
 		cancel()
+		stopStart()
 		return nil, err
 	}
 	return j, nil
 }
 
 // runChild runs one agent to completion and records its outcome on the job.
-func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts) error {
+func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts, budget context.Context) error {
 	key := a.id + "/" + j.id
 	root := a.rootID()
 	tree := a.tree
@@ -195,7 +204,7 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 
 	var outcome agentOutcome
 	opts := Options{Mode: "headless", Provider: o.Provider, Model: o.Model, Effort: o.Effort,
-		link: &agentLink{tree: tree, root: root, depth: a.depth + 1, id: key}}
+		link: &agentLink{tree: tree, root: root, depth: a.depth + 1, id: key, budget: budget}}
 	opts.SessionReady = func(c *Runtime) error {
 		if hint := c.Settings().SetupHint(); hint != "" {
 			return errors.New(hint)
@@ -211,7 +220,9 @@ func (a *Runtime) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 		j.setOutcome(agentOutcome{Error: err.Error()})
 		return err
 	}
-	defer child.Close()
+	// The child's session closes after the end hook of this subagent (see spawnAgent),
+	// so its own session_end cannot delay the report the parent waits for.
+	j.deferClose(child.Close)
 	if ctx.Err() != nil {
 		j.setOutcome(agentOutcome{Session: outcome.Session})
 		return ctx.Err()

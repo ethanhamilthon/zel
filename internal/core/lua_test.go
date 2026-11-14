@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -982,5 +983,192 @@ zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status .. ";", {a
 	time.Sleep(50 * time.Millisecond) // a duplicate end hook would have landed by now
 	if got, _ := os.ReadFile(endFile); string(got) != "timeout;" {
 		t.Fatalf("end hook ran more than once: %q", got)
+	}
+}
+
+// namedPipe makes a FIFO. Reading it from Lua is a host call that blocks until a
+// writer opens it, which is how a stuck host operation looks from the session.
+func namedPipe(t *testing.T, path string) string {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// releasePipe gives the reader blocked on the FIFO its writer, so its call returns.
+// It waits for the reader to arrive, so it runs on a goroutine of its own.
+func releasePipe(path string) {
+	if w, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		w.Close()
+	}
+}
+
+// awaitSubagentRunning waits until a subagent of a runs.
+func awaitSubagentRunning(t *testing.T, a *Runtime) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); len(a.ActiveSubagents()) == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the subagent never started")
+		}
+	}
+}
+
+// stuckChildProvider runs the parent's spawn of a child that only ends when it is
+// cancelled, as a cooperative subagent does.
+func stuckChildProvider(gate chan struct{}) *fakeProvider {
+	return &fakeProvider{reply: func(n int, body string) string {
+		switch {
+		case strings.Contains(body, `"c1"`):
+			return textReply("done")
+		case strings.Contains(body, "child-stuck"):
+			<-gate
+			return textReply("late")
+		}
+		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
+	}}
+}
+
+// A slow session_end must not cost a cooperative subagent its end hook. The subagent
+// is cancelled first and its end hook runs while the budget lasts; session_end runs
+// after it with what is left. Quitting and switching sessions order them alike.
+func TestSlowSessionEndDoesNotDropFastSubagentEnd(t *testing.T) {
+	for _, leave := range []struct {
+		name string
+		do   func(*Runtime) error
+	}{
+		{"quit", func(a *Runtime) error { a.Close(); return nil }},
+		{"new session", func(a *Runtime) error { return a.NewSession() }},
+	} {
+		t.Run(leave.name, func(t *testing.T) {
+			gate := make(chan struct{})
+			var endFile, seenFile string
+			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
+				endFile = filepath.Join(dir, "ended.txt")
+				seenFile = filepath.Join(dir, "seen.txt")
+				writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+local zel = require("zel")
+zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status) end)
+zel.on("session_end", function()
+	if session.depth ~= 0 then return end
+	fs.write("`+seenFile+`", tostring(fs.exists("`+endFile+`")))
+	sleep(30)
+end)`)
+			})
+			t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
+			if _, err := turn(t, a, "go"); err != nil {
+				t.Fatal(err)
+			}
+			awaitSubagentRunning(t, a)
+			start := time.Now()
+			if err := leave.do(a); err != nil {
+				t.Fatal(err)
+			}
+			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+				t.Fatalf("leaving took %s: session_end outlived the budget", took)
+			}
+			if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
+				t.Fatalf("the end hook of the cancelled subagent was lost behind session_end: %q, %v", got, err)
+			}
+			if got, err := os.ReadFile(seenFile); err != nil || string(got) != "true" {
+				t.Fatalf("session_end ran before the end hook of the subagent: %q, %v", got, err)
+			}
+		})
+	}
+}
+
+// A subagent_start hook still running when the shutdown begins is cancelled with the
+// subagent, so it cannot hold up the subagent's end hook.
+func TestShutdownCancelsPendingSubagentStart(t *testing.T) {
+	gate := make(chan struct{})
+	var endFile string
+	a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
+		endFile = filepath.Join(dir, "ended.txt")
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+local zel = require("zel")
+zel.on("subagent_start", function() state.set("started", "1", "project"); sleep(30) end)
+zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status) end)`)
+	})
+	t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	awaitStored(t, a, "started", "1")
+	start := time.Now()
+	a.Close()
+	if took := time.Since(start); took > luart.SessionEndTimeout/2 {
+		t.Fatalf("shutdown took %s: the pending start hook held the end hook", took)
+	}
+	if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
+		t.Fatalf("the end hook did not run: %q, %v", got, err)
+	}
+}
+
+// A subagent_end hook stuck in a host read that never returns does not hold shutdown:
+// Close returns at the budget, and the hook that did not finish is logged.
+func TestShutdownStuckSubagentEndHookIsBounded(t *testing.T) {
+	gate := make(chan struct{})
+	var fifo string
+	a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
+		fifo = namedPipe(t, filepath.Join(dir, "stuck"))
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+require("zel").on("subagent_end", function() io.open("`+fifo+`", "r"):read("a") end)`)
+	})
+	t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
+	t.Cleanup(func() { go releasePipe(fifo) })
+	if _, err := turn(t, a, "go"); err != nil {
+		t.Fatal(err)
+	}
+	awaitSubagentRunning(t, a)
+	if !closeWithin(a, luart.SessionEndTimeout+3*time.Second) {
+		t.Fatal("shutdown waited past its budget for a stuck subagent end hook")
+	}
+	// The hook gives up at the same moment the shutdown does, so its entry follows Close.
+	var events []byte
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		events, _ = os.ReadFile(EventsLog(a.home, a.id))
+		if strings.Contains(string(events), "stopped early") || time.Now().After(deadline) {
+			break
+		}
+	}
+	if !strings.Contains(string(events), "subagent_end") || !strings.Contains(string(events), "stopped early") {
+		t.Fatalf("the skipped end hook is not logged: %q", events)
+	}
+}
+
+// A completion stuck in a host read ends with its caller, and closing the session does
+// not wait for its VM: the VM is freed once the blocked read returns.
+func TestStuckCompletionDoesNotHoldSessionClose(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	var fifo string
+	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
+		fifo = namedPipe(t, filepath.Join(dir, "stuck"))
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
+require("zel").complete("stuck", function() return io.open("`+fifo+`", "r"):read("a") end)`)
+	})
+	t.Cleanup(func() { go releasePipe(fifo) })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if out, err := a.ExpandPrompt(ctx, "do #stuck"); err == nil || out != "" || time.Since(start) > 5*time.Second {
+		t.Fatalf("expansion of a stuck completion: %q, %v after %s", out, err, time.Since(start))
+	}
+	if !closeWithin(a, 2*time.Second) {
+		t.Fatal("closing the session waited for a stuck completion")
+	}
+}
+
+// closeWithin closes a and reports whether that returned within d.
+func closeWithin(a *Runtime, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		a.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }

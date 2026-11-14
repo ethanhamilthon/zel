@@ -47,7 +47,7 @@ func (a *Runtime) release() {
 		a.vm = nil
 	}
 	if a.tasks != nil {
-		a.tasks.close()
+		a.tasks.close(nil)
 		a.tasks = nil
 	}
 	if a.owner != nil {

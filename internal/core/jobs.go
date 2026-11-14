@@ -25,6 +25,14 @@ type job struct {
 	// endHook runs once the job has ended and its result is published (subagents
 	// only). Set before the job starts, and called exactly once.
 	endHook func(status string, res map[string]any)
+	// stopStart cancels the subagent_start delivery of a subagent. The shutdown of
+	// the session calls it at once, so a pending start hook never holds up the end
+	// hook of its subagent (see tasks.close). Guarded by t.mu when set.
+	stopStart context.CancelFunc
+
+	// closeChild shuts down the session of a subagent. It runs after the end hook
+	// (see spawnAgent), so the subagent's own session_end cannot delay that hook.
+	closeChild func() // guarded by mu
 
 	// Guarded by t.mu.
 	waited   bool
@@ -37,6 +45,24 @@ type job struct {
 	agent  agentOutcome // what an in-process agent produced; set before the job ends
 	value  any          // what a Lua task returned
 	err    error        // why a Lua task failed
+}
+
+// deferClose sets what runs after the job's end hook.
+func (j *job) deferClose(fn func()) {
+	j.mu.Lock()
+	j.closeChild = fn
+	j.mu.Unlock()
+}
+
+// runDeferredClose runs what deferClose set, once.
+func (j *job) runDeferredClose() {
+	j.mu.Lock()
+	fn := j.closeChild
+	j.closeChild = nil
+	j.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // agentOutcome is the final report of an in-process agent.

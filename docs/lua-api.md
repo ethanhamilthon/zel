@@ -48,6 +48,7 @@ fs.patch(path, {{old, new}, ...}) -> n -- several exact edits atomically: all or
 fs.list(dir) -> {name, dir, size}[]
 fs.glob(pattern) -> string[]           -- "internal/**/*.go"
 fs.grep(re, o?) -> {file, line, text}[] -- o: path, glob, fixed, max (default 200); rg, otherwise Go regexp
+-- fs.read, fs.write, fs.edit, fs.patch, fs.list and fs.grep refuse named pipes, devices and sockets with EINVAL: they could wait forever for a peer
 fs.exists(path) -> boolean, "file"|"dir"|nil
 fs.tmp(name?) -> string                -- a unique path in the session tmp
 -- network
@@ -144,11 +145,11 @@ Groups: `## built-in` (fixed text from the binary), then `## <layer> (path)`. Re
 | event | ev | return |
 |---|---|---|
 | `session_start` | `{}` | nil or a string / `{notify = "text"}` → notification (wakes the agent) |
-| `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; shares the 5 s shutdown budget (below) |
+| `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; runs last when leaving, with what is left of the 5 s shutdown budget (below) |
 | `message` | `{text, notice?}` | nil or a new user text string; `notice = true` marks a notification, whose text cannot be rewritten |
 | `turn_end` | `{answer}` | nil or a string / `{notify = "text"}` → notification, the turn continues (at most 3 times in a row) |
 | `subagent_start` | `{id, prompt, model, effort, provider, cwd, depth}` | nothing; runs in the background when the subagent begins |
-| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; exactly once per started subagent: `done`/`failed`/`stopped`/`timeout` |
+| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; one delivery attempt per started subagent: `done`/`failed`/`stopped`/`timeout` (see the shutdown rules below) |
 
 The table is the complete list of hooks. Since 0.5.2 `before_call`, `after_call` and `bg_done` are removed (`zel.on` with them is a layer load error).
 Text from `session_start` and `turn_end` reaches the agent as `<notification>text</notification>`. `message` hooks rewrite the user's text, and each one sees the text the previous one returned. The subagent hooks return nothing to the agent.
@@ -156,7 +157,10 @@ Text from `session_start` and `turn_end` reaches the agent as `<notification>tex
 
 ### Subagent hooks, reload and shutdown
 - A subagent keeps the snapshot that ran its `subagent_start` hook: its `subagent_end` runs there, even after Reload. That snapshot closes when its last subagent has ended, so a Reload never sends an end hook to a snapshot that did not see its start.
-- Leaving a session (`quit`, `new`, `resume`) has one budget of 5 s (`luart.SessionEndTimeout`). It covers `session_end`, the end hooks of running subagents and the wait for running jobs. Running jobs are stopped first. A hook that cannot start or finish in the budget is skipped, and a job that ignores cancellation is abandoned when it ends, so leaving never takes longer than the budget.
+- Leaving a session (`quit`, `new`, `resume`) has one budget of 5 s (`luart.SessionEndTimeout`), and it runs in this order: running subagents are cancelled first (their `subagent_start` hooks still pending are cancelled too), their `subagent_end` hooks run next, and `session_end` runs last with what is left. A subagent's own session (it loads the same init.lua) closes after its `subagent_end` and within the same budget.
+- Each started subagent gets one delivery attempt of its `subagent_end`. Normal operation and cooperative shutdown run it once. If the budget ends first, the attempt is skipped or cut short, and the warning `hook subagent_end (...) stopped early` is written to Tracing. No hook is guaranteed to complete past the budget.
+- A hook or plugin function that is blocked in a host operation that never returns, such as reading a named pipe, does not hold leaving past the budget either: the call returns at its deadline and its Lua state is freed when the blocked operation returns. Plain Lua library calls such as `io.open` or `dofile` are not interrupted by timeouts; they still return when their Lua finishes.
+- A job that ignores cancellation is abandoned when the budget ends; its result is not queued.
 
 ## 5. Layers and merging
 Order: `~/.zel/init.lua` → nearest `.zel/init.lua` going up from cwd → `--config FILE` (`.lua` only).

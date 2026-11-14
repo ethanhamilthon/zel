@@ -43,10 +43,20 @@ type tasks struct {
 	budget   sync.Once
 }
 
+// lifeParent is what the session's lifecycle context derives from. A subagent's
+// session ends within the shutdown budget of its parent, so its own session_end
+// cannot outlast the parent's shutdown.
+func (a *Runtime) lifeParent() context.Context {
+	if a.link != nil && a.link.budget != nil {
+		return a.link.budget
+	}
+	return context.Background()
+}
+
 func (a *Runtime) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
 	_ = a.db.LoseTasks(a.id)
-	life, stopLife := context.WithCancel(context.Background())
+	life, stopLife := context.WithCancel(a.lifeParent())
 	return &tasks{db: a.db, session: a.id, log: filepath.Join(a.home, "tasks"),
 		queue: a.queue, report: func(text string) { a.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
 		life: life, stopLife: stopLife}
@@ -249,19 +259,47 @@ func (t *tasks) startBudget() {
 	t.budget.Do(func() { time.AfterFunc(luart.SessionEndTimeout, t.stopLife) })
 }
 
-// close stops the running jobs and waits for them, their end hooks included, but
-// no longer than the shutdown budget. A job still running then is abandoned: it is
-// stopped, its result is not queued because the session is closed, and its hooks
-// find the budget spent.
-func (t *tasks) close() {
+// close ends the session's jobs and then its session_end hooks (sessionEnd may be
+// nil), all within one shutdown budget that starts here:
+//
+//  1. begin: no job starts any more, running jobs are cancelled, and the start hooks
+//     still pending are cancelled too, so none of them delays an end hook.
+//  2. drain: the jobs end and their end hooks run, until the budget ends.
+//  3. sessionEnd: runs with what is left of the budget, so a slow session_end cannot
+//     take the time that cooperative jobs need to stop and deliver their end hooks.
+//
+// A job still running when the budget ends is abandoned: its result is not queued,
+// and the end hooks that have not run yet find the budget spent and log that they
+// were skipped. Close is idempotent; a later call only waits for what is left.
+func (t *tasks) close(sessionEnd func(ctx context.Context)) {
 	t.startBudget()
+	t.begin()
+	t.drain()
+	if sessionEnd != nil {
+		sessionEnd(t.life)
+	}
+	t.stopLife()
+}
+
+// begin stops new jobs and cancels the running ones and the pending subagent starts.
+func (t *tasks) begin() {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.closed = true
 	for id, p := range t.running {
 		t.stopped[id] = true
 		p.cancel()
 	}
-	t.mu.Unlock()
+	for _, j := range t.jobs {
+		if j.stopStart != nil {
+			j.stopStart()
+		}
+	}
+}
+
+// drain waits until every job has ended, its end hook included, or the budget ends.
+// No job can start after begin, so the wait group cannot grow while it runs.
+func (t *tasks) drain() {
 	drained := make(chan struct{})
 	go func() {
 		t.wg.Wait()
@@ -271,7 +309,6 @@ func (t *tasks) close() {
 	case <-drained:
 	case <-t.life.Done():
 	}
-	t.stopLife()
 }
 
 func tail(path string) string {

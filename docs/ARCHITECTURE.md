@@ -75,7 +75,7 @@ session that runs in the same process. The parent owns its context,
 cancellation, progress and result; running agents live in an in-memory tree
 (`agentTree`) shared by the whole agent tree (subagents cannot start agents of
 their own), and closing the parent cancels
-its children and waits for them, with their end hooks, within the 5 s session budget. There is no Unix socket and no report file. init.lua layers are run once per session in
+its children, waits for them with their end hooks, and then runs `session_end`, all within the 5 s session budget. There is no Unix socket and no report file. init.lua layers are run once per session in
 a long-lived config VM (snapshot); hooks and plugin functions live there. The agent wakes up
 only for typed input or a notification: finished jobs nobody waited for, text
 from session_start and turn_end hooks, and `view()` images are queued as `<notification>...</notification>`

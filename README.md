@@ -120,15 +120,16 @@ zel.on("turn_end", function(ev) end)  -- also session_start, session_end, messag
 
 Subagent hooks run in the parent's init.lua. `subagent_start` runs in the
 background when a subagent begins, with `{id, prompt, model, effort, provider,
-cwd, depth}`. `subagent_end` runs exactly once per started subagent, after the
+cwd, depth}`. `subagent_end` is delivered once per started subagent, after the
 subagent's result is published, with `{id, status, ok, answer, error, session,
 model, effort, ms}`; `status` is `done`, `failed`, `stopped` or `timeout`. A
 subagent keeps the init.lua snapshot that started it, so its end hook still runs
-there after a Reload. Leaving a session (quit, new or resume) gives
-`session_end`, the end hooks of running subagents and the wait for running jobs
-one shared budget of 5 s; hooks that do not finish in it are skipped. Neither
-subagent hook returns text to the agent: keep the data in `state` or raise a
-`log.notice`.
+there after a Reload. Leaving a session (quit, new or resume) has one shared
+budget of 5 s: running subagents are cancelled first, their end hooks run next,
+and `session_end` runs last with what is left. Normal and cooperative shutdown
+run each hook once; a hook that does not finish within the budget is cut short
+or skipped, and that is logged in Tracing. Neither subagent hook returns text to
+the agent: keep the data in `state` or raise a `log.notice`.
 
 Prompt completions: `zel.complete("plan", function() return "..." end)` registers
 `#plan`. Typing `#` in the composer lists the registered names; Tab or Enter
