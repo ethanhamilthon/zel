@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/ins
 ```
 
 Installs the latest release for macOS or Linux (arm64/amd64) into
-`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.0`).
+`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.1`).
 `zel update` later replaces the binary with the latest GitHub release.
 
 ## Build from source
@@ -64,6 +64,7 @@ read write edit patch list glob grep exists tmp slice
 tasks.spawn(name, fn, o?)         -- background work; tasks.list/get/wait/tail/stop
 agent{prompt, model?, ...}        -- a subagent
 view log models session
+docs(topic?)                      -- the agent reads how zel works, by topic
 ```
 
 Everything blocks except `tasks.spawn`. The agent wakes up only for your
@@ -137,11 +138,11 @@ still shows everything, and the chat shows a "context compacted" divider.
 ## Chat and Tracing
 
 Chat shows user messages, agent messages and the working indicator. The
-indicator shows the Lua host operation the turn waits on (for example `reading
-~/.zel/init.lua`); labels never show a command's arguments or a secret. Each
-running subagent has its own row, and each running background task has one too:
-a blinking dot, the task's name and how long it runs. A row goes away when its
-task ends.
+indicator shows `thinking...` until the agent does something, then its last
+action (for example `reading ~/.zel/init.lua`) until the next one; labels never
+show a command's arguments or a secret. Each running background task has a row:
+a blinking dot, the task's name and how long it runs (a background subagent is a
+task too). A row goes away when its task ends.
 
 Tools, thoughts, errors and notices belong in Tracing. Tracing search accepts a
 leading type, optionally followed by text: `:user`, `:assistant fix tests`,

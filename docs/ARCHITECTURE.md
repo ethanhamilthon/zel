@@ -72,7 +72,7 @@ bookkeeping in `core` (IDs, logs, result delivery): a task is a Lua function on
 its own goroutine, and `agent{}` starts a full child `Runtime` with its own
 session in the same process and waits for it; a background agent is an
 `agent{}` inside a task. Running tasks are listed for the chat rows
-(`ActiveTasks`), running agents for the subagent rows. The parent owns its context,
+(`ActiveTasks`); a background agent is one of them. The parent owns its context,
 cancellation, progress and result; running agents live in an in-memory tree
 (`agentTree`) shared by the whole agent tree (subagents cannot start agents of
 their own), and closing the parent cancels
