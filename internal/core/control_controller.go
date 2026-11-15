@@ -59,7 +59,7 @@ func (c *Controller) Status() (s Status) {
 			s.Busy, s.Cancelling = true, c.active.cancelled
 			s.Started = c.active.started
 			s.Queued = c.a.Queue().Pending()
-			s.Activity = c.a.Activity()
+			s.Activity = cmp.Or(c.a.Activity(), c.a.LastActivity())
 		}
 	})
 	return s
@@ -136,6 +136,7 @@ func (c *Controller) closeLocked() error {
 
 func (c *Controller) beginLocked() *operation {
 	ctx, cancel := context.WithCancel(context.Background())
+	c.a.ResetActivity()
 	c.active = &operation{ctx: ctx, cancel: cancel, started: time.Now()}
 	c.idle = make(chan struct{})
 	return c.active

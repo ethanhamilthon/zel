@@ -677,7 +677,7 @@ func TestQueuedComposerEditWithdrawsUntilEnter(t *testing.T) {
 	if m.input.Value() != "queued instruction" || m.pendingSteer == 0 || len(m.ctl.Status().Queued) != 1 {
 		t.Fatalf("queued draft disappeared: %q, %v", m.input.Value(), m.ctl.Status().Queued)
 	}
-	if !strings.HasSuffix(ansi.Strip(m.workingBlock()), " · queued\n\n") {
+	if !strings.HasSuffix(ansi.Strip(m.workingBlock()), " · queued · thinking...\n\n") {
 		t.Fatalf("working indicator does not mention the queue: %q", ansi.Strip(m.workingBlock()))
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -1138,7 +1138,7 @@ func TestTaskRowsShowUnderTheChat(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 60, 20
 	m.tasks = []core.ActiveTask{{ID: "t1", Name: "build checks", Started: time.Now().Add(-4*time.Minute - 8*time.Second)}, {ID: "t2", Started: time.Now()}}
-	block := ansi.Strip(m.subagentBlock())
+	block := ansi.Strip(m.taskBlock())
 	if !strings.Contains(block, "build checks · 4m8s") || !strings.Contains(block, "t2 · ") || strings.Contains(block, "◆") {
 		t.Fatalf("rows: %q", block)
 	}
@@ -1151,7 +1151,7 @@ func TestTaskRowsShowUnderTheChat(t *testing.T) {
 		t.Fatalf("the dot does not blink: %q / %q", shown, hidden)
 	}
 	m.tasks = nil
-	if m.subagentBlock() != "" || m.hasRows() {
+	if m.taskBlock() != "" || m.hasRows() {
 		t.Fatal("rows stay after the tasks ended")
 	}
 }
@@ -2369,91 +2369,6 @@ func TestInfoRowsDisplayHomePaths(t *testing.T) {
 	}
 }
 
-func TestSubagentIndicatorFormatting(t *testing.T) {
-	m := bareModel(t, "/project")
-	m.width = 80
-	started := time.Now().Add(-10 * time.Second)
-
-	child := core.SubagentRun{
-		ID:      "sub-1",
-		Parent:  "parent-1",
-		Started: started,
-		Steps:   3,
-		Model:   "gpt-6-luna",
-		Effort:  "xhigh",
-		Command: "summarize",
-	}
-	row := m.formatSubagentRow(child)
-	stripped := ansi.Strip(row)
-	if !strings.Contains(stripped, "gpt-6-luna/xhigh · 10s · 3 steps") {
-		t.Fatalf("row missing time or steps: %q", stripped)
-	}
-	if !strings.HasPrefix(stripped, "◆ ") && !strings.HasPrefix(stripped, "◇ ") && !strings.HasPrefix(stripped, "   ") {
-		t.Fatalf("row missing agent icon or blink pad: %q", stripped)
-	}
-	if strings.Contains(row, "▌") {
-		t.Fatalf("subagent row must not contain rail: %q", row)
-	}
-
-	// Test step counts: 0 steps, 1 step, 5 steps
-	child.Steps = 0
-	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "0 steps") {
-		t.Fatalf("expected 0 steps, got %q", s)
-	}
-	child.Steps = 1
-	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "1 step") {
-		t.Fatalf("expected 1 step, got %q", s)
-	}
-	child.Steps = 5
-	if s := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(s, "5 steps") {
-		t.Fatalf("expected 5 steps, got %q", s)
-	}
-
-	// Test narrow width truncation
-	m.width = 12
-	narrow := ansi.Strip(m.formatSubagentRow(child))
-	if !strings.Contains(narrow, "…") {
-		t.Fatalf("expected truncated text on narrow width, got %q", narrow)
-	}
-
-	// The icon and row width stay fixed throughout the fade.
-	m.width = 80
-	for _, elapsed := range []time.Duration{0, 320 * time.Millisecond, 1200 * time.Millisecond, 2 * time.Second} {
-		child.Started = time.Now().Add(-elapsed)
-		row := ansi.Strip(m.formatSubagentRow(child))
-		if !strings.HasPrefix(row, "◆ gpt-6-luna/xhigh · ") {
-			t.Fatalf("icon or model disappeared at %s: %q", elapsed, row)
-		}
-	}
-	if subagentColor(0) != inputBlue || subagentColor(1200*time.Millisecond) != inputBackground {
-		t.Fatal("fade must run from accent to background")
-	}
-	if subagentColor(320*time.Millisecond) == subagentColor(400*time.Millisecond) {
-		t.Fatal("adjacent fade frames should have different colors")
-	}
-	child.Model, child.Effort = "small-model", ""
-	if row := ansi.Strip(m.formatSubagentRow(child)); !strings.Contains(row, "small-model · ") {
-		t.Fatalf("model without effort: %q", row)
-	}
-}
-
-func TestSubagentIndicatorInScreen(t *testing.T) {
-	m := bareModel(t, "/project")
-	m.width, m.height = 80, 24
-	m.subagents = []core.SubagentRun{{
-		ID:      "sub-1",
-		Parent:  m.ctl.Status().Session,
-		Started: time.Now(),
-		Steps:   1,
-		Command: "zel -p 'test'",
-	}}
-	m.refresh(false)
-	view := m.viewport.View()
-	if !strings.Contains(view, "1 step") {
-		t.Fatalf("expected rendered screen to contain subagent indicator, got:\n%s", view)
-	}
-}
-
 func TestFrameDropsTrailingPadding(t *testing.T) {
 	cases := map[string]string{
 		"\x1b[38;2;214;214;214mХей     \x1b[0m   ": "\x1b[38;2;214;214;214mХей\x1b[0m",
@@ -2651,7 +2566,7 @@ func (m *model) referenceTimelineRows(budget time.Duration) []string {
 		}
 	}
 	screen.add(m.workingBlock())
-	screen.add(m.subagentBlock())
+	screen.add(m.taskBlock())
 	// Remove only trailing boundary whitespace, preserving all message-internal rows.
 	for len(screen) > 0 && strings.TrimSpace(ansi.Strip(screen[len(screen)-1])) == "" {
 		screen = screen[:len(screen)-1]
@@ -2706,23 +2621,19 @@ func TestTimelineSegmentsMatchReference(t *testing.T) {
 	base := bareModel(t, t.TempDir())
 	base.width, base.height = 60, 20
 	for _, tc := range []struct {
-		name      string
-		entries   int
-		subagents []core.SubagentRun
-		input     string
-		files     []string
+		name    string
+		entries int
+		input   string
+		files   []string
 	}{
-		{"empty", 0, nil, "", nil},
-		{"entries", 5, nil, "hello\nworld", nil},
-		{"agents", 4, []core.SubagentRun{{ID: "a", Started: time.Now(), Steps: 2, Model: "m"}}, "", nil},
-		{"agents only", 0, []core.SubagentRun{{ID: "a", Started: time.Now()}}, "x", nil},
-		{"completions", 3, nil, "@ma", []string{"main.go", "makefile", "map.go"}},
+		{"empty", 0, "", nil},
+		{"entries", 5, "hello\nworld", nil},
+		{"completions", 3, "@ma", []string{"main.go", "makefile", "map.go"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, b := build(base, tc.entries), build(base, tc.entries)
 			a.cache, b.cache = nil, nil
 			for _, m := range []*model{&a, &b} {
-				m.subagents = tc.subagents
 				m.input.SetValue(tc.input)
 				m.fileCompletions = tc.files
 				m.fileSelected = 1
@@ -2774,37 +2685,12 @@ func TestWorkingIndicatorShowsActivity(t *testing.T) {
 		t.Fatalf("narrow indicator lost time or steps: %q", got)
 	}
 	status.Activity = ""
-	if got := workingText(status, 4); got != "1m9s · 4 steps" {
-		t.Fatalf("idle indicator = %q: no stale activity", got)
+	if got := workingText(status, 4); got != "1m9s · 4 steps · thinking..." {
+		t.Fatalf("indicator without an action = %q", got)
 	}
 	status.Activity, status.Cancelling = "reading ~/.zel/init.lua", true
 	if got := workingText(status, 4); got != "1m9s · cancelling" {
 		t.Fatalf("cancelling indicator = %q", got)
-	}
-}
-
-func TestSubagentRowsShowTheirOwnActivity(t *testing.T) {
-	started := time.Now().Add(-69 * time.Second)
-	m := model{width: 80, subagents: []core.SubagentRun{
-		{ID: "s/a1", Started: started, Steps: 2, Model: "gpt-6-luna", Effort: "low", Activity: "running agent in gpt-6-luna/low"},
-		{ID: "s/a2", Started: started, Steps: 5, Model: "gpt-6-luna", Effort: "low", Activity: "sleeping 20 sec"},
-	}}
-	lines := strings.Split(ansi.Strip(m.subagentBlock()), "\n")
-	var rows []string
-	for _, line := range lines {
-		if strings.Contains(line, "◆") {
-			rows = append(rows, line)
-		}
-	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %q", rows)
-	}
-	if !strings.HasSuffix(rows[0], "2 steps · running agent in gpt-6-luna/low") || !strings.HasSuffix(rows[1], "5 steps · sleeping 20 sec") {
-		t.Fatalf("each row must show its own activity: %q", rows)
-	}
-	idle := model{width: 80, subagents: []core.SubagentRun{{Started: started, Steps: 1, Model: "m"}}}
-	if row := ansi.Strip(idle.subagentBlock()); strings.Contains(row, "steps ·") {
-		t.Fatalf("idle row shows an activity: %q", row)
 	}
 }
 

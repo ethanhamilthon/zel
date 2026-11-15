@@ -974,3 +974,24 @@ func TestSurvivingEnvironmentWorkIsolatedAcrossSessionSwitch(t *testing.T) {
 	a.Close()
 	oldEnv.Log("warn", "after-close-log")
 }
+
+// The working indicator keeps the last action after it ended, until a new turn.
+func TestLastActivityStaysUntilReset(t *testing.T) {
+	a := &Runtime{cur: &session{acts: &activities{}}}
+	if got := a.LastActivity(); got != "" {
+		t.Fatalf("before any action: %q", got)
+	}
+	a.beginActivity("reading a.txt")()
+	if a.Activity() != "" || a.LastActivity() != "reading a.txt" {
+		t.Fatalf("activity %q, last %q", a.Activity(), a.LastActivity())
+	}
+	end := a.beginActivity("editing a.txt")
+	end()
+	if got := a.LastActivity(); got != "editing a.txt" {
+		t.Fatalf("newest action must replace the last one: %q", got)
+	}
+	a.ResetActivity()
+	if got := a.LastActivity(); got != "" {
+		t.Fatalf("after reset: %q", got)
+	}
+}

@@ -1,10 +1,10 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"reflect"
 	"slices"
@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/lucasb-eyer/go-colorful"
 
 	"zel/internal/core"
 )
@@ -127,8 +126,8 @@ func workingText(status core.Status, steps int) string {
 	case queued > 1:
 		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
-	if status.Activity != "" && !status.Cancelling {
-		parts = append(parts, status.Activity)
+	if !status.Cancelling {
+		parts = append(parts, cmp.Or(status.Activity, "thinking..."))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -153,22 +152,10 @@ func (m model) turnSteps() int {
 	return steps
 }
 
-// subagentColor fades the fixed-width icon to the terminal background and back.
-func subagentColor(elapsed time.Duration) lipgloss.Color {
-	accent, _ := colorful.Hex(string(inputBlue))
-	background, _ := colorful.Hex(string(inputBackground))
-	phase := float64(max(0, elapsed)%(2400*time.Millisecond)) / float64(2400*time.Millisecond)
-	brightness := (1 + math.Cos(2*math.Pi*phase)) / 2
-	return lipgloss.Color(background.BlendRgb(accent, brightness).Hex())
-}
-
-// subagentBlock renders the indicator rows for running subagents, then one row
-// for each running background task.
-func (m model) subagentBlock() string {
+// taskBlock renders one indicator row for each running background task. A
+// background subagent is a task too, so it shows up here once.
+func (m model) taskBlock() string {
 	var rows []string
-	for _, child := range m.activeSubagents() {
-		rows = append(rows, m.formatSubagentRow(child))
-	}
 	for _, task := range m.tasks {
 		rows = append(rows, m.formatTaskRow(task))
 	}
@@ -176,28 +163,6 @@ func (m model) subagentBlock() string {
 		return ""
 	}
 	return strings.Join(rows, "\n\n") + "\n\n"
-}
-
-// formatSubagentRow renders a single subagent indicator row:
-// [fading agent icon] model/effort · working-time · N steps · activity
-func (m model) formatSubagentRow(child SubagentRun) string {
-	elapsed := time.Since(child.Started)
-	var parts []string
-	if child.Model != "" {
-		label := child.Model
-		if child.Effort != "" {
-			label += "/" + child.Effort
-		}
-		parts = append(parts, label)
-	}
-	parts = append(parts, formatDuration(elapsed), formatSteps(child.Steps))
-	if child.Activity != "" {
-		parts = append(parts, child.Activity)
-	}
-	icon := "◆"
-	pad := max(1, m.width-ansi.StringWidth(icon)-1)
-	text := ansi.Truncate(strings.Join(parts, " · "), pad, "…")
-	return lipgloss.NewStyle().Foreground(subagentColor(elapsed)).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
 }
 
 // taskBlink is the half period of the task marker: shown, then hidden.
@@ -262,7 +227,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.entries, m.contextTokens = slices.Clone(e.Session.Records), e.Session.Context
 		m.turnIndex = len(m.entries)
 		m.cache = nil
-		m.subagents, m.tasks = m.ctl.ActiveSubagents(), m.ctl.ActiveTasks()
+		m.tasks = m.ctl.ActiveTasks()
 		m.pasteGeneration++
 		m.pasting = false
 		m.dismissFileCompletion()
@@ -281,7 +246,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	default:
 	}
-	if cmd == nil && len(m.activeSubagents()) > 0 {
+	if cmd == nil && m.hasRows() {
 		cmd = m.pulse()
 	}
 	return m, cmd

@@ -232,7 +232,7 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 	history := m.history
 
 	// Every chat entry ends with an empty row; the indicators start on it.
-	working, subagents := m.workingBlock(), m.subagentBlock()
+	working, subagents := m.workingBlock(), m.taskBlock()
 	var mid screenRows
 	if working == "" && subagents == "" {
 		head = trimBlankTail(history)

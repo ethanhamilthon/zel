@@ -17,6 +17,7 @@ type activities struct {
 	mu   sync.Mutex
 	seq  uint64
 	list []activity
+	last string // label of the newest operation, kept after it ends until a new turn
 }
 
 func (a *Runtime) beginActivity(label string) (end func()) {
@@ -34,6 +35,7 @@ func (s *session) beginActivity(label string) (end func()) {
 	acts.seq++
 	id := acts.seq
 	acts.list = append(acts.list, activity{id: id, label: label})
+	acts.last = label
 	acts.mu.Unlock()
 	s.publishActivity()
 	var once sync.Once
@@ -61,6 +63,28 @@ func (s *session) Activity() string {
 		return acts.list[n-1].label
 	}
 	return ""
+}
+
+// LastActivity is the label of the newest foreground operation of the turn, also
+// after it ended; "" until the turn does its first one.
+func (a *Runtime) LastActivity() string { return a.session().lastActivity() }
+
+func (s *session) lastActivity() string {
+	if s.acts == nil {
+		return ""
+	}
+	s.acts.mu.Lock()
+	defer s.acts.mu.Unlock()
+	return s.acts.last
+}
+
+// ResetActivity forgets the last operation when a new turn starts.
+func (a *Runtime) ResetActivity() {
+	if acts := a.session().acts; acts != nil {
+		acts.mu.Lock()
+		acts.last = ""
+		acts.mu.Unlock()
+	}
 }
 
 // publishActivity gives a subagent's activity to its row in the agent tree; the
