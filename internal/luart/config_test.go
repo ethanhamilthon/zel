@@ -198,6 +198,47 @@ func TestInstructionsFileAndRequire(t *testing.T) {
 	}
 }
 
+// An instruction can be only for the main agent or only for subagents; the
+// function of one for the other kind does not run at all.
+func TestInstructionsOnlyForMainOrSub(t *testing.T) {
+	body := `return {instructions = {
+  "both",
+  {"main only", only = "main"},
+  {{"sub text", function() return "sub fn" end}, only = "sub"},
+  {function() write("ran", "main fn ran") return "main fn" end, only = "main"},
+}}`
+	for _, depth := range []int{0, 1} {
+		env := newEnv(t)
+		env.depth = depth
+		cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, body)}})
+		got := cfg.Prompt(context.Background())
+		cfg.Close()
+		want := "both\n\nmain only\n\nmain fn"
+		if depth > 0 {
+			want = "both\n\nsub text\n\nsub fn"
+		}
+		if got != want {
+			t.Errorf("depth %d: prompt %q, want %q", depth, got, want)
+		}
+		_, err := os.Stat(filepath.Join(env.cwd, "ran"))
+		if ran := err == nil; ran != (depth == 0) {
+			t.Errorf("depth %d: the main-only function ran = %v", depth, ran)
+		}
+	}
+	env := newEnv(t)
+	for body, want := range map[string]string{
+		`return {instructions = {"x", only = "all"}}`:                  `only must be "main"`,
+		`return {instructions = {"x", only = "main", typo = 1}}`:       `unknown key "typo"`,
+		`return {instructions = {{"x", only = "sub"}, only = "main"}}`: "already set",
+	} {
+		cfg := LoadConfig(env, []Source{{"p", layerFile(t, t.TempDir(), body)}})
+		if len(cfg.LoadErrs) != 1 || !strings.Contains(cfg.LoadErrs[0], want) {
+			t.Errorf("%s: %v", body, cfg.LoadErrs)
+		}
+		cfg.Close()
+	}
+}
+
 func TestPromptTokenRules(t *testing.T) {
 	for _, c := range []struct {
 		in   string

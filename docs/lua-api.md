@@ -101,7 +101,9 @@ return {
 
 - `instructions`: text, a function that returns text, or a list of them. They
   go before the Lua section of the system prompt; functions run when the
-  session starts or reloads.
+  session starts or reloads. Wrap entries in `{..., only = "main"}` for the
+  main agent only or `{..., only = "sub"}` for subagents only:
+  `{"Reply like an SMS.", only = "main"}`, `{read("REVIEW.md"), only = "sub"}`.
 - `tools`: `name = {desc, fn}`. The name is `name` or `ns.name` and cannot
   replace a built-in function. The agent calls it with one table of arguments,
   `server_sh{cmd = "docker ps"}`, and `fn` gets that table. `desc` goes into the

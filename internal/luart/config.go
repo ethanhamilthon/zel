@@ -26,9 +26,11 @@ type hook struct {
 }
 
 // instruction is one piece of the prompt: static text, or a function that returns it.
+// only limits it to the main agent ("main") or to subagents ("sub"); "" is both.
 type instruction struct {
 	text string
 	fn   *lua.LFunction
+	only string
 }
 
 // Layer is the result of one init.lua file.
@@ -363,26 +365,48 @@ func (l *Layer) readPart(t *lua.LTable, where string) error {
 	return nil
 }
 
+const instructionsShape = "text, a function, {text or function, only = \"main\" | \"sub\"} or a list of them"
+
 func (l *Layer) readInstructions(v lua.LValue, where string) error {
+	return l.readInstruction(v, where, "")
+}
+
+// readInstruction reads one entry; only comes from an enclosing {..., only = ...}.
+func (l *Layer) readInstruction(v lua.LValue, where, only string) error {
 	switch x := v.(type) {
 	case lua.LString:
-		l.instructions = append(l.instructions, instruction{text: string(x)})
+		l.instructions = append(l.instructions, instruction{text: string(x), only: only})
 	case *lua.LFunction:
-		l.instructions = append(l.instructions, instruction{fn: x})
+		l.instructions = append(l.instructions, instruction{fn: x, only: only})
 	case *lua.LTable:
-		if x.Len() == 0 {
-			return nil
-		}
-		if !isList(x) {
-			return fmt.Errorf("%s must be text, a function or a list of them", where)
+		if o := x.RawGetString("only"); o != lua.LNil {
+			if only != "" {
+				return fmt.Errorf("%s: only is already set by an enclosing entry", where)
+			}
+			s, ok := o.(lua.LString)
+			if !ok || (s != "main" && s != "sub") {
+				return fmt.Errorf("%s.only must be \"main\" (the main agent) or \"sub\" (subagents)", where)
+			}
+			only = string(s)
+			var bad error
+			x.ForEach(func(k, _ lua.LValue) {
+				if _, num := k.(lua.LNumber); !num && k.String() != "only" && bad == nil {
+					bad = fmt.Errorf("%s: unknown key %q (expected only)", where, k.String())
+				}
+			})
+			if bad != nil {
+				return bad
+			}
+		} else if x.Len() > 0 && !isList(x) {
+			return fmt.Errorf("%s must be %s", where, instructionsShape)
 		}
 		for i := 1; i <= x.Len(); i++ {
-			if err := l.readInstructions(x.RawGetInt(i), fmt.Sprintf("%s[%d]", where, i)); err != nil {
+			if err := l.readInstruction(x.RawGetInt(i), fmt.Sprintf("%s[%d]", where, i), only); err != nil {
 				return err
 			}
 		}
 	default:
-		return fmt.Errorf("%s must be text, a function or a list of them, got %s", where, v.Type())
+		return fmt.Errorf("%s must be %s, got %s", where, instructionsShape, v.Type())
 	}
 	return nil
 }

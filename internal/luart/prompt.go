@@ -57,11 +57,19 @@ func Builtin(depth int) string {
 	return r.Replace(BuiltinPrompt) + "\nYou are a subagent: agent() is not available."
 }
 
-// Prompt renders the instructions of every layer, in layer order.
+// Prompt renders the instructions of every layer, in layer order, leaving out
+// the ones for the other kind of agent (only = "main" or "sub").
 func (c *Config) Prompt(ctx context.Context) string {
 	var parts []string
+	who := "main"
+	if c.env.Info().Depth > 0 {
+		who = "sub"
+	}
 	for _, l := range c.layers { // final once LoadConfig returns
 		for _, in := range l.instructions {
+			if in.only != "" && in.only != who {
+				continue // not for this agent; its function does not run either
+			}
 			text := in.text
 			if in.fn != nil {
 				text = c.renderPrompt(ctx, l, in.fn)

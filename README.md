@@ -103,7 +103,8 @@ return {
 ```
 
 - **instructions** go into the system prompt: text, functions that return
-  text, or a list of them.
+  text, or a list of them; `{..., only = "main"}` or `{..., only = "sub"}`
+  limits entries to the main agent or to subagents.
 - **tools** are functions for the agent. The agent calls `check{pkg = "./x"}`;
   `desc` is shown in the system prompt as is.
 - **hooks**: `session_start()`, `message(text, notice)`, `turn_end(answer,
