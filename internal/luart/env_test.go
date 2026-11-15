@@ -266,21 +266,21 @@ func labelOf(t *testing.T, name string, args ...lua.LValue) string {
 func TestShellLabelsHideArgumentsAndCredentials(t *testing.T) {
 	secrets := []string{"abcdef123456", "hunter2hunter2", "two word password", "sk-live-abcdefghijkl", "ghp_abcdefghijklmnop", "alice:hunter2"}
 	cases := []struct{ script, want string }{
-		{`curl -u alice:hunter2 https://example.com; sleep 5`, "running bash: curl …"},
-		{`curl https://alice:hunter2@example.com/private; sleep 5`, "running bash: curl …"},
-		{`tool --password 'two word password'`, "running bash: tool …"},
-		{"curl -H 'Authorization: Bearer abcdef123456' https://example.com", "running bash: curl …"},
-		{`echo token=hunter2hunter2`, "running bash: echo …"},
-		{`API_KEY="sk-live-abcdefghijkl" make`, "running bash: …"},
-		{`tool --token abcdef123456`, "running bash: tool …"},
-		{`echo ghp_abcdefghijklmnop`, "running bash: echo …"},
-		{`cat --token abcdef123456`, "running bash: cat …"},
-		{`./deploy.sh --token abcdef123456`, "running bash: ./deploy.sh …"},
-		{"line one\nline two", "running bash: line …"},
-		{`cd ~/projects/zel`, "running bash: cd ~/projects/zel"},
-		{`cat ~/.zel/init.lua`, "running bash: cat ~/.zel/init.lua"},
-		{`cd $HOME/x`, "running bash: cd …"},
-		{`ls`, "running bash: ls"},
+		{`curl -u alice:hunter2 https://example.com; sleep 5`, "$ curl …"},
+		{`curl https://alice:hunter2@example.com/private; sleep 5`, "$ curl …"},
+		{`tool --password 'two word password'`, "$ tool …"},
+		{"curl -H 'Authorization: Bearer abcdef123456' https://example.com", "$ curl …"},
+		{`echo token=hunter2hunter2`, "$ echo …"},
+		{`API_KEY="sk-live-abcdefghijkl" make`, "$ …"},
+		{`tool --token abcdef123456`, "$ tool …"},
+		{`echo ghp_abcdefghijklmnop`, "$ echo …"},
+		{`cat --token abcdef123456`, "$ cat …"},
+		{`./deploy.sh --token abcdef123456`, "$ ./deploy.sh …"},
+		{"line one\nline two", "$ line …"},
+		{`cd ~/projects/zel`, "$ cd ~/projects/zel"},
+		{`cat ~/.zel/init.lua`, "$ cat ~/.zel/init.lua"},
+		{`cd $HOME/x`, "$ cd …"},
+		{`ls`, "$ ls"},
 	}
 	for _, c := range cases {
 		got := labelOf(t, "sh", lua.LString(c.script))

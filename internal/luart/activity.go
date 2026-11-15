@@ -144,9 +144,9 @@ func (v *vm) describe(name string, L *lua.LState) string {
 		return "" // bookkeeping: no label
 	case "sh":
 		if label := shellLabel(arg(1)); label != "" {
-			return "running bash: " + label
+			return "$ " + label
 		}
-		return "running bash"
+		return "$"
 	case "write":
 		if opts(L, 3).RawGetString("append") == lua.LTrue {
 			return phrase("appending to", arg(1))
