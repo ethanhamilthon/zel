@@ -63,6 +63,7 @@ agent{prompt, model?, effort?, provider?, cwd?, timeout?} -> {ok, answer, sessio
 view(path, ...)                         -- attach images to the next model request
 log(...)                                -- a line in Tracing; the model does not see it
 models() -> models, failures            -- {provider, model, context_window}[], {provider = error}
+docs(topic?) -> string                  -- how zel works; without a topic, the list of topics
 session.{id, cwd, root, parent, depth, model, effort}
 session.rename(name)
 ```

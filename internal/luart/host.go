@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
+
+	"zel/docs"
 )
 
 // installHost registers the whole host API in the vm's globals.
@@ -34,6 +36,7 @@ func (v *vm) installHost() {
 	}
 	L.SetGlobal("log", v.hostFn("log", v.log))
 	L.SetGlobal("models", v.hostFn("models", v.models))
+	L.SetGlobal("docs", v.hostFn("docs", v.docs))
 	v.installTasks()
 	if v.agentsAllowed() {
 		L.SetGlobal("agent", v.hostFn("agent", v.agentRun))
@@ -83,6 +86,21 @@ func (v *vm) installSession() {
 		return 0
 	}))
 	L.SetGlobal("session", t)
+}
+
+// docs returns the reference of zel: the list of topics, or the text of one.
+func (v *vm) docs(L *lua.LState) int {
+	topic := L.OptString(1, "")
+	if topic == "" {
+		L.Push(lua.LString(docs.Index()))
+		return 1
+	}
+	text, ok := docs.Get(topic)
+	if !ok {
+		raise(L, "docs", EINVAL, "unknown topic %q\n%s", topic, docs.Index())
+	}
+	L.Push(lua.LString(text))
+	return 1
 }
 
 // models returns the models as a list of {provider, model, context_window}

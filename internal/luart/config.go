@@ -66,7 +66,7 @@ var hookEvents = map[string]bool{"session_start": true, "session_end": true, "me
 // builtinNames are the globals of the host API; a tool cannot take their names.
 var builtinNames = map[string]bool{
 	"print": true, "sh": true, "view": true, "slice": true, "read": true, "write": true, "edit": true, "patch": true,
-	"list": true, "glob": true, "grep": true, "exists": true, "tmp": true, "log": true, "models": true,
+	"list": true, "glob": true, "grep": true, "exists": true, "tmp": true, "log": true, "models": true, "docs": true,
 	"tasks": true, "agent": true, "session": true,
 }
 

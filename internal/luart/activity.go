@@ -140,7 +140,7 @@ func (v *vm) describe(name string, L *lua.LState) string {
 		return phrase(verb, arg(1))
 	}
 	switch name {
-	case "print", "slice", "log":
+	case "print", "slice", "log", "docs":
 		return "" // bookkeeping: no label
 	case "sh":
 		if label := shellLabel(arg(1)); label != "" {

@@ -542,3 +542,12 @@ func TestAbandonedHostCallClearsForegroundActivity(t *testing.T) {
 		}
 	}
 }
+
+// docs() lists the topics, returns one of them and rejects an unknown name with the list.
+func TestDocs(t *testing.T) {
+	env := newEnv(t)
+	r := run(t, env, nil, `local idx = docs(); local ok, err = pcall(docs, "nope"); return {idx:find('docs("hooks")', 1, true) ~= nil, docs("hooks"):find("turn_end", 1, true) ~= nil, tostring(err):find("EINVAL", 1, true) ~= nil, tostring(err):find('docs("init")', 1, true) ~= nil}`)
+	if r.IsError || r.Output != `[true,true,true,true]` {
+		t.Fatalf("%q", r.Output)
+	}
+}

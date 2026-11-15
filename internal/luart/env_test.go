@@ -320,7 +320,7 @@ func TestSearchLabelsHideFreeText(t *testing.T) {
 // Every host function has a label, except the instant bookkeeping functions that
 // never block, where a label would only flicker. Session values are not functions.
 func TestEveryHostFunctionHasALabelExceptBookkeeping(t *testing.T) {
-	bookkeeping := map[string]bool{"print": true, "slice": true, "log": true}
+	bookkeeping := map[string]bool{"print": true, "slice": true, "log": true, "docs": true}
 	var names []string
 	for name := range builtinNames {
 		switch name {

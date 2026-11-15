@@ -38,6 +38,7 @@ agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error
 view(path, ...)  -- attach images to the next request; log(msg)  -- write to Tracing only
 session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)
 models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}
+docs(topic?) -> string  -- how zel works (Lua API, init.lua, hooks, tasks); docs() lists the topics, call it when unsure how something works
 A #name in a user message arrives already expanded.`
 
 // BuiltinPrompt is the fixed part of the system prompt, for the main agent.
