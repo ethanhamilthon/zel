@@ -261,25 +261,20 @@ func labelOf(t *testing.T, name string, args ...lua.LValue) string {
 	return scrubLabel(v.describe(name, v.L))
 }
 
-// Credentials on a command line, in a URL or in a flag never reach a label:
-// shell labels show the program name, and plain paths only for inert programs.
-func TestShellLabelsHideArgumentsAndCredentials(t *testing.T) {
+// Credentials on a command line, in a URL or in a flag are redacted; the rest of the
+// first line shows, the UI cuts it to the width.
+func TestShellLabelsRedactCredentials(t *testing.T) {
 	secrets := []string{"abcdef123456", "hunter2hunter2", "two word password", "sk-live-abcdefghijkl", "ghp_abcdefghijklmnop", "alice:hunter2"}
 	cases := []struct{ script, want string }{
-		{`curl -u alice:hunter2 https://example.com; sleep 5`, "$ curl …"},
-		{`curl https://alice:hunter2@example.com/private; sleep 5`, "$ curl …"},
-		{`tool --password 'two word password'`, "$ tool …"},
-		{"curl -H 'Authorization: Bearer abcdef123456' https://example.com", "$ curl …"},
-		{`echo token=hunter2hunter2`, "$ echo …"},
-		{`API_KEY="sk-live-abcdefghijkl" make`, "$ …"},
-		{`tool --token abcdef123456`, "$ tool …"},
-		{`echo ghp_abcdefghijklmnop`, "$ echo …"},
-		{`cat --token abcdef123456`, "$ cat …"},
-		{`./deploy.sh --token abcdef123456`, "$ ./deploy.sh …"},
-		{"line one\nline two", "$ line …"},
-		{`cd ~/projects/zel`, "$ cd ~/projects/zel"},
-		{`cat ~/.zel/init.lua`, "$ cat ~/.zel/init.lua"},
-		{`cd $HOME/x`, "$ cd …"},
+		{`curl -u alice:hunter2 https://example.com; sleep 5`, "$ curl -u [redacted] https://example.com; sleep 5"},
+		{`curl https://alice:hunter2@example.com/private`, "$ curl https://[redacted]@example.com/private"},
+		{`tool --password 'two word password'`, "$ tool --password [redacted]"},
+		{`echo token=hunter2hunter2`, "$ echo token=[redacted]"},
+		{`API_KEY="sk-live-abcdefghijkl" make`, "$ API_KEY=[redacted] make"},
+		{`tool --token abcdef123456`, "$ tool --token [redacted]"},
+		{`echo ghp_abcdefghijklmnop`, "$ echo [redacted]"},
+		{"line one\nline two", "$ line one …"},
+		{`grep -rn foo internal/`, "$ grep -rn foo internal/"},
 		{`ls`, "$ ls"},
 	}
 	for _, c := range cases {

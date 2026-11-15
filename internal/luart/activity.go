@@ -240,57 +240,25 @@ func phrase(parts ...string) string {
 	return strings.Join(keep, " ")
 }
 
-// inertCommands are programs whose plain path arguments show in a label. Every
-// other program shows its name only: its arguments may be credentials, and no
-// pattern tells them apart reliably.
-var inertCommands = map[string]bool{"cd": true, "ls": true, "cat": true, "head": true, "tail": true, "wc": true, "pwd": true}
-
-var (
-	programWord = regexp.MustCompile(`^[A-Za-z0-9._/+-]{1,64}$`)
-	plainWord   = regexp.MustCompile(`^[A-Za-z0-9._/~+-]{1,256}$`)
-)
-
-// shellLabel describes a bash command for the working indicator. It shows the
-// program name, then "…" when more follows. The arguments show only for an inert
-// program on one line whose arguments are all plain words; a command with quotes,
-// assignments, operators or substitutions shows no argument at all.
+// shellLabel describes a bash command for the working indicator: its first line, with
+// "…" when more follows. scrubLabel removes secrets and the UI cuts it to the width.
 func shellLabel(script string) string {
 	first, _, multi := strings.Cut(strings.TrimSpace(script), "\n")
-	words := strings.Fields(first)
-	if len(words) == 0 {
-		return ""
+	first = strings.Join(strings.Fields(first), " ")
+	if first != "" && multi {
+		first += " …"
 	}
-	prog := words[0]
-	if !programWord.MatchString(prog) {
-		return "…"
-	}
-	if len(words) == 1 && !multi {
-		return prog
-	}
-	args := words[1:]
-	if !multi && inertCommands[prog] && plainArgs(args) {
-		return prog + " " + strings.Join(args, " ")
-	}
-	return prog + " …"
-}
-
-// plainArgs reports whether every argument is a plain path-like word. Flags are
-// not plain: a flag is often followed by its value.
-func plainArgs(words []string) bool {
-	for _, w := range words {
-		if strings.HasPrefix(w, "-") || !plainWord.MatchString(w) {
-			return false
-		}
-	}
-	return true
+	return first
 }
 
 // The secret patterns are heuristics; they cannot know every secret.
 var (
 	bearerValue  = regexp.MustCompile(`(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{6,}`)
 	assignedKey  = regexp.MustCompile(`(?i)([\w.-]*(?:token|secret|passw(?:or)?d|passwd|api[_-]?key|apikey|auth|credential|private[_-]?key|access[_-]?key)[\w.-]*\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`)
-	flagValue    = regexp.MustCompile(`(?i)(--?(?:token|secret|passw(?:or)?d|api[_-]?key|auth)\s+)(\S+)`)
+	flagValue    = regexp.MustCompile(`(?i)(--?(?:token|secret|passw(?:or)?d|api[_-]?key|auth)\s+)("[^"]*"|'[^']*'|\S+)`)
 	vendorSecret = regexp.MustCompile(`\b(sk|pk|ghp|gho|ghs|ghu|ghr|github_pat|xox[abprs])[-_][A-Za-z0-9_-]{8,}`)
+	urlCreds     = regexp.MustCompile(`(://)[^/\s:@]+:[^@\s]+@`)
+	userFlag     = regexp.MustCompile(`(\s(?:-u|--user)\s+)\S+`)
 )
 
 // scrubText replaces secret-looking values with [redacted].
@@ -298,6 +266,8 @@ func scrubText(s string) string {
 	s = bearerValue.ReplaceAllString(s, "$1 [redacted]")
 	s = assignedKey.ReplaceAllString(s, "${1}[redacted]")
 	s = flagValue.ReplaceAllString(s, "${1}[redacted]")
+	s = urlCreds.ReplaceAllString(s, "${1}[redacted]@")
+	s = userFlag.ReplaceAllString(s, "${1}[redacted]")
 	return vendorSecret.ReplaceAllString(s, "[redacted]")
 }
 

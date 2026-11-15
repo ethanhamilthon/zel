@@ -866,14 +866,14 @@ func TestAbandonedHostCallClearsCoreActivity(t *testing.T) {
 	go func() {
 		call3 <- a.runLua(context.Background(), "sh('sleep 0.25'); return 'ok'")
 	}()
-	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "$ sleep …"; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "$ sleep 0.25"; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("never observed sleeping activity (got %q)", a.Activity())
 		}
 	}
 	rollback()
 	time.Sleep(50 * time.Millisecond)
-	if got := a.Activity(); got != "$ sleep …" {
+	if got := a.Activity(); got != "$ sleep 0.25" {
 		t.Fatalf("late host return removed later activity: %q", got)
 	}
 	select {
