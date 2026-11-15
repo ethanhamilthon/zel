@@ -478,7 +478,7 @@ func TestMenuInfoPage(t *testing.T) {
 	}
 	m.menu = &menuState{page: menuInfo, info: infoRows(info)}
 	view := ansi.Strip(m.menuView())
-	for _, want := range []string{"Menu/Info", "Session:", "Model:", "Configs:", "Context:", "none (defaults)"} {
+	for _, want := range []string{"ID:", "Dir:", "Model:", "Context:", "Spend:"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("%q missing in:\n%s", want, view)
 		}
@@ -819,7 +819,11 @@ func TestMenuHeadersSearchCaretAndShortcutBytes(t *testing.T) {
 			}
 			view := ansi.Strip(m.menuView())
 			header := strings.TrimSpace(strings.Split(strings.TrimSpace(view), "\n")[0])
-			if !strings.HasPrefix(header, menuTitles[tc.page]) || !strings.HasSuffix(header, tc.shortcut) {
+			title := menuTitles[tc.page]
+			if tc.page == menuInfo {
+				title = "Session" // the Info page is titled with the session name
+			}
+			if !strings.HasPrefix(header, title) || !strings.HasSuffix(header, tc.shortcut) {
 				t.Fatalf("header = %q", header)
 			}
 		})
@@ -1094,7 +1098,7 @@ func TestInfoRefreshAndCurrentModelFirst(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.menu = &menuState{page: menuInfo}
 	m.refreshMenu()
-	if !strings.Contains(m.menuText(), "Session:") || strings.Contains(ansi.Strip(m.menuView()), " <") {
+	if !strings.Contains(m.menuText(), "ID:") || strings.Contains(ansi.Strip(m.menuView()), " <") {
 		t.Fatal("Info layout missing or has a selection arrow")
 	}
 	if err := m.ctl.Rename("updated title"); err != nil {
@@ -2346,23 +2350,22 @@ func TestInfoRowsDisplayHomePaths(t *testing.T) {
 	t.Setenv("HOME", home)
 	project := filepath.Join(home, "projects", "zel")
 	config := filepath.Join(home, ".config", "zel", "config.toml")
-	external := filepath.Join(t.TempDir(), "shared.toml")
-	info := core.Info{Project: project, Configs: []string{config, external}}
+	info := core.Info{Project: project, Configs: []string{config}}
 	rows := infoRows(info)
 	if info.Project != project || info.Configs[0] != config {
 		t.Fatal("display path conversion modified the filesystem paths")
 	}
 	var got []string
 	for _, row := range rows {
-		got = append(got, row.label)
+		got = append(got, row.label+" "+row.detail)
 	}
 	text := strings.Join(got, "\n")
-	for _, want := range []string{"~/projects/zel", "~/.config/zel/config.toml", external} {
+	for _, want := range []string{"~/projects/zel"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Info rows do not contain %q:\n%s", want, text)
 		}
 	}
-	for _, absolute := range []string{project, config} {
+	for _, absolute := range []string{project} {
 		if strings.Contains(text, absolute) {
 			t.Errorf("Info rows leaked home path %q", absolute)
 		}

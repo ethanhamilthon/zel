@@ -111,6 +111,9 @@ func (m model) menuHead() (title, shortcut string) {
 	if m.menu.page == menuMain {
 		title = "zel " + strings.TrimPrefix(Version, "v")
 	}
+	if m.menu.page == menuInfo && len(m.menu.info) > 0 {
+		title = m.menu.info[0].label
+	}
 	if m.menu.page == menuText {
 		title = m.menu.title
 		if m.menu.parent == menuTracing && m.menu.traceIndex >= 0 && m.menu.traceIndex < len(m.menu.trace) {
@@ -144,6 +147,10 @@ func (m model) pageLines(pad string, w int) []string {
 			color := foreground
 			if i < gray {
 				color = muted
+			}
+			if m.menu.page == menuInfo {
+				lines = append(lines, pad+body[i])
+				continue
 			}
 			lines = append(lines, pad+lipgloss.NewStyle().Foreground(color).Render(body[i]))
 		}
@@ -249,7 +256,9 @@ func (m model) textBody(w int) []string {
 		return l.lines
 	}
 	var lines []string
-	if kind != "" {
+	if mu.page == menuInfo {
+		lines = infoBody(mu.info, w)
+	} else if kind != "" {
 		lines = m.traceViewLines(text, kind, w)
 	} else {
 		lines = m.wrapText(clampText(text, maxLayoutBytes), w)
@@ -282,11 +291,12 @@ func (m model) menuText() string {
 	if m.menu.page != menuInfo {
 		return m.menu.text
 	}
-	var lines []string
+	// Only a cache key for textBody: the Info rows are drawn by infoBody.
+	var parts []string
 	for _, row := range m.menu.info {
-		lines = append(lines, row.label)
+		parts = append(parts, row.label+row.detail)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(parts, "\n")
 }
 
 // scrollText scrolls the body of a text page by delta rows.

@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"zel/internal/core"
 )
@@ -41,15 +43,9 @@ func formatBytes(n int) string {
 	return fmt.Sprintf("%d B", n)
 }
 
-// infoRows are the rows of the Info page: session, model, config layers and token totals.
+// infoRows are the rows of the Info page. The first row is the page title (the session
+// name); the rest are key/value pairs: id, dir, model, context and spend.
 func infoRows(info core.Info) []menuRow {
-	configs := make([]string, len(info.Configs))
-	for i, path := range info.Configs {
-		configs[i] = core.DisplayPath(path)
-	}
-	if len(configs) == 0 {
-		configs = []string{"none (defaults)"}
-	}
 	cache := "cache hit unavailable"
 	if info.Usage.Cached >= 0 {
 		percent := float64(0)
@@ -58,13 +54,30 @@ func infoRows(info core.Info) []menuRow {
 		}
 		cache = fmt.Sprintf("%.0f%% cache hit", percent)
 	}
-	text := "Session:\n" + info.Session + "\n" + info.Title + "\n" + core.DisplayPath(info.Project) +
-		"\n\nModel:\n" + info.Provider + "\n" + info.Model + " · " + info.Effort +
-		"\n\nConfigs:\n" + strings.Join(configs, "\n") +
-		"\n\nContext:\n" + fmt.Sprintf("%s in · %s out · %s context · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), formatContext(info.Context), cache)
-	var rows []menuRow
-	for _, line := range strings.Split(text, "\n") {
-		rows = append(rows, menuRow{label: line})
+	title := info.Title
+	if title == "" {
+		title = "Session"
 	}
-	return rows
+	return []menuRow{
+		{label: title},
+		{"ID:", info.Session},
+		{"Dir:", core.DisplayPath(info.Project)},
+		{"Model:", info.Provider + " · " + info.Model + " · " + info.Effort},
+		{"Context:", formatContext(info.Context)},
+		{"Spend:", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
+	}
+}
+
+// infoBody returns the key/value rows of the Info page, keys muted.
+func infoBody(rows []menuRow, w int) []string {
+	if len(rows) > 0 {
+		rows = rows[1:]
+	}
+	key, val := lipgloss.NewStyle().Foreground(muted), lipgloss.NewStyle().Foreground(foreground)
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		k := fmt.Sprintf("%-10s", r.label)
+		lines = append(lines, key.Render(k)+val.Render(ansi.Truncate(r.detail, max(1, w-len(k)), "…")))
+	}
+	return lines
 }
