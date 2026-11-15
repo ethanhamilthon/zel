@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/ins
 ```
 
 Installs the latest release for macOS or Linux (arm64/amd64) into
-`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.1`).
+`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.2`).
 `zel update` later replaces the binary with the latest GitHub release.
 
 ## Build from source
