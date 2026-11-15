@@ -129,7 +129,7 @@ func (e luaEnv) Info() luart.SessionInfo {
 	s := e.s
 	st := s.Settings()
 	cwd := s.dir
-	info := luart.SessionInfo{ID: s.id, Cwd: cwd, Root: s.projectRoot(), Parent: s.parentRoot, Depth: s.depth,
+	info := luart.SessionInfo{ID: s.id, Cwd: cwd, Root: s.projectRoot(), Parent: s.parentRoot, Mode: s.mode(),
 		Model: st.Model, Effort: st.Effort, Home: s.home, TmpDir: filepath.Join(os.TempDir(), "zel-"+s.id)}
 	info.LuaPath = []string{filepath.Join(s.home, "lua")}
 	for d := filepath.Clean(cwd); ; d = filepath.Dir(d) {
@@ -252,26 +252,24 @@ func (e luaEnv) Log(level, msg string) { e.s.LogEvent("lua-"+level, msg) }
 
 func (e luaEnv) Rename(name string) error { return e.s.Rename(name) }
 
-// sessionStart runs the session_start hooks once per started or resumed
-// session; text they return is queued as a notification.
-func (s *session) sessionStart() {
-	if cfg := s.lua.get(); cfg != nil && cfg.HasHook("session_start") {
-		if text := cfg.SessionStart(context.Background()); text != "" {
-			s.queue.PushNotice(notification(text))
-		}
+// sessionCreated runs the session_created hooks once per new session; resuming
+// a session or reloading init.lua does not run them, and what they return is ignored.
+func (s *session) sessionCreated() {
+	if cfg := s.lua.get(); cfg != nil && cfg.HasHook("session_created") {
+		cfg.SessionCreated(context.Background())
 	}
 }
 
-// sessionEnd leaves the session: its jobs are cancelled and then the session_end
+// sessionClosed leaves the session: its jobs are cancelled and then the session_closed
 // hooks run with what is left of the shutdown budget (see tasks.close).
-func (s *session) sessionEnd(reason string) {
+func (s *session) sessionClosed(reason string) {
 	t := s.tasks
 	if t == nil {
 		return
 	}
 	t.close(func(ctx context.Context) {
-		if cfg := s.lua.get(); cfg != nil && cfg.HasHook("session_end") {
-			cfg.SessionEnd(ctx, reason)
+		if cfg := s.lua.get(); cfg != nil && cfg.HasHook("session_closed") {
+			cfg.SessionClosed(ctx, reason)
 		}
 	})
 }

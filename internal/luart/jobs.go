@@ -204,7 +204,7 @@ func (v *vm) task(fn *lua.LFunction) TaskFunc {
 	}
 }
 
-// waitFinished pushes the result of a job started by agent{}: it waits for the end,
+// waitFinished pushes the result of a job started by new_agent{} or send_agent(): it waits for the end,
 // or stops the job and raises when the call is cancelled or out of time. Nobody
 // else waits for that job, so it must not run on unseen.
 func (v *vm) waitFinished(L *lua.LState, fn string, jobs Jobs, id string) int {
@@ -244,12 +244,33 @@ func (v *vm) agentOpts(L *lua.LState, fn string, waited bool) AgentOpts {
 	return a
 }
 
-// agentRun runs a subagent and waits for its answer: agent{prompt, ...}.
-func (v *vm) agentRun(L *lua.LState) int {
+// newAgent runs a new subagent and waits for its answer: new_agent{prompt, ...}.
+func (v *vm) newAgent(L *lua.LState) int {
 	agents := v.env.Agents()
-	id, err := agents.Spawn(v.agentOpts(L, "agent", true))
+	id, err := agents.Spawn(v.agentOpts(L, "new_agent", true))
 	if err != nil {
-		raise(L, "agent", EFAIL, "%v", err)
+		raise(L, "new_agent", EFAIL, "%v", err)
 	}
-	return v.waitFinished(L, "agent", agents, id)
+	return v.waitFinished(L, "new_agent", agents, id)
+}
+
+// sendAgent sends one more message to a subagent and waits for its answer:
+// send_agent(id, text, o?). The subagent is identified by the session it reported.
+func (v *vm) sendAgent(L *lua.LState) int {
+	a := AgentOpts{Resume: L.CheckString(1), Prompt: L.CheckString(2), Waited: true}
+	if strings.TrimSpace(a.Resume) == "" || strings.TrimSpace(a.Prompt) == "" {
+		raise(L, "send_agent", EINVAL, "usage: send_agent(id, text)")
+	}
+	if n, ok := optNumber(opts(L, 3), "timeout"); ok && n > 0 {
+		a.Timeout = time.Duration(n * float64(time.Second))
+	}
+	agents := v.env.Agents()
+	id, err := agents.Spawn(a)
+	if err != nil {
+		if errors.Is(err, ErrNoJob) {
+			raise(L, "send_agent", ENOENT, "%v", err)
+		}
+		raise(L, "send_agent", EFAIL, "%v", err)
+	}
+	return v.waitFinished(L, "send_agent", agents, id)
 }

@@ -166,8 +166,12 @@ func (v *vm) describe(name string, L *lua.LState) string {
 		return "listing models"
 	case "session.rename":
 		return "renaming session"
-	case "agent":
+	case "new_agent":
 		return phrase("running agent in", v.agentModel(L))
+	case "send_agent":
+		return "messaging an agent"
+	case "choice":
+		return "waiting for your choice"
 	}
 	if ns, op, _ := strings.Cut(name, "."); ns == "tasks" {
 		return v.jobLabel(op, L)

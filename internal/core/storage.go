@@ -17,12 +17,17 @@ import (
 	"zel/internal/store"
 )
 
-func (s *session) openProject(dir string) error {
+// openProject binds the session to the project of dir and creates a new session
+// there, or opens the stored session resume.
+func (s *session) openProject(dir, resume string) error {
 	absolute, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
 	s.dir, s.project = absolute, absolute
+	if resume != "" {
+		return s.openSession(resume)
+	}
 	return s.createSession()
 }
 

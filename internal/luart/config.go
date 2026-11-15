@@ -61,13 +61,13 @@ type Config struct {
 	closed      bool // set by Close: a closed snapshot runs no hooks or functions
 }
 
-var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true}
+var hookEvents = map[string]bool{"session_created": true, "session_closed": true, "message": true, "turn_end": true}
 
 // builtinNames are the globals of the host API; a tool cannot take their names.
 var builtinNames = map[string]bool{
 	"print": true, "sh": true, "view": true, "slice": true, "read": true, "write": true, "edit": true, "patch": true,
 	"list": true, "glob": true, "grep": true, "exists": true, "tmp": true, "log": true, "models": true, "docs": true,
-	"tasks": true, "agent": true, "session": true,
+	"tasks": true, "new_agent": true, "send_agent": true, "choice": true, "session": true,
 }
 
 var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
@@ -477,7 +477,7 @@ func (l *Layer) readHooks(v lua.LValue, where string) error {
 	}
 	for _, event := range events {
 		if !hookEvents[event] {
-			return fmt.Errorf("%s: unknown hook %q (expected session_start, message, turn_end, session_end)", where, event)
+			return fmt.Errorf("%s: unknown hook %q (expected session_created, message, turn_end, session_closed)", where, event)
 		}
 		fn, ok := t.RawGetString(event).(*lua.LFunction)
 		if !ok {
@@ -658,21 +658,22 @@ func (c *Config) collect(ctx context.Context, event string, args ...any) string 
 	return strings.Join(texts, "\n")
 }
 
-// SessionStart runs the session_start hooks; returned text becomes a notification.
-func (c *Config) SessionStart(ctx context.Context) string {
-	return c.collect(ctx, "session_start")
+// SessionCreated runs the session_created hooks once, when a new session is
+// created. What they return is ignored.
+func (c *Config) SessionCreated(ctx context.Context) {
+	c.emit(ctx, "session_created", func() []any { return nil }, nil)
 }
 
-// SessionEndTimeout is the budget for stopping jobs and running the session_end
+// SessionClosedTimeout is the budget for stopping jobs and running the session_closed
 // hooks when a session is left. It does not bound DB or config preparation/saving
 // before shutdown, so NewSession, Resume, or save-on-quit can take longer.
-const SessionEndTimeout = 5 * time.Second
+const SessionClosedTimeout = 5 * time.Second
 
-// SessionEnd runs the session_end hooks when the session is left (reason:
+// SessionClosed runs the session_closed hooks when the session is left (reason:
 // "quit", "new" or "resume"). ctx is the shutdown budget: a hook that cannot
 // start or finish within it is skipped.
-func (c *Config) SessionEnd(ctx context.Context, reason string) {
-	c.emit(ctx, "session_end", func() []any { return []any{reason} }, nil)
+func (c *Config) SessionClosed(ctx context.Context, reason string) {
+	c.emit(ctx, "session_closed", func() []any { return []any{reason} }, nil)
 }
 
 // Message lets message hooks rewrite the user's text: each one gets the text the

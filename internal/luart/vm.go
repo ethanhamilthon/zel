@@ -70,9 +70,9 @@ func (v *vm) close() {
 	v.L.Close()
 }
 
-// agentsAllowed reports whether agent{} works here: subagents cannot start
+// agentsAllowed reports whether new_agent{} works here: subagents cannot start
 // subagents of their own.
-func (v *vm) agentsAllowed() bool { return v.env.Info().Depth == 0 }
+func (v *vm) agentsAllowed() bool { return v.env.Info().Mode != "agent" }
 
 // ctxErr raises the Lua error that matches why ctx ended.
 func (v *vm) ctxErr(fn string) {
@@ -173,7 +173,7 @@ var abandonGrace = 500 * time.Millisecond
 // stop using v when the call timed out or was cancelled before its Lua returned;
 // it is empty when v may be used again.
 func (r *Runner) run(parent context.Context, v *vm, code string) (res Result, drop string) {
-	ctx, cancel := context.WithTimeout(parent, callTimeout)
+	ctx, cancel := withCallBudget(parent, callTimeout)
 	defer cancel()
 	tracker := &activityTracker{}
 	defer tracker.closeAll()

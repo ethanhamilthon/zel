@@ -78,6 +78,8 @@ type model struct {
 	promptSeq                 int
 	promptPending             int // seq of the expansion in flight; 0 when none
 	promptCancel              context.CancelFunc
+	choice                    *core.Choice // the agent's question; replaces the composer while set
+	choiceSel                 int
 	tasks                     []core.ActiveTask // running background tasks, one chat row each
 	frameAt                   time.Time
 	dirty                     bool
@@ -326,6 +328,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pulse()
 		}
 		return m, nil
+	case choiceChanged:
+		m.syncChoice()
+		return m, nil
 	case promptExpanded:
 		return m.finishPrompt(v)
 	case tea.WindowSizeMsg:
@@ -355,6 +360,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openMenuPage(menuPage(v))
 	case tea.KeyMsg:
+		if m.choice != nil && m.menu == nil {
+			if next, cmd, handled := m.choiceKey(v); handled {
+				return next, cmd
+			}
+		}
 		if m.promptPending != 0 {
 			switch v.String() {
 			case "ctrl+d":

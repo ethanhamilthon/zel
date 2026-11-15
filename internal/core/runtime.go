@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,7 +47,8 @@ func partialCode(arguments string) string {
 }
 
 type Options struct {
-	Mode                    string               // tui or headless, exported as ZEL_MODE
+	Mode                    string               // tui or headless; see session.mode for what Lua sees
+	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
 	SessionReady            func(*Runtime) error // May persist and announce the session.
 	link                    *agentLink           // set for in-process agents
@@ -65,6 +65,7 @@ type Runtime struct {
 	project    string
 	Shell      *shell.Runner
 	tree       *agentTree
+	ask        *chooser
 	parentRoot string
 	depth      int
 	link       *agentLink
@@ -99,11 +100,14 @@ type session struct {
 	requestedLen  int        // History length when lastRequest was sent
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
-	tree          *agentTree  // running agents of this session tree
-	parentRoot    string      // root session of the tree when this session is an agent
-	depth         int         // agent nesting depth
-	link          *agentLink  // set when this session is an agent: its row in the tree
-	acts          *activities // foreground host operations in progress
+	tree          *agentTree // running agents of this session tree
+	ask           *chooser   // the question of choice() the UI shows
+	agentsMu      sync.Mutex
+	agents        map[string]*agentRec // subagents started from this session, by their session ID
+	parentRoot    string               // root session of the tree when this session is an agent
+	depth         int                  // agent nesting depth
+	link          *agentLink           // set when this session is an agent: its row in the tree
+	acts          *activities          // foreground host operations in progress
 	queue         *Steering
 	slots         *imageSlots
 	tasks         *tasks
@@ -134,12 +138,16 @@ func New(dir string, opts Options) (*Runtime, error) {
 		opts:  opts,
 		home:  home,
 		tree:  newAgentTree(),
+		ask:   &chooser{},
 		Shell: &shell.Runner{Dir: dir},
 	}
 	if opts.link != nil {
 		a.tree, a.parentRoot, a.depth, a.link = opts.link.tree, opts.link.root, opts.link.depth, opts.link
 	} else {
-		a.depth, _ = strconv.Atoi(os.Getenv("ZEL_DEPTH"))
+		// A nested `zel -p` started by a subagent is a subagent too, so the limit holds.
+		if os.Getenv("ZEL_MODE") == "agent" {
+			a.depth = 1
+		}
 	}
 	a.Shell.Env = a.shellEnv
 	s := a.newSessionState(dir, nil, nil)
@@ -151,7 +159,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 		return nil, err
 	}
 	s.db = a.db
-	if err := s.openProject(dir); err != nil {
+	if err := s.openProject(dir, opts.Resume); err != nil {
 		a.Close()
 		return nil, err
 	}
@@ -174,7 +182,9 @@ func New(dir string, opts Options) (*Runtime, error) {
 			return nil, err
 		}
 	}
-	s.sessionStart()
+	if opts.Resume == "" {
+		s.sessionCreated()
+	}
 	return a, nil
 }
 
@@ -186,6 +196,7 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		db:         a.db,
 		project:    a.project,
 		tree:       a.tree,
+		ask:        a.ask,
 		parentRoot: a.parentRoot,
 		depth:      a.depth,
 		link:       a.link,

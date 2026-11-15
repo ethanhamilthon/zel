@@ -15,7 +15,7 @@ const builtinHead = `# Lua
 One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn and check it in later calls.
 The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". Keep what must outlive it in files.
 Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = read("bigfile.md"); print(slice(a, 100, 10)).
-Errors raise "fn: CODE: msg" (pcall); sh and agent return ok=false instead. Everything blocks except tasks.spawn.
+Errors raise "fn: CODE: msg" (pcall); sh, new_agent and send_agent return ok=false instead. Everything blocks except tasks.spawn.
 You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (tasks.get(id)).`
 
 // builtinAPI lists the host functions.
@@ -33,10 +33,12 @@ tasks.spawn(name, fn, o?) -> id  -- fn runs in its own VM in the background, no 
 tasks.list() -> {id,name,state}[]; tasks.get(id) -> {id,name,state,result?}; tasks.tail(id, n?) -> string; tasks.stop(id)
 tasks.wait(id, timeout?) -> result | nil,"timeout"; tasks.wait({id, ...}, timeout?) -> results[] (nil where not finished)
 --   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
-agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error}  -- a subagent; blocks until it answers
---   in the background: tasks.spawn("review", function() return agent{prompt = "..."} end)
+new_agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error}  -- a subagent; blocks until it answers
+send_agent(id, text, o?) -> {ok,answer,session,error}  -- another message to the subagent whose session is id; it keeps its context; o: timeout
+--   in the background: tasks.spawn("review", function() return new_agent{prompt = "..."} end)
+choice(name, options) -> option | nil  -- the user picks one of the option strings in the UI instead of typing; nil when he cancels
 view(path, ...)  -- attach images to the next request; log(msg)  -- write to Tracing only
-session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)
+session.{id,cwd,root,parent,mode,model,effort}; session.rename(name)  -- mode: "main" (the user), "agent" (a subagent) or "headless" (zel -p)
 models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}
 docs(topic?) -> string  -- how zel works (Lua API, init.lua, hooks, tasks); docs() lists the topics, call it when unsure how something works
 A #name in a user message arrives already expanded.`
@@ -44,18 +46,29 @@ A #name in a user message arrives already expanded.`
 // BuiltinPrompt is the fixed part of the system prompt, for the main agent.
 const BuiltinPrompt = builtinHead + "\n" + builtinAPI
 
-// Builtin is BuiltinPrompt for the given agent depth: subagents (depth > 0)
-// cannot start agents, so their prompt leaves agent{} out.
-func Builtin(depth int) string {
-	if depth == 0 {
+// Builtin is BuiltinPrompt for a session mode (see SessionInfo.Mode). Subagents
+// cannot start agents or ask the user, so their prompt leaves new_agent{},
+// send_agent() and choice() out; headless has no user to ask, so it leaves choice() out.
+func Builtin(mode string) string {
+	if mode != "agent" && mode != "headless" {
 		return BuiltinPrompt
 	}
-	r := strings.NewReplacer(
-		"agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error}  -- a subagent; blocks until it answers\n", "",
-		"--   in the background: tasks.spawn(\"review\", function() return agent{prompt = \"...\"} end)\n", "",
-		"sh and agent return", "sh returns",
-	)
-	return r.Replace(BuiltinPrompt) + "\nYou are a subagent: agent() is not available."
+	var cut []string
+	for _, line := range strings.Split(BuiltinPrompt, "\n") {
+		switch {
+		case strings.HasPrefix(line, "choice("):
+			continue
+		case mode == "agent" && (strings.HasPrefix(line, "new_agent{") || strings.HasPrefix(line, "send_agent(") || strings.HasPrefix(line, "--   in the background: tasks.spawn(\"review\"")):
+			continue
+		}
+		cut = append(cut, line)
+	}
+	text := strings.Join(cut, "\n")
+	if mode == "agent" {
+		return strings.NewReplacer("sh, new_agent and send_agent return", "sh returns").Replace(text) +
+			"\nYou are a subagent: new_agent, send_agent and choice are not available."
+	}
+	return text + "\nThis session is headless: choice is not available."
 }
 
 // Prompt renders the instructions of every layer, in layer order, leaving out
@@ -63,7 +76,7 @@ func Builtin(depth int) string {
 func (c *Config) Prompt(ctx context.Context) string {
 	var parts []string
 	who := "main"
-	if c.env.Info().Depth > 0 {
+	if c.env.Info().Mode == "agent" {
 		who = "sub"
 	}
 	for _, l := range c.layers { // final once LoadConfig returns
@@ -127,7 +140,7 @@ func (c *Config) ToolDocs() string {
 
 // SystemPrompt is the whole prompt: layer instructions, then the Lua API and the tools.
 func (c *Config) SystemPrompt(ctx context.Context) string {
-	text := Builtin(c.env.Info().Depth) + c.ToolDocs()
+	text := Builtin(c.env.Info().Mode) + c.ToolDocs()
 	if own := c.Prompt(ctx); own != "" {
 		return own + "\n\n" + text
 	}

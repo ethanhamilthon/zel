@@ -17,8 +17,8 @@ and prompt completions.
   never truncated; only a 1 MiB safety cap protects memory. Filter in Lua:
   `print(slice(read("big.md"), 100, 10))`.
 - Errors raise `"fn: CODE: msg"` and can be caught with `pcall`. Codes: `EINVAL
-  ENOENT ENOMATCH EAMBIG ELIMIT EFAIL EDENIED ETIMEOUT ECANCELED`. `sh` and
-  `agent` return `ok = false` for an ordinary failure instead.
+  ENOENT ENOMATCH EAMBIG ELIMIT EFAIL EDENIED ETIMEOUT ECANCELED`. `sh`,
+  `new_agent` and `send_agent` return `ok = false` for an ordinary failure instead.
 - Everything blocks except `tasks.spawn`. The agent wakes up only for user
   messages and short notifications such as `<notification>t1 finished</notification>`.
 - The whole Lua standard library is open (`io`, `os` too). `require` looks in
@@ -55,20 +55,32 @@ tasks.tail(id, n?) -> string            -- last lines it printed
 tasks.stop(id)
   -- result: {ok, value, error, out, ms, timed_out}; value is what fn returned
 
-agent{prompt, model?, effort?, provider?, cwd?, timeout?} -> {ok, answer, session, error}
+new_agent{prompt, model?, effort?, provider?, cwd?, timeout?} -> {ok, answer, session, error}
   -- a subagent; blocks until it answers. In a call it must answer within the 30 s,
-  -- so longer work runs in a task: tasks.spawn("review", function() return agent{prompt = "..."} end)
+  -- so longer work runs in a task: tasks.spawn("review", function() return new_agent{prompt = "..."} end)
   -- subagents cannot start subagents (EDENIED)
+send_agent(id, text, o?) -> {ok, answer, session, error}
+  -- another message to the subagent whose `session` is id: it keeps its context.
+  -- o: timeout (s). ENOENT for an id this session did not get from new_agent;
+  -- messages to one subagent run one after another. EDENIED in subagents too
+
+choice(name, options) -> option | nil
+  -- the user picks one of the option strings in the UI, which shows them instead of
+  -- the input; nil when he cancels (Esc). choice("Which color", {"Blue", "Red"})
+  -- Waiting does not use up the call's 30 s. Only in the main session: EDENIED in
+  -- subagents, in headless runs (no user) and in tasks
 
 view(path, ...)                         -- attach images to the next model request
 log(...)                                -- a line in Tracing; the model does not see it
 models() -> models, failures            -- {provider, model, context_window}[], {provider = error}
 docs(topic?) -> string                  -- how zel works; without a topic, the list of topics
-session.{id, cwd, root, parent, depth, model, effort}
+session.{id, cwd, root, parent, mode, model, effort}
+  -- mode: "main" (the user's session), "agent" (a subagent) or "headless" (zel -p)
 session.rename(name)
 ```
 
-`sh()` gets `ZEL_SESSION_ID` and `ZEL_DEPTH` in its environment.
+`sh()` gets `ZEL_SESSION_ID` and `ZEL_MODE` (the same as `session.mode`) in its
+environment.
 
 ## init.lua
 
@@ -103,7 +115,8 @@ return {
 - `instructions`: text, a function that returns text, or a list of them. They
   go before the Lua section of the system prompt; functions run when the
   session starts or reloads. Wrap entries in `{..., only = "main"}` for the
-  main agent only or `{..., only = "sub"}` for subagents only:
+  main agent only (also headless) or `{..., only = "sub"}` for subagents only;
+  `session.mode` tells the same inside any function of init.lua:
   `{"Reply like an SMS.", only = "main"}`, `{read("REVIEW.md"), only = "sub"}`.
 - `tools`: `name = {desc, fn}`. The name is `name` or `ns.name` and cannot
   replace a built-in function. The agent calls it with one table of arguments,
@@ -127,14 +140,14 @@ same functions as the agent.
 
 | hook | gets | returns |
 |---|---|---|
-| `session_start()` | | text: a notification for the agent |
+| `session_created()` | | nothing: runs once, when a new session is created (not on resume or reload) |
 | `message(text, notice)` | a user message, or a notification when `notice` is true | new text for a user message; ignored for a notification |
 | `turn_end(answer, running)` | the final answer and the tasks still running: `{id, name, ms}[]` | text: a notification, and the turn goes on (at most 3 times in a row) |
-| `session_end(reason)` | `"quit"`, `"new"` or `"resume"` | |
+| `session_closed(reason)` | `"quit"`, `"new"` or `"resume"` | |
 
 Several `message` hooks chain: each gets the text the previous one returned. A
 hook that fails is logged in Tracing and skipped. Each hook has 60 s. When a
-session is left, running tasks are stopped first and `session_end` runs with
+session is left, running tasks are stopped first and `session_closed` runs with
 what is left of a 5 s budget.
 
 ## Prompt completions

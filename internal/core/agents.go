@@ -135,7 +135,16 @@ func (a *Runtime) OnSubagentsChanged(fn func()) {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// spawnAgent starts a child agent inside this process. The child is a full
+// agentRec is a subagent this session started and can send more messages to.
+// idle is closed once no child runtime holds the subagent's session: the child
+// that ran its last message has closed. Messages to one subagent run one by one.
+type agentRec struct {
+	dir  string
+	idle chan struct{}
+}
+
+// spawnAgent starts a child agent inside this process, or, with o.Resume, sends
+// a new message to the subagent whose session that is. The child is a full
 // runtime with its own session; this session owns its context, progress,
 // cancellation and result.
 func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
@@ -146,6 +155,19 @@ func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
 		return nil, fmt.Errorf("agents are nested too deeply (max depth %d)", MaxAgentDepth)
 	}
 	cwd := cmp.Or(o.Cwd, s.dir)
+	next := make(chan struct{})
+	var prev chan struct{}
+	if o.Resume != "" {
+		s.agentsMu.Lock()
+		rec := s.agents[o.Resume]
+		if rec != nil {
+			cwd, prev, rec.idle = rec.dir, rec.idle, next
+		}
+		s.agentsMu.Unlock()
+		if rec == nil {
+			return nil, fmt.Errorf("%w: no subagent with session %s in this session", luart.ErrNoJob, o.Resume)
+		}
+	}
 	model := cmp.Or(o.Model, s.Settings().Model)
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
@@ -153,11 +175,11 @@ func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
 	j, err := s.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
 			// The child's session closes after the result is published, so its own
-			// session_end cannot delay the answer the caller waits for.
+			// session_closed cannot delay the answer the caller waits for.
 			j.afterEnd = j.runDeferredClose
 			done := make(chan error, 1)
 			go func() {
-				err := s.runChild(ctx, j, log, cwd, o, budget)
+				err := s.runChild(ctx, j, log, cwd, o, budget, prev, next)
 				failed = err != nil
 				done <- err
 			}()
@@ -177,7 +199,23 @@ func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
 }
 
 // runChild runs one agent to completion and records its outcome on the job.
-func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts, budget context.Context) error {
+func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd string, o luart.AgentOpts, budget context.Context, prev, next chan struct{}) error {
+	// next is closed when this run no longer holds the subagent's session.
+	release := sync.OnceFunc(func() { close(next) })
+	holds := false // the child's close, set below, releases it later
+	defer func() {
+		if !holds {
+			release()
+		}
+	}()
+	if prev != nil {
+		select {
+		case <-prev:
+		case <-ctx.Done():
+			j.setOutcome(agentOutcome{Session: o.Resume})
+			return ctx.Err()
+		}
+	}
 	key := s.id + "/" + j.id
 	root := s.rootID()
 	tree := s.tree
@@ -186,7 +224,7 @@ func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 	defer tree.remove(key)
 
 	var outcome agentOutcome
-	opts := Options{Mode: "headless", Provider: o.Provider, Model: o.Model, Effort: o.Effort,
+	opts := Options{Mode: "headless", Provider: o.Provider, Model: o.Model, Effort: o.Effort, Resume: o.Resume,
 		link: &agentLink{tree: tree, root: root, depth: s.depth + 1, id: key, budget: budget}}
 	opts.SessionReady = func(c *Runtime) error {
 		if hint := c.Settings().SetupHint(); hint != "" {
@@ -196,6 +234,14 @@ func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 			return err
 		}
 		outcome.Session = c.SessionID()
+		if o.Resume == "" {
+			s.agentsMu.Lock()
+			if s.agents == nil {
+				s.agents = map[string]*agentRec{}
+			}
+			s.agents[outcome.Session] = &agentRec{dir: cwd, idle: next}
+			s.agentsMu.Unlock()
+		}
 		return nil
 	}
 	child, err := New(cwd, opts)
@@ -204,7 +250,11 @@ func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 		return err
 	}
 	// The child's session closes after its result is published (see spawnAgent).
-	j.deferClose(child.Close)
+	j.deferClose(func() {
+		child.Close()
+		release()
+	})
+	holds = true
 	if ctx.Err() != nil {
 		j.setOutcome(agentOutcome{Session: outcome.Session})
 		return ctx.Err()

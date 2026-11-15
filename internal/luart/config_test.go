@@ -75,7 +75,7 @@ func TestLayerMergeAndErrors(t *testing.T) {
 	g := layerFile(t, filepath.Join(env.cwd, "g"), `return {
   instructions = "global",
   tools = {f = {desc = "global f", fn = function() return "g" end}},
-  hooks = {session_end = function() end},
+  hooks = {session_closed = function() end},
 }`)
 	p := layerFile(t, filepath.Join(env.cwd, "p"), `return {
   instructions = "project",
@@ -138,8 +138,8 @@ func TestHooks(t *testing.T) {
 local seen = {}
 return {
   {hooks = {
-    session_start = function() return "welcome" end,
-    session_end = function(reason) write("ended", reason) end,
+    session_created = function() write("created", "welcome") return "ignored" end,
+    session_closed = function(reason) write("ended", reason) end,
     message = function(text, notice) if notice then write("notice", text) return "ignored" end return text:upper() end,
     turn_end = function(answer, running)
       if #running > 0 then return running[1].name .. " " .. running[1].id .. " " .. running[1].ms end
@@ -151,8 +151,9 @@ return {
 }`)}})
 	defer cfg.Close()
 	ctx := context.Background()
-	if got := cfg.SessionStart(ctx); got != "welcome" {
-		t.Fatalf("session_start: %q", got)
+	cfg.SessionCreated(ctx)
+	if data, _ := os.ReadFile(filepath.Join(env.cwd, "created")); string(data) != "welcome" {
+		t.Fatalf("session_created: %q", data)
 	}
 	if got := cfg.Message(ctx, "hi"); got != "HI!" {
 		t.Fatalf("message hooks chain: %q", got)
@@ -173,9 +174,9 @@ return {
 	if got := cfg.TurnEnd(ctx, "done", []RunningTask{{ID: "t2", Name: "build", Ms: 1500}}); got != "build t2 1500" {
 		t.Fatalf("turn_end with a running task: %q", got)
 	}
-	cfg.SessionEnd(ctx, "quit")
+	cfg.SessionClosed(ctx, "quit")
 	if data, _ := os.ReadFile(filepath.Join(env.cwd, "ended")); string(data) != "quit" {
-		t.Fatalf("session_end: %q", data)
+		t.Fatalf("session_closed: %q", data)
 	}
 }
 
@@ -207,22 +208,22 @@ func TestInstructionsOnlyForMainOrSub(t *testing.T) {
   {{"sub text", function() return "sub fn" end}, only = "sub"},
   {function() write("ran", "main fn ran") return "main fn" end, only = "main"},
 }}`
-	for _, depth := range []int{0, 1} {
+	for _, mode := range []string{"main", "agent", "headless"} {
 		env := newEnv(t)
-		env.depth = depth
+		env.mode = mode
 		cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, body)}})
 		got := cfg.Prompt(context.Background())
 		cfg.Close()
 		want := "both\n\nmain only\n\nmain fn"
-		if depth > 0 {
+		if mode == "agent" {
 			want = "both\n\nsub text\n\nsub fn"
 		}
 		if got != want {
-			t.Errorf("depth %d: prompt %q, want %q", depth, got, want)
+			t.Errorf("mode %s: prompt %q, want %q", mode, got, want)
 		}
 		_, err := os.Stat(filepath.Join(env.cwd, "ran"))
-		if ran := err == nil; ran != (depth == 0) {
-			t.Errorf("depth %d: the main-only function ran = %v", depth, ran)
+		if ran := err == nil; ran != (mode != "agent") {
+			t.Errorf("mode %s: the main-only function ran = %v", mode, ran)
 		}
 	}
 	env := newEnv(t)
@@ -326,20 +327,20 @@ func TestPromptCompletionErrorsKeepTheText(t *testing.T) {
 func TestConfigLockWaitIsBoundedAndCloseEndsRunningHooks(t *testing.T) {
 	env := newEnv(t)
 	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `return {hooks = {
-  session_start = function() write("holding", "1"); while true do end end,
+  session_created = function() write("holding", "1"); while true do end end,
   turn_end = function() return "never" end,
 }}`)}})
 	holding := make(chan struct{})
 	go func() {
 		defer close(holding)
-		cfg.SessionStart(context.Background())
+		cfg.SessionCreated(context.Background())
 	}()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		if _, err := os.Stat(filepath.Join(env.cwd, "holding")); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the session_start hook never took the lock")
+			t.Fatal("the session_created hook never took the lock")
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

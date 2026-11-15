@@ -248,7 +248,7 @@ func TestMainVMPersistsAcrossCalls(t *testing.T) {
 		}
 		return textReply("done")
 	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `return {hooks = {session_end = function(reason) write("ended", reason) end}}`))
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `return {hooks = {session_closed = function(reason) write("ended", reason) end}}`))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestMainVMPersistsAcrossCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	if v := readSessionFile(t, a, "ended"); v != "new" {
-		t.Fatalf("session_end: %q", v)
+		t.Fatalf("session_closed: %q", v)
 	}
 }
 
@@ -286,9 +286,9 @@ func agentProvider(parentCode string, onChild func(prompt string)) *fakeProvider
 func TestAgentInlineAndInATask(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // agents run in-process: no zel executable needed
 	fp := agentProvider(`
-local r = agent{prompt = "child-ping"}
+local r = new_agent{prompt = "child-ping"}
 print(r.ok, r.answer, r.session ~= "")
-local id = tasks.spawn("pong", function() return agent{prompt = "child-pong"} end)
+local id = tasks.spawn("pong", function() return new_agent{prompt = "child-pong"} end)
 local res = tasks.wait(id, 8)
 print(res.ok, res.value.answer, tasks.get(id).state, #tasks.list())`, nil)
 	a := newTestAgent(t, fp, Options{})
@@ -312,7 +312,7 @@ print(res.ok, res.value.answer, tasks.get(id).state, #tasks.list())`, nil)
 }
 
 func TestUnwaitedAgentResultArrivesAsMessage(t *testing.T) {
-	fp := agentProvider(`tasks.spawn("later", function() return agent{prompt = "child-later"} end)`, nil)
+	fp := agentProvider(`tasks.spawn("later", function() return new_agent{prompt = "child-later"} end)`, nil)
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
 			<-gate
 			return textReply("late")
 		case strings.Contains(body, "child-outer") && !strings.Contains(body, `"n1"`):
-			return luaReply("n1", `print(select(2, pcall(agent, {prompt = "child-inner"})))`)
+			return luaReply("n1", `print(select(2, pcall(new_agent, {prompt = "child-inner"})))`)
 		case strings.Contains(body, "child-outer") && strings.Contains(body, "EDENIED"):
 			return textReply("outer was denied")
 		case strings.Contains(body, "child-outer"):
@@ -342,8 +342,8 @@ func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
 			return textReply("inner answer")
 		}
 		return luaReply("c1", `
-local nested = tasks.spawn("outer", function() return agent{prompt = "child-outer"} end)
-local stuck = tasks.spawn("stuck", function() return agent{prompt = "child-stuck"} end)
+local nested = tasks.spawn("outer", function() return new_agent{prompt = "child-outer"} end)
+local stuck = tasks.spawn("stuck", function() return new_agent{prompt = "child-stuck"} end)
 local r = tasks.wait({nested}, 8)
 print(r[1].value.ok, r[1].value.answer)
 tasks.stop(stuck)
@@ -375,7 +375,7 @@ func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
 			<-gate
 			return textReply("late")
 		}
-		return luaReply("c1", `tasks.spawn("hang", function() return agent{prompt = "child-hang"} end)`)
+		return luaReply("c1", `tasks.spawn("hang", function() return new_agent{prompt = "child-hang"} end)`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	t.Cleanup(func() { close(gate) })
@@ -648,9 +648,9 @@ func TestPromptCompletionsExpandAndFollowReload(t *testing.T) {
 	}
 }
 
-// A running subagent is stopped at shutdown, and a slow session_end runs within
+// A running subagent is stopped at shutdown, and a slow session_closed runs within
 // the same budget instead of adding its own.
-func TestShutdownBoundsRunningSubagentAndSessionEnd(t *testing.T) {
+func TestShutdownBoundsRunningSubagentAndSessionClosed(t *testing.T) {
 	gate := make(chan struct{})
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		switch {
@@ -660,13 +660,13 @@ func TestShutdownBoundsRunningSubagentAndSessionEnd(t *testing.T) {
 			<-gate
 			return textReply("late")
 		}
-		return luaReply("c1", `tasks.spawn("stuck", function() return agent{prompt = "child-stuck"} end)`)
+		return luaReply("c1", `tasks.spawn("stuck", function() return new_agent{prompt = "child-stuck"} end)`)
 	}}
 	var endFile string
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
 		endFile = filepath.Join(dir, "ended.txt")
 		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-return {hooks = {session_end = function(reason) write("`+endFile+`", reason); while true do end end}}`)
+return {hooks = {session_closed = function(reason) write("`+endFile+`", reason); while true do end end}}`)
 	})
 	t.Cleanup(func() { close(gate) })
 	if _, err := turn(t, a, "go"); err != nil {
@@ -679,11 +679,11 @@ return {hooks = {session_end = function(reason) write("`+endFile+`", reason); wh
 	}
 	start := time.Now()
 	a.Close()
-	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-		t.Fatalf("shutdown took %s: the subagent or session_end outlived the budget", took)
+	if took := time.Since(start); took > luart.SessionClosedTimeout+3*time.Second {
+		t.Fatalf("shutdown took %s: the subagent or session_closed outlived the budget", took)
 	}
 	if got, err := os.ReadFile(endFile); err != nil || string(got) != "quit" {
-		t.Fatalf("session_end did not run: %q, %v", got, err)
+		t.Fatalf("session_closed did not run: %q, %v", got, err)
 	}
 	if len(a.ActiveSubagents()) != 0 {
 		t.Fatal("the subagent outlived the session")
@@ -705,7 +705,7 @@ func TestShutdownAbandonsJobThatIgnoresCancel(t *testing.T) {
 	}
 	start := time.Now()
 	a.Close()
-	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
+	if took := time.Since(start); took > luart.SessionClosedTimeout+3*time.Second {
 		t.Fatalf("shutdown took %s waiting for a job that ignores cancellation", took)
 	}
 }
@@ -741,7 +741,7 @@ return {completions = {slow = function() while true do end end}}`))
 		if err == nil {
 			t.Fatal("an expansion of a closed session returned text")
 		}
-	case <-time.After(luart.SessionEndTimeout + 3*time.Second):
+	case <-time.After(luart.SessionClosedTimeout + 3*time.Second):
 		t.Fatal("the expansion outlived the session")
 	}
 }

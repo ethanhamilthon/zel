@@ -6,7 +6,7 @@ You extend the agent in Lua too, with `~/.zel/init.lua` and `./.zel/init.lua`;
 providers and preferences live in the UI.
 
 > **0.6.0 is a breaking release.** The Lua API is one flat set of functions
-> (`read`, `write`, `edit`, ... instead of `fs.*`; `agent{}` instead of
+> (`read`, `write`, `edit`, ... instead of `fs.*`; `new_agent{}` instead of
 > `agents.*`; `tasks.spawn(name, fn)`), and `web`, `json`, `sleep` and `state`
 > are gone: use `sh` and files. init.lua returns a table instead of calling
 > `require("zel")`, `defaults` and the subagent hooks are gone, and the CLI keeps
@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/ins
 ```
 
 Installs the latest release for macOS or Linux (arm64/amd64) into
-`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.2`).
+`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.3`).
 `zel update` later replaces the binary with the latest GitHub release.
 
 ## Build from source
@@ -62,7 +62,8 @@ filters in Lua.
 sh(cmd, o?)                       -- shell, also for curl, jq, sleep
 read write edit patch list glob grep exists tmp slice
 tasks.spawn(name, fn, o?)         -- background work; tasks.list/get/wait/tail/stop
-agent{prompt, model?, ...}        -- a subagent
+new_agent{prompt, model?, ...}    -- a subagent; send_agent(id, text) writes to it again
+choice(name, options)             -- you pick an option in the UI instead of typing
 view log models session
 docs(topic?)                      -- the agent reads how zel works, by topic
 ```
@@ -108,8 +109,8 @@ return {
   limits entries to the main agent or to subagents.
 - **tools** are functions for the agent. The agent calls `check{pkg = "./x"}`;
   `desc` is shown in the system prompt as is.
-- **hooks**: `session_start()`, `message(text, notice)`, `turn_end(answer,
-  running)` and `session_end(reason)`. Returned text from `session_start` and
+- **hooks**: `session_created()` (once per new session), `message(text, notice)`,
+  `turn_end(answer, running)` and `session_closed(reason)`. Returned text from
   `turn_end` reaches the agent as a notification; `message` can rewrite what you
   typed.
 - **completions** register `#plan`: type `#` to list them, and the returned

@@ -36,7 +36,7 @@ func (s *session) assemblePrompt(ctx context.Context) string {
 	if cfg := s.lua.get(); cfg != nil {
 		return systemIntro + "\n\n" + cfg.SystemPrompt(ctx)
 	}
-	return systemIntro + "\n\n" + luart.Builtin(s.depth)
+	return systemIntro + "\n\n" + luart.Builtin(s.mode())
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {

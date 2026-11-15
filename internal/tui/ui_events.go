@@ -37,6 +37,8 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	// Agents report through the runtime; the UI only hears about changes.
 	a.OnSubagentsChanged(func() { go program.Send(subagentsChanged{}) })
 	defer a.OnSubagentsChanged(nil)
+	a.OnChoiceChanged(func() { go program.Send(choiceChanged{}) })
+	defer a.OnChoiceChanged(nil)
 	go func() {
 		<-running.Done()
 		program.Quit()

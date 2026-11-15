@@ -255,7 +255,11 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 	// the last row of the screen, so only the rest of it is appended.
 	nonEmpty := len(head)+len(tail) > 0
 	m.inputTop = len(head) + len(tail)
-	block := strings.Split(m.inputBlock(), "\n")
+	inputBlock := m.inputBlock
+	if m.choice != nil {
+		inputBlock = m.choiceBlock
+	}
+	block := strings.Split(inputBlock(), "\n")
 	if nonEmpty {
 		m.inputTop++
 		tail = append(tail, "")

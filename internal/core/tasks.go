@@ -45,7 +45,7 @@ type tasks struct {
 }
 
 // lifeParent is what the session's lifecycle context derives from. A subagent's
-// session ends within the shutdown budget of its parent, so its own session_end
+// session ends within the shutdown budget of its parent, so its own session_closed
 // cannot outlast the parent's shutdown.
 func (s *session) lifeParent() context.Context {
 	if s.link != nil && s.link.budget != nil {
@@ -258,23 +258,23 @@ func (t *tasks) Running() int {
 }
 
 // startBudget starts the session's shutdown budget, once: after
-// luart.SessionEndTimeout the lifecycle context ends, so session_end hooks still
+// luart.SessionClosedTimeout the lifecycle context ends, so session_closed hooks still
 // pending are skipped and close stops waiting for jobs.
 func (t *tasks) startBudget() {
-	t.budget.Do(func() { time.AfterFunc(luart.SessionEndTimeout, t.stopLife) })
+	t.budget.Do(func() { time.AfterFunc(luart.SessionClosedTimeout, t.stopLife) })
 }
 
-// close ends the session's jobs and then runs its session_end hooks (sessionEnd may
+// close ends the session's jobs and then runs its session_closed hooks (sessionClosed may
 // be nil), all within one shutdown budget that starts here: running jobs are
-// cancelled, close waits for them until the budget ends, and sessionEnd gets what
+// cancelled, close waits for them until the budget ends, and sessionClosed gets what
 // is left. A job still running when the budget ends is abandoned and its result is
 // not queued. Close is idempotent; a later call only waits for what is left.
-func (t *tasks) close(sessionEnd func(ctx context.Context)) {
+func (t *tasks) close(sessionClosed func(ctx context.Context)) {
 	t.startBudget()
 	t.begin()
 	t.drain()
-	if sessionEnd != nil {
-		sessionEnd(t.life)
+	if sessionClosed != nil {
+		sessionClosed(t.life)
 	}
 	t.stopLife()
 }

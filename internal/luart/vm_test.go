@@ -198,7 +198,7 @@ local st = tasks.get(slow)
 local r2, why = tasks.wait(slow, 0.05)
 tasks.stop(slow)
 local many = tasks.wait({id, slow}, 1)
-local a = agent{prompt="hello", model="m"}
+local a = new_agent{prompt="hello", model="m"}
 local co = coroutine.create(function() end)
 local ok1, e1 = pcall(tasks.spawn, function() end)
 local ok2, e2 = pcall(tasks.spawn, "co", function() return co end)
@@ -211,14 +211,71 @@ return {type(id), res.value, res.out, n, #t.x, st.state, st.name, st.result == n
 	if len(env.spawned) != 1 || env.spawned[0].Model != "m" || !env.spawned[0].Waited {
 		t.Fatalf("%+v", env.spawned)
 	}
-	r = run(t, env, nil, `local ok, e = pcall(agent, {prompt="boom"}); return e`)
-	if !strings.Contains(r.Output, "agent: EFAIL: no budget") {
+	r = run(t, env, nil, `local ok, e = pcall(new_agent, {prompt="boom"}); return e`)
+	if !strings.Contains(r.Output, "new_agent: EFAIL: no budget") {
 		t.Fatalf("%q", r.Output)
 	}
-	env.depth = 1
-	r = run(t, env, nil, `local ok, e = pcall(agent, {prompt="x"}); return e`)
-	if !strings.Contains(r.Output, "agent: EDENIED") {
-		t.Fatalf("subagent spawned an agent: %q", r.Output)
+	// send_agent goes to the subagent of that session and waits for its answer.
+	env.spawned = nil
+	r = run(t, env, nil, `local a = send_agent("sess1", "more", {timeout = 5}); local ok, e = pcall(send_agent, "unknown", "x"); local ok2, e2 = pcall(agent, {prompt = "x"}); return {a.answer, e, e2 == nil, agent == nil}`)
+	if r.IsError || !strings.Contains(r.Output, `"re: more"`) || !strings.Contains(r.Output, "send_agent: ENOENT") {
+		t.Fatalf("%q", r.Output)
+	}
+	if len(env.spawned) != 1 || env.spawned[0].Resume != "sess1" || env.spawned[0].Prompt != "more" || env.spawned[0].Timeout != 5*time.Second || !env.spawned[0].Waited {
+		t.Fatalf("%+v", env.spawned)
+	}
+	env.mode = "agent"
+	r = run(t, env, nil, `local ok, e = pcall(new_agent, {prompt="x"}); local ok2, e2 = pcall(send_agent, "s", "x"); return {e, e2}`)
+	if !strings.Contains(r.Output, "new_agent: EDENIED") || !strings.Contains(r.Output, "send_agent: EDENIED") {
+		t.Fatalf("subagent started an agent: %q", r.Output)
+	}
+}
+
+func TestChoice(t *testing.T) {
+	env := newEnv(t)
+	env.pick = 1
+	r := run(t, env, nil, `return choice("Какой цвет выбрать", {"Синий", "Красный"})`)
+	if r.IsError || r.Output != "Красный" || strings.Join(env.choices, "|") != "Какой цвет выбрать|Синий|Красный" {
+		t.Fatalf("%q %v", r.Output, env.choices)
+	}
+	env.pick = -1
+	r = run(t, env, nil, `return {choice("q", {"a"}) == nil}`)
+	if r.IsError || r.Output != "[true]" {
+		t.Fatalf("cancel is nil: %q", r.Output)
+	}
+	r = run(t, env, nil, `local ok, e = pcall(choice, "q", {}); local ok2, e2 = pcall(choice, "q", {1}); local ok3, e3 = pcall(choice, "q", "a"); return {e, e2, ok3}`)
+	if !strings.Contains(r.Output, "choice: EINVAL: no options") || !strings.Contains(r.Output, "choice: EINVAL: option #1") || !strings.Contains(r.Output, "false") {
+		t.Fatalf("bad arguments: %q", r.Output)
+	}
+	for _, mode := range []string{"agent", "headless"} {
+		env.mode = mode
+		r = run(t, env, nil, `local ok, e = pcall(choice, "q", {"a"}); return e`)
+		if !strings.Contains(r.Output, "choice: EDENIED") {
+			t.Fatalf("%s: %q", mode, r.Output)
+		}
+	}
+	env.mode = "main"
+	r = run(t, env, nil, `local id = tasks.spawn("ask", function() return select(2, pcall(choice, "q", {"a"})) end); return tasks.wait(id, 5).value`)
+	if !strings.Contains(r.Output, "choice: EDENIED") {
+		t.Fatalf("task: %q", r.Output)
+	}
+}
+
+// Waiting for the user does not use up the call's own time.
+func TestChoiceDoesNotSpendTheCallTimeout(t *testing.T) {
+	old := callTimeout
+	callTimeout = 300 * time.Millisecond
+	defer func() { callTimeout = old }()
+	env := newEnv(t)
+	env.pick = 0
+	env.chooseDelay = 600 * time.Millisecond
+	r := run(t, env, nil, `return choice("q", {"a", "b"})`)
+	if r.IsError || r.Output != "a" {
+		t.Fatalf("slow answer: %q", r.Output)
+	}
+	r = run(t, env, nil, `local t = os.clock(); while os.clock() - t < 1 do end; return 1`)
+	if !r.IsError || !strings.Contains(r.Output, "timeout") {
+		t.Fatalf("the budget still applies: %q", r.Output)
 	}
 }
 
@@ -253,20 +310,24 @@ func TestMiscHost(t *testing.T) {
 }
 
 // The prompt lists every host global; a subagent's prompt leaves agent{} out.
-func TestBuiltinPromptByDepth(t *testing.T) {
-	main, sub := Builtin(0), Builtin(1)
+func TestBuiltinPromptByMode(t *testing.T) {
+	main, sub, headless := Builtin("main"), Builtin("agent"), Builtin("headless")
 	for name := range builtinNames {
 		if !strings.Contains(main, name) {
 			t.Errorf("main prompt misses %s", name)
 		}
 	}
-	for _, want := range []string{"session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)", "tasks.spawn(name, fn, o?)", "agent{prompt", "#name in a user message arrives already expanded"} {
+	for _, want := range []string{"session.{id,cwd,root,parent,mode,model,effort}; session.rename(name)", "tasks.spawn(name, fn, o?)", "new_agent{prompt", "send_agent(id, text", "choice(name, options)", "#name in a user message arrives already expanded"} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main prompt misses %q", want)
 		}
 	}
-	if strings.Contains(sub, "agent{") || !strings.Contains(sub, "agent() is not available") || !strings.Contains(sub, "tasks.spawn(name, fn") {
+	if strings.Contains(sub, "new_agent{") || strings.Contains(sub, "send_agent(") || strings.Contains(sub, "choice(name") ||
+		!strings.Contains(sub, "new_agent, send_agent and choice are not available") || !strings.Contains(sub, "tasks.spawn(name, fn") {
 		t.Fatalf("subagent prompt: %q", sub)
+	}
+	if strings.Contains(headless, "choice(name") || !strings.Contains(headless, "new_agent{") || !strings.Contains(headless, "send_agent(") {
+		t.Fatalf("headless prompt: %q", headless)
 	}
 	if !isBuiltin("session.models") || !isBuiltin("read") || isBuiltin("proj.read") {
 		t.Fatal("isBuiltin")

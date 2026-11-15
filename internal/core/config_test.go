@@ -138,11 +138,14 @@ func TestSessionLockIsExclusive(t *testing.T) {
 	}
 }
 
-func TestShellEnvHasSessionAndDepthOnly(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, func(string, string) { t.Setenv("ZEL_DEPTH", "2") })
+func TestShellEnvHasSessionAndModeOnly(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, func(string, string) { t.Setenv("ZEL_MODE", "agent") })
 	env := a.Shell.Env()
-	if env["ZEL_SESSION_ID"] != a.SessionID() || env["ZEL_DEPTH"] != "2" || len(env) != 2 {
+	if env["ZEL_SESSION_ID"] != a.SessionID() || env["ZEL_MODE"] != "agent" || len(env) != 2 {
 		t.Fatalf("shell env: %v", env)
+	}
+	if b := newTestAgent(t, &fakeProvider{}, Options{Mode: "headless"}); b.Shell.Env()["ZEL_MODE"] != "headless" {
+		t.Fatalf("headless env: %v", b.Shell.Env())
 	}
 }
 

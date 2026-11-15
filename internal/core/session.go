@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"zel/internal/luart"
@@ -61,7 +60,7 @@ func (s *session) release() {
 }
 
 func (s *session) shutdown(reason string) {
-	s.sessionEnd(reason)
+	s.sessionClosed(reason)
 	s.ended.Store(true)
 	if s.queue != nil {
 		s.queue.OnPush(nil)
@@ -164,7 +163,9 @@ func (a *Runtime) changeSession(id string) error {
 		next.vm = &luart.Runner{Env: luaEnv{next}}
 		next.vm.Reset("the session was resumed")
 	}
-	next.sessionStart()
+	if id == "" {
+		next.sessionCreated()
+	}
 	return nil
 }
 
@@ -180,10 +181,22 @@ func (s *session) rootID() string {
 func (a *Runtime) shellEnv() map[string]string { return a.session().shellEnv() }
 
 // shellEnv is exported to every sh() call. API keys and settings are never exported.
-// ZEL_DEPTH is the agent nesting depth, so a nested `zel -p` still honors the limit.
+// ZEL_MODE is session.mode, so a nested `zel -p` of a subagent still honors the agent limit.
 func (s *session) shellEnv() map[string]string {
 	return map[string]string{
 		"ZEL_SESSION_ID": s.id,
-		"ZEL_DEPTH":      strconv.Itoa(s.depth),
+		"ZEL_MODE":       s.mode(),
 	}
+}
+
+// mode is how the session runs, as Lua sees it in session.mode: "agent" for a
+// subagent, "headless" for zel -p, "main" for the user's interactive session.
+func (s *session) mode() string {
+	switch {
+	case s.depth > 0:
+		return "agent"
+	case s.opts.Mode == "headless":
+		return "headless"
+	}
+	return "main"
 }

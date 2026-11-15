@@ -39,13 +39,17 @@ func (v *vm) installHost() {
 	L.SetGlobal("docs", v.hostFn("docs", v.docs))
 	v.installTasks()
 	if v.agentsAllowed() {
-		L.SetGlobal("agent", v.hostFn("agent", v.agentRun))
+		L.SetGlobal("new_agent", v.hostFn("new_agent", v.newAgent))
+		L.SetGlobal("send_agent", v.hostFn("send_agent", v.sendAgent))
 	} else {
-		L.SetGlobal("agent", L.NewFunction(func(L *lua.LState) int {
-			raise(L, "agent", EDENIED, "subagents cannot start subagents; do the work yourself")
-			return 0
-		}))
+		for _, name := range []string{"new_agent", "send_agent"} {
+			L.SetGlobal(name, L.NewFunction(func(L *lua.LState) int {
+				raise(L, name, EDENIED, "subagents cannot start subagents; do the work yourself")
+				return 0
+			}))
+		}
 	}
+	v.installChoice()
 	v.installSession()
 }
 
@@ -74,7 +78,7 @@ func (v *vm) installSession() {
 	for k, val := range map[string]string{"id": info.ID, "cwd": info.Cwd, "root": info.Root, "parent": info.Parent, "model": info.Model, "effort": info.Effort} {
 		t.RawSetString(k, lua.LString(val))
 	}
-	t.RawSetString("depth", lua.LNumber(info.Depth))
+	t.RawSetString("mode", lua.LString(info.Mode))
 	t.RawSetString("rename", v.hostFn("session.rename", func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if strings.TrimSpace(name) == "" {

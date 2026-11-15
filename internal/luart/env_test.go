@@ -1,6 +1,7 @@
 package luart
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,18 +32,21 @@ func (j *fakeJob) state() string {
 }
 
 type fakeEnv struct {
-	cwd      string
-	mu       sync.Mutex
-	jobs     map[string]*fakeJob
-	notices  []string
-	logs     []string
-	viewed   []string
-	renamed  string
-	spawned  []AgentOpts
-	depth    int
-	models   []ModelInfo
-	failures map[string]string
-	acts     []fakeAct // every operation reported by Begin, in start order
+	cwd         string
+	mu          sync.Mutex
+	jobs        map[string]*fakeJob
+	notices     []string
+	logs        []string
+	viewed      []string
+	renamed     string
+	spawned     []AgentOpts
+	mode        string        // session mode; "main" when empty
+	choices     []string      // the options choice() was asked with, flattened with the title first
+	pick        int           // index choice() returns; -1 cancels
+	chooseDelay time.Duration // how long the user takes
+	models      []ModelInfo
+	failures    map[string]string
+	acts        []fakeAct // every operation reported by Begin, in start order
 }
 
 // fakeAct is one reported host operation; ended is set by its end function.
@@ -76,7 +80,7 @@ func newEnv(t *testing.T) *fakeEnv {
 }
 
 func (e *fakeEnv) Info() SessionInfo {
-	return SessionInfo{ID: "s1", Cwd: e.cwd, Root: e.cwd, Model: "m", Effort: "low", Depth: e.depth, Home: e.cwd + "/.zel", TmpDir: e.cwd + "/tmp", LuaPath: []string{e.cwd + "/.zel/lua"}}
+	return SessionInfo{ID: "s1", Cwd: e.cwd, Root: e.cwd, Model: "m", Effort: "low", Mode: cmp.Or(e.mode, "main"), Home: e.cwd + "/.zel", TmpDir: e.cwd + "/tmp", LuaPath: []string{e.cwd + "/.zel/lua"}}
 }
 func (e *fakeEnv) ShellEnv() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }
 
@@ -196,11 +200,26 @@ func (s fakeAgents) Spawn(o AgentOpts) (string, error) {
 	if o.Prompt == "boom" {
 		return "", errors.New("no budget")
 	}
+	if o.Resume == "unknown" {
+		return "", fmt.Errorf("%w: no subagent with session unknown", ErrNoJob)
+	}
 	e.spawned = append(e.spawned, o)
 	j := &fakeJob{id: fmt.Sprintf("a%d", len(e.jobs)+1), kind: "agent", done: make(chan struct{}), result: map[string]any{"ok": true, "answer": "re: " + o.Prompt}}
 	close(j.done)
 	e.jobs[j.id] = j
 	return j.id, nil
+}
+func (e *fakeEnv) Choose(ctx context.Context, title string, options []string) (string, bool, error) {
+	e.choices = append([]string{title}, options...)
+	select {
+	case <-time.After(e.chooseDelay):
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
+	if e.pick < 0 || e.pick >= len(options) {
+		return "", false, nil
+	}
+	return options[e.pick], true, nil
 }
 func (e *fakeEnv) View(path string) error { e.viewed = append(e.viewed, path); return nil }
 func (e *fakeEnv) Notice(msg string)      { e.notices = append(e.notices, msg) }

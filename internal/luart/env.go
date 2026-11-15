@@ -12,7 +12,7 @@ import (
 // SessionInfo describes the session a call runs in.
 type SessionInfo struct {
 	ID, Cwd, Root, Parent string
-	Depth                 int
+	Mode                  string // "main", "agent" or "headless"
 	Model, Effort         string
 	Home                  string   // ~/.zel
 	TmpDir                string   // session scratch directory
@@ -36,9 +36,10 @@ type TaskOpts struct {
 // function's first return value.
 type TaskFunc func(ctx context.Context, out io.Writer) (value any, err error)
 
-// AgentOpts are the options of agent{}.
+// AgentOpts are the options of new_agent{} and send_agent().
 type AgentOpts struct {
 	Prompt, Model, Effort, Provider, Cwd string
+	Resume                               string // send_agent: the session of the subagent that gets Prompt
 	Timeout                              time.Duration
 	Waited                               bool // the caller waits for the result: no notification is queued
 }
@@ -94,6 +95,9 @@ type Env interface {
 	// Models lists the models of the configured providers. Providers that fail
 	// are reported by name in failures; they do not fail the list.
 	Models(ctx context.Context) (models []ModelInfo, failures map[string]string)
+	// Choose asks the user to pick one of the options and blocks until he does
+	// or ctx ends; ok is false when he cancels.
+	Choose(ctx context.Context, title string, options []string) (picked string, ok bool, err error)
 	// Begin reports a host operation that starts now, with a label that already
 	// hides secrets. The returned end must be called exactly once when it ends,
 	// however it ends. Background operations (tasks) are not foreground activity.

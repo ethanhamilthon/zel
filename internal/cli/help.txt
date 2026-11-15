@@ -22,8 +22,8 @@ CONFIG
       completions = {plan = function() return read("PLAN.md") end},
     }
 
-  Hooks: session_start(), message(text, notice), turn_end(answer, running),
-  session_end(reason). Menu > Reload rereads the files. See docs/lua-api.md.
+  Hooks: session_created(), message(text, notice), turn_end(answer, running),
+  session_closed(reason). Menu > Reload rereads the files. See docs/lua-api.md.
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
@@ -32,6 +32,6 @@ KEYS
 
 ENVIRONMENT
   ZEL_HOME   data directory (default ~/.zel)
-  sh() gets ZEL_SESSION_ID and ZEL_DEPTH
+  sh() gets ZEL_SESSION_ID and ZEL_MODE
 
 Lua and shell run with your permissions and network access; there is no sandbox.

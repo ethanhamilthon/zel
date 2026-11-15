@@ -1981,7 +1981,7 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 }
 
 // taskModel is a chat whose session starts with one background task running:
-// its init.lua spawns it from session_start.
+// its init.lua spawns it from session_created.
 func taskModel(t *testing.T) model {
 	t.Helper()
 	t.Setenv("ZEL_HOME", t.TempDir())
@@ -1989,7 +1989,7 @@ func taskModel(t *testing.T) model {
 	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	initLua := `return {hooks = {session_start = function() tasks.spawn("hold", function() sh("sleep 30") end) end}}`
+	initLua := `return {hooks = {session_created = function() tasks.spawn("hold", function() sh("sleep 30") end) end}}`
 	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2002,7 +2002,7 @@ func taskModel(t *testing.T) model {
 	t.Cleanup(m.ctl.Close)
 	for deadline := time.Now().Add(5 * time.Second); m.ctl.Status().Tasks != 1; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("the session_start task never started")
+			t.Fatal("the session_created task never started")
 		}
 	}
 	return m
@@ -2027,7 +2027,7 @@ func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
 	m = next.(model)
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	// The new session's own session_start starts a fresh task; the old one is stopped.
+	// The new session's own session_created starts a fresh task; the old one is stopped.
 	if m.ctl.Status().Session == id {
 		t.Fatal("confirmation did not switch and stop tasks")
 	}

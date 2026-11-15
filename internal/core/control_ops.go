@@ -185,6 +185,12 @@ func (c *Controller) ActiveSubagents() (list []SubagentRun) {
 }
 
 // ActiveTasks lists the running background tasks for the chat rows.
+// PendingChoice is the question the agent asks with choice(), nil when there is none.
+func (c *Controller) PendingChoice() *Choice { return c.a.PendingChoice() }
+
+// AnswerChoice answers the question id with the option at index, or cancels it with -1.
+func (c *Controller) AnswerChoice(id, index int) { c.a.AnswerChoice(id, index) }
+
 func (c *Controller) ActiveTasks() (list []ActiveTask) {
 	c.view(func() { list = c.a.ActiveTasks() })
 	return list

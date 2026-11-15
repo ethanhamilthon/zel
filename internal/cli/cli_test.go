@@ -264,7 +264,7 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_DEPTH", "0")
+	t.Setenv("ZEL_MODE", "")
 	t.Setenv("ZEL_SESSION_ID", "")
 	var mu sync.Mutex
 	var prompts []string
@@ -309,7 +309,7 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 			if !strings.Contains(body.Instructions, "proj.hello{...}  -- greet") || !strings.Contains(body.Instructions, "Project rule: be brief") {
 				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
 			}
-			code := "local r = agent{prompt = 'child task'}\nprint(r.ok, r.answer)\nprint(proj.hello{who = 'world'})"
+			code := "local r = new_agent{prompt = 'child task'}\nprint(r.ok, r.answer)\nprint(proj.hello{who = 'world'})"
 			args, _ := json.Marshal(map[string]string{"code": code})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": string(args)})
 			reply(string(item))

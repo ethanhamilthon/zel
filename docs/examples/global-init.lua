@@ -9,6 +9,6 @@ Reply like an SMS: short, lowercase, user's language, no trailing dot.
     function() return "env: " .. sh("uname -srm").out .. "today: " .. os.date("%Y-%m-%d") end,
   },
   hooks = {
-    session_start = function() sh("mkdir -p ~/.zel/cache") end,
+    session_created = function() sh("mkdir -p ~/.zel/cache") end,
   },
 }

@@ -18,9 +18,9 @@ type Topic struct{ Name, Summary string }
 // is a bug, so the tests fail when lua-api.md gets a section that is not listed.
 var sections = map[string]Topic{
 	"Calls":              {"calls", "limits of a lua call, the VM, output, errors"},
-	"Functions":          {"functions", "every host function: sh, files, tasks, agent, session"},
+	"Functions":          {"functions", "every host function: sh, files, tasks, new_agent, send_agent, choice, session"},
 	"init.lua":           {"init", "init.lua format: instructions, tools, layers, reload"},
-	"Hooks":              {"hooks", "session_start, message, turn_end, session_end"},
+	"Hooks":              {"hooks", "session_created, message, turn_end, session_closed"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},
 }
 
