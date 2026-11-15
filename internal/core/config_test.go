@@ -14,8 +14,7 @@ import (
 )
 
 func TestLoadConfigLayers(t *testing.T) {
-	home, root := t.TempDir(), t.TempDir()
-	dir := filepath.Join(root, "projects", "app")
+	home := t.TempDir()
 	t.Setenv("ZEL_TEST_KEY", "sk-secret")
 	settings := DefaultSettings()
 	settings.Provider, settings.Model = "p", "m"
@@ -24,10 +23,7 @@ func TestLoadConfigLayers(t *testing.T) {
 	if err := WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	flagged := filepath.Join(root, "override.lua")
-	writeFile(t, flagged, "-- flag layer")
-	t.Setenv("ZEL_CONFIG", flagged)
-	loaded, err := LoadConfig(home, dir)
+	loaded, err := LoadConfig(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,23 +36,19 @@ func TestLoadConfigLayers(t *testing.T) {
 	if err := WriteConfig(home, loaded); err != nil {
 		t.Fatal(err)
 	}
-	again, err := LoadConfig(home, dir)
+	again, err := LoadConfig(home)
 	if err != nil || again.Providers["p"].APIKey != "sk-secret" {
 		t.Fatalf("project state was persisted: %+v %v", again, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "config.toml")); !os.IsNotExist(err) {
 		t.Fatal("TOML file created")
 	}
-	t.Setenv("ZEL_CONFIG", filepath.Join(root, "missing.md"))
-	if _, err := LoadConfig(home, dir); err == nil {
-		t.Fatal("missing explicit file accepted")
-	}
 }
 
 func TestProjectInitLuaBuildsTheRequest(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), "local zel = require('zel')\nzel.instructions('You are Zel.')\nzel.prompt(function() return 'dyn ' .. (2 + 3) end)\nzel.fn{name='proj.hello', summary='say hello', run=function() return 'hello' end}")
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), "return {instructions = {'You are Zel.', function() return 'dyn ' .. (2 + 3) end}, tools = {['proj.hello'] = {desc = 'say hello', fn = function() return 'hello' end}}}")
 	})
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
@@ -86,7 +78,7 @@ func TestZelMdIsNotLoaded(t *testing.T) {
 func TestLuaToolRunsInTheTurn(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", "state.set('k', 41 + 1)\nprint(sh('echo hi').out)")
+			return luaReply("c1", "write('k', tostring(41 + 1))\nprint(sh('echo hi').out)")
 		}
 		return textReply("done")
 	}}
@@ -97,8 +89,8 @@ func TestLuaToolRunsInTheTurn(t *testing.T) {
 	if !strings.Contains(fp.requests()[1], "hi") {
 		t.Fatalf("no tool output: %s", fp.requests()[1])
 	}
-	if v, ok, err := (kvState{a.session()}).Get("session", "k"); err != nil || !ok || v != "42" {
-		t.Fatalf("state value %q %v %v", v, ok, err)
+	if v := readSessionFile(t, a, "k"); v != "42" {
+		t.Fatalf("file %q", v)
 	}
 	if strings.Contains(fp.requests()[0], `"name":"bash"`) {
 		t.Fatal("the bash tool is still offered")
@@ -205,7 +197,7 @@ func TestSaveDefaultUsesDatabase(t *testing.T) {
 	if err := SaveDefault(home, s, selection{"p", "new", "high"}); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := LoadConfig(home, dir)
+	loaded, err := LoadConfig(home)
 	if err != nil || loaded.Model != "new" || loaded.Effort != "high" {
 		t.Fatalf("settings %+v %v", loaded, err)
 	}
@@ -229,13 +221,13 @@ func TestMediumReasoningDefault(t *testing.T) {
 		}
 	}
 	for _, effort := range []string{"medium", "high"} {
-		home, project := t.TempDir(), t.TempDir()
+		home := t.TempDir()
 		settings := DefaultSettings()
 		settings.Effort = effort
 		if err := WriteConfig(home, settings); err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := LoadConfig(home, project)
+		loaded, err := LoadConfig(home)
 		if err != nil || loaded.Effort != effort {
 			t.Fatalf("effort %s, %v", loaded.Effort, err)
 		}
@@ -256,13 +248,13 @@ func TestLegacyAndOmittedSessionEffortUseMedium(t *testing.T) {
 	if a.Settings().Effort != "medium" {
 		t.Fatal("omitted selection effort did not resolve to medium")
 	}
-	s, err := LoadConfig(a.home, a.Shell.Dir)
+	s, err := LoadConfig(a.home)
 	if err != nil || s.Effort != "medium" {
 		t.Fatalf("saved effort = %q, %v", s.Effort, err)
 	}
 }
 
-func TestTraceListsHistoryTasksAndEvents(t *testing.T) {
+func TestTraceListsHistoryAndEvents(t *testing.T) {
 	t.Setenv("ZEL_HOME", t.TempDir())
 	a, err := New(t.TempDir(), Options{})
 	if err != nil {
@@ -302,9 +294,6 @@ func TestTraceMergesSourcesChronologically(t *testing.T) {
 	// Two records with equal timestamps must keep their original history order.
 	a.message("assistant", "same-time")
 	a.setItemMeta(2, Metadata{At: base.Add(5 * time.Second)})
-	if _, err := a.db.Exec(`INSERT INTO tasks(session,id,command,status,started,log) VALUES(?, 't1','build','done',?,'')`, a.SessionID(), base.Add(time.Second).UnixNano()); err != nil {
-		t.Fatal(err)
-	}
 	path := EventsLog(a.Home(), a.SessionID())
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -318,7 +307,7 @@ func TestTraceMergesSourcesChronologically(t *testing.T) {
 	for _, e := range entries {
 		order = append(order, e.Kind+":"+e.Text)
 	}
-	want := "user:first|task:t1 $ build · done|error:failure\ndetail|notice:recovery|assistant:last|assistant:same-time"
+	want := "user:first|error:failure\ndetail|notice:recovery|assistant:last|assistant:same-time"
 	if strings.Join(order, "|") != want {
 		t.Fatalf("trace order: %q", order)
 	}

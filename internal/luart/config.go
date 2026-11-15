@@ -5,35 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// Defaults are the values of zel.defaults; later layers override earlier ones.
-type Defaults struct {
-	Provider, Model, Effort string
-}
-
-// Param is one positional parameter of a plugin function.
-type Param struct {
-	Name, Type, Desc string
-	Default          any
-	HasDefault       bool
-	typ              *Type
-}
-
-// FnDef is a function registered with zel.fn.
-type FnDef struct {
-	Name, Summary, Returns string
-	Params                 []Param
-	Examples               []string
-	Hidden                 bool
-	Layer                  string
-	run                    *lua.LFunction
+// Tool is a function an init.lua layer gives the agent: tools = {name = {desc, fn}}.
+// The agent calls it with one table of arguments.
+type Tool struct {
+	Name, Desc, Layer string
+	fn                *lua.LFunction
 }
 
 type hook struct {
@@ -41,15 +25,19 @@ type hook struct {
 	fn           *lua.LFunction
 }
 
+// instruction is one piece of the prompt: static text, or a function that returns it.
+type instruction struct {
+	text string
+	fn   *lua.LFunction
+}
+
 // Layer is the result of one init.lua file.
 type Layer struct {
-	Name, Path, Dir string
-	instructions    []string
-	prompts         []*lua.LFunction
-	defaults        Defaults
-	fns             []*FnDef
-	hooks           []hook
-	completions     []completion
+	Name, Path   string
+	instructions []instruction
+	tools        []*Tool
+	hooks        []hook
+	completions  []completion
 }
 
 // Source names one init.lua to load: layers load in the order given.
@@ -64,51 +52,41 @@ type Config struct {
 	stop        context.CancelFunc
 	v           *vm
 	layers      []*Layer
-	fns         map[string]*FnDef
+	tools       map[string]*Tool
 	completions map[string]completion
 	hooks       map[string][]hook
-	loading     *Layer
 	LoadErrs    []string
 	closed      bool // set by Close: a closed snapshot runs no hooks or functions
 }
 
-var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true, "subagent_start": true, "subagent_end": true}
+var hookEvents = map[string]bool{"session_start": true, "session_end": true, "message": true, "turn_end": true}
 
-// jobFns are the lifecycle functions of both the tasks and the agents namespace.
-var jobFns = []string{"spawn", "get", "list", "status", "wait", "wait_all", "result", "tail", "stop"}
-
-var builtinFns = map[string][]string{
-	"":   {"sh", "sleep", "view", "slice"},
-	"fs": {"read", "write", "edit", "patch", "list", "glob", "grep", "exists", "tmp"}, "web": {"request", "get", "post"},
-	"json": {"encode", "decode"}, "tasks": jobFns, "agents": append([]string{"run"}, jobFns...),
-	"state": {"get", "set", "list"}, "log": {"info", "warn", "notice"}, "session": {"id", "cwd", "root", "parent", "depth", "model", "effort", "rename", "models"},
+// builtinNames are the globals of the host API; a tool cannot take their names.
+var builtinNames = map[string]bool{
+	"print": true, "sh": true, "view": true, "slice": true, "read": true, "write": true, "edit": true, "patch": true,
+	"list": true, "glob": true, "grep": true, "exists": true, "tmp": true, "log": true, "models": true,
+	"tasks": true, "agent": true, "session": true,
 }
 
 var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
 
+// isBuiltin reports whether a tool name would replace part of the host API: a
+// host global, or a function inside the tasks or session table.
 func isBuiltin(name string) bool {
-	ns, fn, dotted := strings.Cut(name, ".")
+	ns, _, dotted := strings.Cut(name, ".")
 	if !dotted {
-		ns, fn = "", name
-		if _, isNS := builtinFns[name]; isNS && name != "" {
-			return true
-		}
+		return builtinNames[name]
 	}
-	for _, b := range builtinFns[ns] {
-		if b == fn {
-			return true
-		}
-	}
-	return false
+	return ns == "tasks" || ns == "session"
 }
 
 // LoadConfig runs the given init.lua files in order. A layer that fails to load
 // is skipped and reported through env.Notice.
 func LoadConfig(env Env, sources []Source) *Config {
-	c := &Config{env: env, sem: make(chan struct{}, 1), fns: map[string]*FnDef{}, completions: map[string]completion{}, hooks: map[string][]hook{}}
+	c := &Config{env: env, sem: make(chan struct{}, 1), tools: map[string]*Tool{}, completions: map[string]completion{}, hooks: map[string][]hook{}}
 	c.shutdown, c.stop = context.WithCancel(context.Background())
 	c.v = newVM(env, c, roleConfig)
-	c.v.L.PreloadModule("zel", c.zelModule)
+	c.v.L.PreloadModule("zel", removedZel)
 	for _, src := range sources {
 		if err := c.loadLayer(src); err != nil {
 			msg := fmt.Sprintf("%s skipped: it did not finish within 30 s, so the layers after it are skipped too", src.Path)
@@ -213,30 +191,32 @@ func (c *Config) scope(ctx context.Context) (context.Context, context.CancelFunc
 // errClosed is what calls into a snapshot that was reloaded away return.
 var errClosed = errors.New("init.lua was reloaded")
 
-// loadLayer runs one init.lua file in the config VM. A layer that fails to load is
-// skipped with a notice. An error return means the file did not finish within its
-// 30 s: the VM is still held by it, so the caller stops loading layers.
+// loadLayer runs one init.lua file in the config VM and reads the table it
+// returns. A layer that fails to load is skipped with a notice. An error return
+// means the file did not finish within its 30 s: the VM is still held by it, so
+// the caller stops loading layers.
 func (c *Config) loadLayer(src Source) error {
 	if _, err := os.Stat(src.Path); err != nil {
 		return nil
 	}
-	layer := &Layer{Name: src.Name, Path: src.Path, Dir: filepath.Dir(filepath.Dir(src.Path))}
-	if filepath.Base(filepath.Dir(src.Path)) != ".zel" {
-		layer.Dir = filepath.Dir(src.Path)
-	}
+	layer := &Layer{Name: src.Name, Path: src.Path}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var loadErr error
 	err := c.run(ctx, func(ctx context.Context) error {
-		c.loading = layer
-		defer func() { c.loading = nil }()
+		L := c.v.L
 		c.v.ctx = ctx
-		c.v.L.SetContext(ctx)
-		defer c.v.L.RemoveContext()
-		fn, err := c.v.L.LoadFile(src.Path)
+		L.SetContext(ctx)
+		defer L.RemoveContext()
+		fn, err := L.LoadFile(src.Path)
 		if err == nil {
-			c.v.L.Push(fn)
-			err = c.v.L.PCall(0, 0, nil)
+			L.Push(fn)
+			err = L.PCall(0, 1, nil)
+		}
+		if err == nil {
+			ret := L.Get(-1)
+			L.Pop(1)
+			err = layer.read(ret, "init.lua")
 		}
 		loadErr = err
 		return nil
@@ -251,11 +231,11 @@ func (c *Config) loadLayer(src Source) error {
 		return nil
 	}
 	c.layers = append(c.layers, layer)
-	for _, f := range layer.fns {
-		if old, dup := c.fns[f.Name]; dup {
-			c.env.Log("warn", fmt.Sprintf("%s: function %s overrides the one from %s", src.Name, f.Name, old.Layer))
+	for _, t := range layer.tools {
+		if old, dup := c.tools[t.Name]; dup {
+			c.env.Log("warn", fmt.Sprintf("%s: tool %s overrides the one from %s", src.Name, t.Name, old.Layer))
 		}
-		c.fns[f.Name] = f
+		c.tools[t.Name] = t
 	}
 	for _, p := range layer.completions {
 		if old, dup := c.completions[p.Name]; dup {
@@ -267,36 +247,18 @@ func (c *Config) loadLayer(src Source) error {
 		c.hooks[h.event] = append(c.hooks[h.event], h)
 	}
 	return c.run(ctx, func(ctx context.Context) error {
-		c.installFns(c.v)
+		c.installTools(c.v)
 		return nil
 	})
 }
 
-// Defaults merges zel.defaults of all layers. The layers are final once LoadConfig
-// returns, so reading them needs no lock and never waits behind a call.
-func (c *Config) Defaults() Defaults {
-	var d Defaults
+// Tools lists the effective (merged) tools in layer order.
+func (c *Config) Tools() []*Tool {
+	var out []*Tool
 	for _, l := range c.layers {
-		if l.defaults.Provider != "" {
-			d.Provider = l.defaults.Provider
-		}
-		if l.defaults.Model != "" {
-			d.Model = l.defaults.Model
-		}
-		if l.defaults.Effort != "" {
-			d.Effort = l.defaults.Effort
-		}
-	}
-	return d
-}
-
-// Fns lists the effective (merged) plugin functions in layer order.
-func (c *Config) Fns() []*FnDef {
-	var out []*FnDef
-	for _, l := range c.layers {
-		for _, f := range l.fns {
-			if c.fns[f.Name] == f {
-				out = append(out, f)
+		for _, t := range l.tools {
+			if c.tools[t.Name] == t {
+				out = append(out, t)
 			}
 		}
 	}
@@ -306,181 +268,234 @@ func (c *Config) Fns() []*FnDef {
 // HasHook reports whether any hook listens to the event.
 func (c *Config) HasHook(event string) bool { return len(c.hooks[event]) > 0 }
 
-// ---- the zel module -------------------------------------------------------
+// ---- what init.lua returns ------------------------------------------------
 
-func (c *Config) zelModule(L *lua.LState) int {
-	t := L.NewTable()
-	fail := func(fn string, format string, args ...any) { raise(L, "zel."+fn, EINVAL, format, args...) }
-	layer := func(fn string) *Layer {
-		if c.loading == nil {
-			fail(fn, "can only be called while init.lua loads")
+// removedZel answers require("zel"), which 0.6 removed.
+func removedZel(L *lua.LState) int {
+	L.RaiseError(`require("zel") was removed in zel 0.6: init.lua returns a table {instructions, tools, hooks, completions}`)
+	return 0
+}
+
+// partKeys are the keys of a table init.lua returns.
+var partKeys = "instructions, tools, hooks, completions"
+
+// read adds what init.lua returned: nil (or true, what require gives for a
+// module that returns nothing), a part {instructions, tools, hooks,
+// completions}, or a list of those, nested as deep as needed. where names the
+// value in errors.
+func (l *Layer) read(v lua.LValue, where string) error {
+	switch x := v.(type) {
+	case *lua.LNilType:
+		return nil
+	case lua.LBool:
+		if x {
+			return nil
 		}
-		return c.loading
+	case *lua.LTable:
+		if isList(x) {
+			for i := 1; i <= x.Len(); i++ {
+				if err := l.read(x.RawGetInt(i), fmt.Sprintf("%s[%d]", where, i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		return l.readPart(x, where)
 	}
-	t.RawSetString("instructions", L.NewFunction(func(L *lua.LState) int {
-		l := layer("instructions")
-		switch x := L.Get(1).(type) {
-		case lua.LString:
-			l.instructions = append(l.instructions, string(x))
-		case *lua.LTable:
-			file, ok := optString(x, "file")
-			if !ok {
-				fail("instructions", "expected text or {file = path}")
-			}
-			path := file
-			if strings.HasPrefix(path, "~/") {
-				home, _ := os.UserHomeDir()
-				path = filepath.Join(home, path[2:])
-			} else if !filepath.IsAbs(path) {
-				path = filepath.Join(l.Dir, path)
-			}
-			data, err := readPlain(path)
-			if err != nil {
-				c.env.Notice("zel.instructions: cannot read " + path)
-				return 0
-			}
-			l.instructions = append(l.instructions, string(data))
+	return fmt.Errorf("%s must return a table {%s} or a list of them, got %s", where, partKeys, v.Type())
+}
+
+// isList reports whether t has only the keys 1..n.
+func isList(t *lua.LTable) bool {
+	n, list := t.Len(), true
+	if n == 0 {
+		return false
+	}
+	t.ForEach(func(k, _ lua.LValue) {
+		if i, ok := k.(lua.LNumber); !ok || float64(i) != float64(int(i)) || int(i) < 1 || int(i) > n {
+			list = false
+		}
+	})
+	return list
+}
+
+// sortedFields lists the string keys of t in order and fails on any other key.
+func sortedFields(t *lua.LTable, where string) ([]string, error) {
+	var keys []string
+	var bad error
+	t.ForEach(func(k, _ lua.LValue) {
+		s, ok := k.(lua.LString)
+		if !ok && bad == nil {
+			bad = fmt.Errorf("%s: keys must be names, got %s", where, k.Type())
+		}
+		keys = append(keys, string(s))
+	})
+	sort.Strings(keys)
+	return keys, bad
+}
+
+func (l *Layer) readPart(t *lua.LTable, where string) error {
+	keys, err := sortedFields(t, where)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		v := t.RawGetString(key)
+		var err error
+		switch key {
+		case "instructions":
+			err = l.readInstructions(v, where+".instructions")
+		case "tools":
+			err = l.readTools(v, where+".tools")
+		case "hooks":
+			err = l.readHooks(v, where+".hooks")
+		case "completions":
+			err = l.readCompletions(v, where+".completions")
+		case "defaults":
+			err = fmt.Errorf("%s.defaults was removed in zel 0.6: pick the model and effort in the UI (Ctrl+M)", where)
 		default:
-			fail("instructions", "expected text or {file = path}")
+			err = fmt.Errorf("%s: unknown key %q (expected %s)", where, key, partKeys)
 		}
-		return 0
-	}))
-	t.RawSetString("prompt", L.NewFunction(func(L *lua.LState) int {
-		l := layer("prompt")
-		l.prompts = append(l.prompts, L.CheckFunction(1))
-		return 0
-	}))
-	t.RawSetString("defaults", L.NewFunction(func(L *lua.LState) int {
-		l := layer("defaults")
-		o := L.CheckTable(1)
-		var err string
-		o.ForEach(func(k, val lua.LValue) {
-			key := k.String()
-			switch key {
-			case "provider", "model", "effort":
-				s, ok := val.(lua.LString)
-				if !ok {
-					err = key + " must be a string"
-					return
-				}
-				switch key {
-				case "provider":
-					l.defaults.Provider = string(s)
-				case "model":
-					l.defaults.Model = string(s)
-				default:
-					l.defaults.Effort = string(s)
-				}
-			default:
-				err = "unknown key " + key
-			}
-		})
-		if err != "" {
-			fail("defaults", "%s", err)
-		}
-		return 0
-	}))
-	t.RawSetString("on", L.NewFunction(func(L *lua.LState) int {
-		l := layer("on")
-		event := L.CheckString(1)
-		if !hookEvents[event] {
-			fail("on", "unknown event %q", event)
-		}
-		l.hooks = append(l.hooks, hook{event: event, layer: l.Name, fn: L.CheckFunction(2)})
-		return 0
-	}))
-	t.RawSetString("complete", L.NewFunction(func(L *lua.LState) int {
-		l := layer("complete")
-		name := L.CheckString(1)
-		if !promptName.MatchString(name) {
-			fail("complete", "name %q must be 1 to 64 letters, digits, - or _", name)
-		}
-		l.completions = append(l.completions, completion{Name: name, Layer: l.Name, fn: L.CheckFunction(2)})
-		return 0
-	}))
-	t.RawSetString("fn", L.NewFunction(func(L *lua.LState) int {
-		l := layer("fn")
-		def, err := parseFn(L.CheckTable(1))
 		if err != nil {
-			fail("fn", "%v", err)
+			return err
 		}
-		def.Layer = l.Name
-		l.fns = append(l.fns, def)
-		return 0
-	}))
-	L.SetGlobal("zel", t) // plugin functions named zel.* land in the same table
-	L.Push(t)
-	return 1
+	}
+	return nil
 }
 
-func parseFn(o *lua.LTable) (*FnDef, error) {
-	def := &FnDef{}
-	def.Name, _ = optString(o, "name")
-	if !nameRe.MatchString(def.Name) {
-		return nil, fmt.Errorf("name %q must be \"name\" or \"ns.name\"", def.Name)
+func (l *Layer) readInstructions(v lua.LValue, where string) error {
+	switch x := v.(type) {
+	case lua.LString:
+		l.instructions = append(l.instructions, instruction{text: string(x)})
+	case *lua.LFunction:
+		l.instructions = append(l.instructions, instruction{fn: x})
+	case *lua.LTable:
+		if x.Len() == 0 {
+			return nil
+		}
+		if !isList(x) {
+			return fmt.Errorf("%s must be text, a function or a list of them", where)
+		}
+		for i := 1; i <= x.Len(); i++ {
+			if err := l.readInstructions(x.RawGetInt(i), fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("%s must be text, a function or a list of them, got %s", where, v.Type())
 	}
-	if isBuiltin(def.Name) {
-		return nil, fmt.Errorf("%s is built in and cannot be overridden", def.Name)
-	}
-	def.Summary, _ = optString(o, "summary")
-	if def.Summary == "" {
-		return nil, fmt.Errorf("%s: summary is required", def.Name)
-	}
-	def.Returns, _ = optString(o, "returns")
-	def.Hidden = optBool(o, "hidden")
-	run, ok := o.RawGetString("run").(*lua.LFunction)
+	return nil
+}
+
+func (l *Layer) readTools(v lua.LValue, where string) error {
+	t, ok := v.(*lua.LTable)
 	if !ok {
-		return nil, fmt.Errorf("%s: run must be a function", def.Name)
+		return fmt.Errorf("%s must be a table {name = {desc = \"...\", fn = function(args) end}}, got %s", where, v.Type())
 	}
-	def.run = run
-	if ex, ok := o.RawGetString("examples").(*lua.LTable); ok {
-		for i := 1; i <= ex.Len(); i++ {
-			def.Examples = append(def.Examples, ex.RawGetInt(i).String())
+	names, err := sortedFields(t, where)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		at := where + "." + name
+		if !nameRe.MatchString(name) {
+			return fmt.Errorf("%s: a tool name is \"name\" or \"ns.name\"", at)
 		}
-	}
-	if ps, ok := o.RawGetString("params").(*lua.LTable); ok {
-		for i := 1; i <= ps.Len(); i++ {
-			row, ok := ps.RawGetInt(i).(*lua.LTable)
-			if !ok {
-				return nil, fmt.Errorf("%s: params[%d] must be {name, type, desc?}", def.Name, i)
-			}
-			var p Param
-			p.Name = lua.LVAsString(row.RawGetInt(1))
-			p.Type = lua.LVAsString(row.RawGetInt(2))
-			p.Desc = lua.LVAsString(row.RawGetInt(3))
-			if p.Name == "" || p.Type == "" {
-				return nil, fmt.Errorf("%s: params[%d] needs a name and a type", def.Name, i)
-			}
-			typ, err := ParseType(p.Type)
-			if err != nil {
-				return nil, fmt.Errorf("%s: param %s: %v", def.Name, p.Name, err)
-			}
-			p.typ = typ
-			if d := o2(row, "default"); d != lua.LNil {
-				g, err := toGo(d)
-				if err != nil {
-					return nil, fmt.Errorf("%s: param %s default: %v", def.Name, p.Name, err)
+		if isBuiltin(name) {
+			return fmt.Errorf("%s: %s is built in and cannot be replaced", at, name)
+		}
+		def, ok := t.RawGetString(name).(*lua.LTable)
+		if !ok {
+			return fmt.Errorf("%s must be {desc = \"...\", fn = function(args) end}", at)
+		}
+		fields, err := sortedFields(def, at)
+		if err != nil {
+			return err
+		}
+		tool := &Tool{Name: name, Layer: l.Name}
+		for _, f := range fields {
+			switch f {
+			case "desc":
+				s, ok := def.RawGetString(f).(lua.LString)
+				if !ok {
+					return fmt.Errorf("%s.desc must be text", at)
 				}
-				p.Default, p.HasDefault = g, true
+				tool.Desc = strings.TrimSpace(string(s))
+			case "fn":
+				fn, ok := def.RawGetString(f).(*lua.LFunction)
+				if !ok {
+					return fmt.Errorf("%s.fn must be a function", at)
+				}
+				tool.fn = fn
+			default:
+				return fmt.Errorf("%s: unknown key %q (expected desc, fn)", at, f)
 			}
-			def.Params = append(def.Params, p)
 		}
+		if tool.Desc == "" {
+			return fmt.Errorf("%s.desc is required: say what it does, its arguments and what it returns", at)
+		}
+		if tool.fn == nil {
+			return fmt.Errorf("%s.fn is required", at)
+		}
+		l.tools = append(l.tools, tool)
 	}
-	return def, nil
+	return nil
 }
 
-func o2(t *lua.LTable, key string) lua.LValue { return t.RawGetString(key) }
+func (l *Layer) readHooks(v lua.LValue, where string) error {
+	t, ok := v.(*lua.LTable)
+	if !ok {
+		return fmt.Errorf("%s must be a table {event = function}, got %s", where, v.Type())
+	}
+	events, err := sortedFields(t, where)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if !hookEvents[event] {
+			return fmt.Errorf("%s: unknown hook %q (expected session_start, message, turn_end, session_end)", where, event)
+		}
+		fn, ok := t.RawGetString(event).(*lua.LFunction)
+		if !ok {
+			return fmt.Errorf("%s.%s must be a function", where, event)
+		}
+		l.hooks = append(l.hooks, hook{event: event, layer: l.Name, fn: fn})
+	}
+	return nil
+}
 
-// ---- plugin functions in a vm ---------------------------------------------
+func (l *Layer) readCompletions(v lua.LValue, where string) error {
+	t, ok := v.(*lua.LTable)
+	if !ok {
+		return fmt.Errorf("%s must be a table {name = function}, got %s", where, v.Type())
+	}
+	names, err := sortedFields(t, where)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if !promptName.MatchString(name) {
+			return fmt.Errorf("%s: name %q must be 1 to 64 letters, digits, - or _", where, name)
+		}
+		fn, ok := t.RawGetString(name).(*lua.LFunction)
+		if !ok {
+			return fmt.Errorf("%s.%s must be a function", where, name)
+		}
+		l.completions = append(l.completions, completion{Name: name, Layer: l.Name, fn: fn})
+	}
+	return nil
+}
 
-// installFns makes the registered functions callable as globals of v.
-func (c *Config) installFns(v *vm) {
-	for _, def := range c.fns {
-		def := def
-		ns, name, dotted := strings.Cut(def.Name, ".")
-		impl := v.hostFn(def.Name, func(L *lua.LState) int { return c.call(v, def, L) })
+// ---- tools in a vm --------------------------------------------------------
+
+// installTools makes the tools callable as globals of v.
+func (c *Config) installTools(v *vm) {
+	for _, tool := range c.tools {
+		tool := tool
+		ns, name, dotted := strings.Cut(tool.Name, ".")
+		impl := v.hostFn(tool.Name, func(L *lua.LState) int { return c.call(v, tool, L) })
 		if !dotted {
-			v.L.SetGlobal(def.Name, impl)
+			v.L.SetGlobal(tool.Name, impl)
 			continue
 		}
 		tbl, ok := v.L.GetGlobal(ns).(*lua.LTable)
@@ -492,46 +507,33 @@ func (c *Config) installFns(v *vm) {
 	}
 }
 
-// call validates the arguments, fills defaults and runs the function body.
-func (c *Config) call(v *vm, def *FnDef, L *lua.LState) int {
-	args := make([]lua.LValue, len(def.Params))
-	for i, p := range def.Params {
-		val := L.Get(i + 1)
-		if val == lua.LNil && p.HasDefault {
-			val = toLua(L, p.Default)
-		}
-		if msg := p.typ.Check(val); msg != "" {
-			raise(L, def.Name, EINVAL, "arg #%d %s: %s", i+1, p.Name, msg)
-		}
-		args[i] = val
+// call runs a tool with its one table of arguments (nil when called without).
+func (c *Config) call(v *vm, tool *Tool, L *lua.LState) int {
+	arg := L.Get(1)
+	if _, ok := arg.(*lua.LTable); !ok && arg != lua.LNil {
+		raise(L, tool.Name, EINVAL, "takes one table of arguments: %s{...}, got %s", tool.Name, arg.Type())
+	}
+	if L.GetTop() > 1 {
+		raise(L, tool.Name, EINVAL, "takes one table of arguments: %s{...}", tool.Name)
 	}
 	if v.role == roleConfig {
-		L.Push(def.run)
-		for _, a := range args {
-			L.Push(a)
-		}
-		L.Call(len(args), 1)
-		res := L.Get(-1)
-		L.Pop(1)
-		L.Push(res)
+		L.Push(tool.fn)
+		L.Push(arg)
+		L.Call(1, 1)
 		return 1
 	}
-	goArgs := make([]any, len(args))
-	for i, a := range args {
-		g, err := toGo(a)
-		if err != nil {
-			raise(L, def.Name, EINVAL, "arg #%d %s: %v", i+1, def.Params[i].Name, err)
-		}
-		goArgs[i] = g
+	g, err := toGo(arg)
+	if err != nil {
+		raise(L, tool.Name, EINVAL, "arguments: %v", err)
 	}
-	res, err := c.invoke(v.ctx, def, goArgs)
+	res, err := c.invoke(v.ctx, tool, g)
 	if err != nil {
 		if v.ctx.Err() != nil {
-			v.ctxErr(def.Name)
+			v.ctxErr(tool.Name)
 		}
 		msg := errorMessage(err)
 		if !errCodeRe.MatchString(msg) {
-			msg = def.Name + ": " + EFAIL + ": " + msg
+			msg = tool.Name + ": " + EFAIL + ": " + msg
 		}
 		L.Error(lua.LString(msg), 0)
 	}
@@ -541,23 +543,10 @@ func (c *Config) call(v *vm, def *FnDef, L *lua.LState) int {
 
 var errCodeRe = regexp.MustCompile(`^[\w.:]+: E[A-Z]+: `)
 
-func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error) {
+// invoke runs a tool's function in the config VM; arguments and result are copied.
+func (c *Config) invoke(ctx context.Context, tool *Tool, arg any) (any, error) {
 	var out struct{ res any }
-	err := c.run(ctx, func(ctx context.Context) error {
-		L := c.v.L
-		prev := c.v.ctx
-		c.v.ctx = ctx
-		L.SetContext(ctx)
-		defer func() { c.v.ctx = prev; L.RemoveContext() }()
-		luaArgs := make([]lua.LValue, len(args))
-		for i, a := range args {
-			luaArgs[i] = toLua(L, a)
-		}
-		if err := L.CallByParam(lua.P{Fn: def.run, NRet: 1, Protect: true}, luaArgs...); err != nil {
-			return err
-		}
-		res := L.Get(-1)
-		L.Pop(1)
+	err := c.call1(ctx, tool.fn, []any{arg}, func(L *lua.LState, res lua.LValue) error {
 		g, err := toGo(res)
 		out.res = g
 		return err
@@ -568,71 +557,56 @@ func (c *Config) invoke(ctx context.Context, def *FnDef, args []any) (any, error
 	return out.res, nil
 }
 
-// ---- hooks ----------------------------------------------------------------
-
-// emit runs the handlers of an event in order. fold applies one handler's
-// returned table to ev and reports whether to stop the chain.
-func (c *Config) emit(ctx context.Context, event string, ev map[string]any, fold func(ret map[string]any) bool) {
-	// The hooks are final once LoadConfig returns, so listing them needs no lock.
-	for _, h := range c.hooks[event] {
-		ret, err := c.runHook(ctx, h, ev)
-		if err != nil {
-			c.env.Log("warn", hookFailure(event, h.layer, err))
-			continue
-		}
-		if ret != nil && fold != nil && fold(ret) {
-			return
-		}
-	}
-}
-
-func (c *Config) runHook(ctx context.Context, h hook, ev map[string]any) (map[string]any, error) {
-	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	var out struct{ ret map[string]any }
-	err := c.run(hctx, func(ctx context.Context) error {
+// call1 calls fn in the config VM with args and hands its first result to read,
+// which runs while the VM is still held.
+func (c *Config) call1(ctx context.Context, fn *lua.LFunction, args []any, read func(L *lua.LState, res lua.LValue) error) error {
+	return c.run(ctx, func(ctx context.Context) error {
 		L := c.v.L
 		prev := c.v.ctx
 		c.v.ctx = ctx
 		L.SetContext(ctx)
 		defer func() { c.v.ctx = prev; L.RemoveContext() }()
-		hc := L.NewTable()
-		hc.RawSetString("session", L.GetGlobal("session"))
-		hc.RawSetString("layer", lua.LString(h.layer))
-		if err := L.CallByParam(lua.P{Fn: h.fn, NRet: 1, Protect: true}, toLua(L, ev), hc); err != nil {
+		luaArgs := make([]lua.LValue, len(args))
+		for i, a := range args {
+			luaArgs[i] = toLua(L, a)
+		}
+		if err := L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}, luaArgs...); err != nil {
 			return err
 		}
 		res := L.Get(-1)
 		L.Pop(1)
-		ret, err := hookResult(res)
-		out.ret = ret
-		return err
+		return read(L, res)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return out.ret, nil
 }
 
-// hookResult is what one hook returned as the map its event folds: a table as is,
-// a string as {__string = text}, anything else as nil.
-func hookResult(res lua.LValue) (map[string]any, error) {
-	t, ok := res.(*lua.LTable)
-	if !ok {
-		if s, isStr := res.(lua.LString); isStr {
-			return map[string]any{"__string": string(s)}, nil
+// ---- hooks ----------------------------------------------------------------
+
+// emit runs the handlers of an event in order with args. Each one's returned
+// text goes to fold ("" when it returned no text); args may change between calls.
+func (c *Config) emit(ctx context.Context, event string, args func() []any, fold func(text string, isText bool)) {
+	// The hooks are final once LoadConfig returns, so listing them needs no lock.
+	for _, h := range c.hooks[event] {
+		text, isText, err := c.runHook(ctx, h, args())
+		if err != nil {
+			c.env.Log("warn", hookFailure(event, h.layer, err))
+			continue
 		}
-		return nil, nil
+		if fold != nil {
+			fold(text, isText)
+		}
 	}
-	g, err := toGo(t)
-	if err != nil {
-		return nil, err
-	}
-	m, _ := g.(map[string]any)
-	if m == nil {
-		m = map[string]any{}
-	}
-	return m, nil
+}
+
+func (c *Config) runHook(ctx context.Context, h hook, args []any) (text string, isText bool, err error) {
+	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	err = c.call1(hctx, h.fn, args, func(L *lua.LState, res lua.LValue) error {
+		if s, ok := res.(lua.LString); ok {
+			text, isText = string(s), true
+		}
+		return nil
+	})
+	return text, isText, err
 }
 
 // hookFailure is the warning for a hook that raised an error or ended early: a
@@ -644,71 +618,67 @@ func hookFailure(event, layer string, err error) string {
 	return fmt.Sprintf("hook %s (%s): %s", event, layer, errorMessage(err))
 }
 
-// notifyText is what one hook asked to tell the agent: a returned string or
-// {notify = "text"}.
-func notifyText(ret map[string]any) string {
-	if s, ok := ret["__string"].(string); ok {
-		return strings.TrimSpace(s)
-	}
-	s, _ := ret["notify"].(string)
-	return strings.TrimSpace(s)
+// errorsIsStop reports whether err is a call that a context or a reload ended.
+func errorsIsStop(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errClosed)
 }
 
-// collect runs the hooks of an event and joins the notification texts they returned.
-func (c *Config) collect(ctx context.Context, event string, ev map[string]any) string {
+// collect runs the hooks of an event and joins the texts they returned.
+func (c *Config) collect(ctx context.Context, event string, args ...any) string {
 	var texts []string
-	c.emit(ctx, event, ev, func(ret map[string]any) bool {
-		if s := notifyText(ret); s != "" {
+	c.emit(ctx, event, func() []any { return args }, func(text string, _ bool) {
+		if s := strings.TrimSpace(text); s != "" {
 			texts = append(texts, s)
 		}
-		return false
 	})
 	return strings.Join(texts, "\n")
 }
 
 // SessionStart runs the session_start hooks; returned text becomes a notification.
 func (c *Config) SessionStart(ctx context.Context) string {
-	return c.collect(ctx, "session_start", map[string]any{})
+	return c.collect(ctx, "session_start")
 }
 
-// SessionEndTimeout is the lifecycle budget for stopping jobs and running end hooks
-// during session shutdown. Running subagents are cancelled first, their end hooks
-// run next, and session_end runs last with what is left. It does not bound DB or
-// config preparation/saving before shutdown, so NewSession, Resume, or save-on-quit
-// can exceed this duration under contention.
+// SessionEndTimeout is the budget for stopping jobs and running the session_end
+// hooks when a session is left. It does not bound DB or config preparation/saving
+// before shutdown, so NewSession, Resume, or save-on-quit can take longer.
 const SessionEndTimeout = 5 * time.Second
 
 // SessionEnd runs the session_end hooks when the session is left (reason:
 // "quit", "new" or "resume"). ctx is the shutdown budget: a hook that cannot
 // start or finish within it is skipped.
 func (c *Config) SessionEnd(ctx context.Context, reason string) {
-	c.emit(ctx, "session_end", map[string]any{"reason": reason}, nil)
+	c.emit(ctx, "session_end", func() []any { return []any{reason} }, nil)
 }
 
-// Message lets message hooks rewrite the user's text.
+// Message lets message hooks rewrite the user's text: each one gets the text the
+// previous one returned.
 func (c *Config) Message(ctx context.Context, text string) string {
-	ev := map[string]any{"text": text}
-	c.emit(ctx, "message", ev, func(ret map[string]any) bool {
-		if s, ok := ret["__string"].(string); ok {
-			ev["text"] = s
+	c.emit(ctx, "message", func() []any { return []any{text, false} }, func(s string, isText bool) {
+		if isText {
+			text = s
 		}
-		return false
 	})
-	return ev["text"].(string)
+	return text
 }
 
 // Notice lets message hooks observe a notification without rewriting it.
 func (c *Config) Notice(ctx context.Context, text string) {
-	c.emit(ctx, "message", map[string]any{"text": text, "notice": true}, nil)
+	c.emit(ctx, "message", func() []any { return []any{text, true} }, nil)
 }
 
-// TurnEnd runs the turn_end hooks; returned text becomes a notification
-// ("" lets the turn end).
-func (c *Config) TurnEnd(ctx context.Context, answer string) string {
-	return c.collect(ctx, "turn_end", map[string]any{"answer": answer})
+// RunningTask is one background task still running when a turn ends.
+type RunningTask struct {
+	ID, Name string
+	Ms       int64
 }
 
-// Subagent runs the subagent_start or subagent_end hooks; they return nothing the agent sees.
-func (c *Config) Subagent(ctx context.Context, event string, info map[string]any) {
-	c.emit(ctx, event, info, nil)
+// TurnEnd runs the turn_end hooks with the answer and the tasks still running;
+// returned text becomes a notification ("" lets the turn end).
+func (c *Config) TurnEnd(ctx context.Context, answer string, running []RunningTask) string {
+	list := make([]any, 0, len(running))
+	for _, t := range running {
+		list = append(list, map[string]any{"id": t.ID, "name": t.Name, "ms": t.Ms})
+	}
+	return c.collect(ctx, "turn_end", answer, list)
 }

@@ -39,8 +39,8 @@ func TestIsHelper(t *testing.T) {
 		{[]string{"-h"}, true},
 		{[]string{"tasks"}, false},
 		{[]string{"view"}, false},
-		{[]string{"events"}, true},
-		{[]string{"session"}, true},
+		{[]string{"events"}, false},
+		{[]string{"session"}, false},
 		{[]string{"write"}, false},
 		{[]string{"patch"}, false},
 		{[]string{"unknown"}, false},
@@ -52,11 +52,38 @@ func TestIsHelper(t *testing.T) {
 	}
 }
 
+func TestRemovedCommands(t *testing.T) {
+	for _, args := range [][]string{{"init"}, {"session", "-s", "x"}, {"models"}, {"events"}, {"--config", "x.lua"}, {"--config=x.lua"}} {
+		var out strings.Builder
+		err := Run(context.Background(), args, strings.NewReader(""), &out, Options{})
+		if err == nil || !strings.Contains(err.Error(), "removed in zel 0.6") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+	var out strings.Builder
+	if err := Run(context.Background(), []string{"frobnicate"}, strings.NewReader(""), &out, Options{}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("unknown command: %v", err)
+	}
+}
+
+// writeProjectInit makes a project directory with .zel/init.lua and enters it.
+func writeProjectInit(t *testing.T, initLua string) string {
+	t.Helper()
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return project
+}
+
 func TestHeadlessWithoutProviders(t *testing.T) {
 	t.Setenv("ZEL_HOME", t.TempDir())
-	t.Setenv("ZEL_CONFIG", "")
-	var out, diagnostics strings.Builder
-	err := Run(context.Background(), []string{"-p", "hello"}, strings.NewReader(""), &out, &diagnostics, Options{})
+	var out strings.Builder
+	err := Run(context.Background(), []string{"-p", "hello"}, strings.NewReader(""), &out, Options{})
 	if err == nil || !strings.Contains(err.Error(), "No provider") || out.Len() != 0 {
 		t.Fatalf("output=%q err=%v", out.String(), err)
 	}
@@ -82,7 +109,6 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("ZEL_HOME", home)
-			t.Setenv("ZEL_CONFIG", "")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var session string
@@ -123,34 +149,21 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			if err := core.WriteConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
-			config := filepath.Join(t.TempDir(), "init.lua")
-			if err := os.WriteFile(config, []byte("require('zel').instructions('headless config')"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			cwd, _ := os.Getwd()
+			writeProjectInit(t, `return {instructions = "headless config"}`)
 			out := &headlessOutput{first: func(id string) {
 				session = id
 				// The ID must already be readable, without acquiring or changing the session.
-				if _, err := core.ReadSession(cwd, id); err != nil {
+				if err := sessionSaved(home, id); err != nil {
 					t.Errorf("session not persisted before stdout: %v", err)
 				}
 			}}
-			var diagnostics strings.Builder
-			err := Run(ctx, []string{"-p", "hello", "--provider", "p", "--model", "override", "--effort", "high", "--config", config}, strings.NewReader(""), out, &diagnostics, Options{})
+			err := Run(ctx, []string{"-p", "hello", "--provider", "p", "--model", "override", "--effort", "high"}, strings.NewReader(""), out, Options{})
 			if !requested || session == "" {
 				t.Fatalf("request=%v session=%q err=%v", requested, session, err)
 			}
 			if scenario == "success" {
 				if err != nil || out.String() != session+"\nfinal answer\n" {
 					t.Fatalf("stdout=%q err=%v", out.String(), err)
-				}
-				records, err := core.ReadSession(cwd, session)
-				if err != nil || len(records) < 2 || records[len(records)-1].Text != "final answer" {
-					t.Fatalf("saved records=%v err=%v", records, err)
-				}
-				var snapshot strings.Builder
-				if err := Run(context.Background(), []string{"session", "-s", session}, strings.NewReader(""), &snapshot, &diagnostics, Options{}); err != nil || !strings.Contains(snapshot.String(), "final answer") {
-					t.Fatalf("session helper: %q err=%v", snapshot.String(), err)
 				}
 			} else {
 				if err == nil || out.String() != session+"\n" {
@@ -160,7 +173,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Fatalf("cancel exit=%d", ExitCode(err))
 				}
 			}
-			saved, err := core.LoadConfig(home, cwd)
+			saved, err := core.LoadConfig(home)
 			if err != nil || saved.Model != "default" || saved.Effort != "medium" {
 				t.Fatalf("defaults changed: %+v err=%v", saved, err)
 			}
@@ -168,127 +181,15 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 	}
 }
 
-func TestInitCommand(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if !IsHelper([]string{"init"}) {
-		t.Fatal("init must not start a session")
-	}
-	var out, diagnostics strings.Builder
-	if err := Run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "Created .zel/init.lua") {
-		t.Fatalf("output: %s", out.String())
-	}
-	if err := Run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {
-		t.Fatal("expected usage error")
-	}
-}
-
-func TestSessionRenameCommand(t *testing.T) {
-	t.Setenv("ZEL_SESSION_ID", "")
-	home := t.TempDir()
-	t.Setenv("ZEL_HOME", home)
-	cwd := t.TempDir()
-	t.Chdir(cwd)
-
+// sessionSaved checks that the session is in the database, without opening it.
+func sessionSaved(home, id string) error {
 	db, err := store.Open(filepath.Join(home, "zel.db"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveSession(store.Session{ID: "s1", Project: cwd, First: "first prompt"}, nil, nil, 0); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	db.Close()
-
-	var out, diagnostics strings.Builder
-
-	// Missing args cases
-	for _, args := range [][]string{
-		{"session", "rename"},
-		{"session", "rename", "s1"},
-		{"session", "rename", "s1", ""},
-		{"session", "rename", "s1", "   "},
-		{"session", "rename", "", "new title"},
-	} {
-		if err := Run(context.Background(), args, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil {
-			t.Fatalf("expected error for missing args %v", args)
-		}
-	}
-
-	// Unknown session ID
-	if err := Run(context.Background(), []string{"session", "rename", "unknown-session", "new title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("expected not found error for unknown session, got %v", err)
-	}
-
-	// Successful rename
-	if err := Run(context.Background(), []string{"session", "rename", "s1", "my custom title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatalf("rename failed: %v", err)
-	}
-
-	db, err = store.Open(filepath.Join(home, "zel.db"))
-	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	defer db.Close()
-
-	loaded, err := db.Session("s1", cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Title != "my custom title" {
-		t.Fatalf("expected title %q, got %q", "my custom title", loaded.Title)
-	}
-
-	summaries, err := db.Sessions(cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(summaries) == 0 || summaries[0].Title != "my custom title" {
-		t.Fatalf("expected summary title %q, got %+v", "my custom title", summaries)
-	}
-
-	// Rename with multiple unquoted arguments (positional)
-	if err := Run(context.Background(), []string{"session", "rename", "s1", "another", "new", "title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatalf("multi-arg rename failed: %v", err)
-	}
-	loaded, err = db.Session("s1", cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Title != "another new title" {
-		t.Fatalf("expected title %q, got %q", "another new title", loaded.Title)
-	}
-
-	// Rename with -s flag
-	if err := Run(context.Background(), []string{"session", "rename", "-s", "s1", "flag", "title", "here"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatalf("-s flag rename failed: %v", err)
-	}
-	loaded, err = db.Session("s1", cwd)
-	if err != nil || loaded.Title != "flag title here" {
-		t.Fatalf("expected title %q, got %q (err: %v)", "flag title here", loaded.Title, err)
-	}
-
-	// Rename defaulting to ZEL_SESSION_ID; ensure multi-word name is not mistaken for an ID
-	t.Setenv("ZEL_SESSION_ID", "s1")
-	if err := Run(context.Background(), []string{"session", "rename", "env", "multi", "word", "title"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatalf("ZEL_SESSION_ID rename failed: %v", err)
-	}
-	loaded, err = db.Session("s1", cwd)
-	if err != nil || loaded.Title != "env multi word title" {
-		t.Fatalf("expected title %q, got %q (err: %v)", "env multi word title", loaded.Title, err)
-	}
-
-	// Help text includes session rename
-	var helpOut strings.Builder
-	if err := Run(context.Background(), []string{"help"}, strings.NewReader(""), &helpOut, &diagnostics, Options{}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(helpOut.String(), "session rename") {
-		t.Fatalf("help text missing session rename: %s", helpOut.String())
-	}
+	_, err = db.SessionProject(id)
+	return err
 }
 
 func TestUpdateReplacesBinaryWithVerifiedRelease(t *testing.T) {
@@ -363,7 +264,6 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_CONFIG", "")
 	t.Setenv("ZEL_DEPTH", "0")
 	t.Setenv("ZEL_SESSION_ID", "")
 	var mu sync.Mutex
@@ -406,10 +306,10 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 		case lastOutput != "":
 			text("parent final: " + lastOutput)
 		default:
-			if !strings.Contains(body.Instructions, "proj.hello(who: string)") || !strings.Contains(body.Instructions, "Project rule: be brief") {
+			if !strings.Contains(body.Instructions, "proj.hello{...}  -- greet") || !strings.Contains(body.Instructions, "Project rule: be brief") {
 				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
 			}
-			code := "local r = agents.run{prompt = 'child task'}\nprint(r.ok, r.answer)\nprint(proj.hello('world'))\nstate.set('seen', 1, 'project')"
+			code := "local r = agent{prompt = 'child task'}\nprint(r.ok, r.answer)\nprint(proj.hello{who = 'world'})"
 			args, _ := json.Marshal(map[string]string{"code": code})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": string(args)})
 			reply(string(item))
@@ -422,20 +322,13 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	if err := core.WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	project := t.TempDir()
-	t.Chdir(project)
-	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	initLua := `local zel = require("zel")
-zel.instructions("Project rule: be brief")
-zel.fn{name = "proj.hello", summary = "greet", params = {{"who", "string"}}, run = function(who) return "hello " .. who end}`
-	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, diagnostics strings.Builder
-	if err := Run(context.Background(), []string{"-p", "parent"}, strings.NewReader(""), &out, &diagnostics, Options{}); err != nil {
-		t.Fatalf("run: %v\n%s", err, diagnostics.String())
+	writeProjectInit(t, `return {
+  instructions = "Project rule: be brief",
+  tools = {["proj.hello"] = {desc = "greet", fn = function(a) return "hello " .. a.who end}},
+}`)
+	var out strings.Builder
+	if err := Run(context.Background(), []string{"-p", "parent"}, strings.NewReader(""), &out, Options{}); err != nil {
+		t.Fatalf("run: %v", err)
 	}
 	if !strings.Contains(out.String(), "parent final:") || !strings.Contains(out.String(), "true\tchild answer") || !strings.Contains(out.String(), "hello world") {
 		t.Fatalf("output: %s", out.String())
@@ -453,7 +346,6 @@ zel.fn{name = "proj.hello", summary = "greet", params = {{"who", "string"}}, run
 func TestHeadlessCancelDuringPromptExpansionSendsNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_CONFIG", "")
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -466,18 +358,12 @@ func TestHeadlessCancelDuringPromptExpansionSendsNothing(t *testing.T) {
 	if err := core.WriteConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	config := filepath.Join(t.TempDir(), "init.lua")
-	if err := os.WriteFile(config, []byte(`
-local zel = require("zel")
-zel.complete("slow", function() sleep(30) return "never" end)`), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeProjectInit(t, `return {completions = {slow = function() sh("sleep 30") return "never" end}}`)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	var out strings.Builder
-	var diagnostics strings.Builder
 	start := time.Now()
-	err := Run(ctx, []string{"-p", "do #slow", "--config", config}, strings.NewReader(""), &out, &diagnostics, Options{})
+	err := Run(ctx, []string{"-p", "do #slow"}, strings.NewReader(""), &out, Options{})
 	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("cancelled expansion took %s", took)
 	}

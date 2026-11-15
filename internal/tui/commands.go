@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"zel/internal/core"
@@ -11,10 +10,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tasks, tracing, rename, info, reload, quit)\n" +
+const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tracing, rename, info, reload, quit)\n" +
 	"Ctrl+N: new session · Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing (Ctrl+M/I require Kitty keyboard protocol)\n" +
 	"Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline\n" +
-	"Sending while zel works: a running command moves to the background (menu: Tasks) and the model reads your message next\n" +
+	"Sending while zel works: the message waits until the running call ends, then the model reads it\n" +
 	"Clipboard: Ctrl+V (Cmd+V when forwarded)\n" +
 	"Edit a queued message to withdraw it; Enter queues the edited draft again\n" +
 	"Up on empty input: recall a message the model has not read yet\n" +
@@ -48,38 +47,6 @@ func sessionTime(t time.Time) string {
 		return t.Format("Jan 2")
 	}
 	return t.Format("2006-01-02")
-}
-
-// taskRow splits a background task into the menu's label and detail columns:
-// "failed", "done", "stopped" or how long it has been running.
-func taskRow(t core.Task) (label, detail string) {
-	detail = t.Status
-	if t.Status == "running" {
-		detail = formatDuration(time.Since(t.Started))
-	}
-	return t.ID + " " + strings.Join(strings.Fields(t.Command), " "), detail
-}
-
-// taskStatus is the status shown in the header of a task page.
-func taskStatus(t core.Task) string {
-	_, detail := taskRow(t)
-	return detail
-}
-
-// findTask returns the listed task with the given id.
-func (m model) findTask(id string) (core.Task, bool) {
-	for _, t := range m.menu.tasks {
-		if t.ID == id {
-			return t, true
-		}
-	}
-	return core.Task{}, false
-}
-
-// taskText is the body of a task page: the command followed by the live output.
-func (m model) taskText(id, output string) string {
-	t, _ := m.findTask(id)
-	return strings.Join(strings.Fields(t.Command), " ") + "\n\n" + output
 }
 
 type modelsLoaded struct {

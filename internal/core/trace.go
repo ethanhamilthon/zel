@@ -5,8 +5,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"zel/internal/store"
 )
 
 // TraceEntry is one step of a session trace: the system prompt, a message, the
@@ -22,8 +20,7 @@ func traceKind(kind string) string {
 	return kind
 }
 
-// Trace merges history, background tasks (at their start time), and logged
-// notices/errors chronologically. Stable ties preserve source order; undated
+// Trace merges history and logged notices/errors chronologically. Stable ties preserve source order; undated
 // legacy history and the system prompt stay before timestamped entries.
 func (a *Runtime) Trace() []TraceEntry { return a.session().Trace() }
 
@@ -37,14 +34,12 @@ func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
 }
 
 // traceSources splits the trace by cost: the history is copied from memory now,
-// while the returned function reads the task rows and the events log. It
+// while the returned function reads the events log. It
 // captures what it needs, so callers can run it without holding any lock.
 func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
 	history := s.historyTrace()
-	db, id, home := s.db, s.id, s.home
-	return history, func() []TraceEntry {
-		return append(taskTrace(db, id), eventTrace(home, id)...)
-	}
+	id, home := s.id, s.home
+	return history, func() []TraceEntry { return eventTrace(home, id) }
 }
 
 func mergeTrace(history, rest []TraceEntry) []TraceEntry {
@@ -71,17 +66,6 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 			}
 			entries = append(entries, TraceEntry{Kind: traceKind(r.Kind), Text: r.Text, At: at})
 		}
-	}
-	return entries
-}
-
-func taskTrace(db *store.Store, session string) (entries []TraceEntry) {
-	tasks, err := sessionTasks(db, session)
-	if err != nil {
-		return nil
-	}
-	for _, t := range tasks {
-		entries = append(entries, TraceEntry{Kind: "task", Text: t.ID + " $ " + t.Command + " · " + t.Status, At: t.Started})
 	}
 	return entries
 }

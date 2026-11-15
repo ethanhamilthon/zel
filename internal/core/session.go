@@ -7,11 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"zel/internal/luart"
-	"zel/internal/store"
 )
 
 func (s *session) lockPath() string { return filepath.Join(s.home, "locks", s.id+".lock") }
@@ -188,31 +186,4 @@ func (s *session) shellEnv() map[string]string {
 		"ZEL_SESSION_ID": s.id,
 		"ZEL_DEPTH":      strconv.Itoa(s.depth),
 	}
-}
-
-// RenameSession updates the title of a persisted session without opening it.
-func RenameSession(cwd, id, title string) error {
-	if !validSessionID(id) {
-		return fmt.Errorf("invalid session ID: %s", id)
-	}
-	clean := strings.Join(strings.Fields(title), " ")
-	if clean == "" {
-		return errors.New("session name cannot be empty")
-	}
-	home, err := ZelHome(cwd)
-	if err != nil {
-		return err
-	}
-	db, err := openDB(filepath.Join(home, "zel.db"))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := db.RenameSession(id, clean); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("session not found: %s", id)
-		}
-		return err
-	}
-	return nil
 }

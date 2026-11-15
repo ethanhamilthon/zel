@@ -10,7 +10,7 @@ import (
 	"zel/internal/provider"
 )
 
-func LoadConfig(home, dir string) (Settings, error) {
+func LoadConfig(home string) (Settings, error) {
 	db, err := openDB(DBPath(home))
 	if err != nil {
 		return Settings{}, err
@@ -20,7 +20,7 @@ func LoadConfig(home, dir string) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return config.Load(home, dir, data)
+	return config.Load(home, data)
 }
 
 // WriteConfig persists only application preferences, never project instructions.

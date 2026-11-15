@@ -2,7 +2,6 @@ package luart
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,69 +10,63 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// builtinBase is the fixed part of the system prompt: the Lua tool and the host API.
-const builtinBase = `# Lua
-One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn/agents.spawn and check it in later calls.
-The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". state.* outlives the VM.
-Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = fs.read("bigfile.md"); print(slice(a, 100, 10)).
-Errors raise "fn: CODE: msg" (pcall); sh/web/agents.run return ok=false instead. Everything blocks.
-You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (tasks.result(id)).
-## built-in
-sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check
-fs.read(path) -> string; slice(s, from, count?) -> string  -- lines from..from+count-1; from<0 counts from the end
-fs.write(path, s, o?)  -- o: append
-fs.edit(path, old, new, o?) -> n  -- exact match; o: all
-fs.patch(path, {{old, new}, ...}) -> n  -- several exact edits, all or nothing; an edit may set all=true
-fs.list(dir) -> {name,dir,size}[]; fs.glob(pat) -> string[]; fs.exists(path) -> bool,kind; fs.tmp(name?) -> path
-fs.grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
-web.get(url, o?) / web.post(url, o?) / web.request{url,method,headers,body,json,timeout} -> {ok,status,headers,body,error}
-json.encode(v, o?) / json.decode(s)
-tasks.spawn(fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; o: name,timeout
---   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
---   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
---   stopped when the session changes (new/resume) or init.lua reloads
-agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
-tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
-state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
-view(path, ...); session.{id,cwd,root,parent,depth,model,effort}; session.rename(name); log.info/warn/notice(msg); sleep(s)
-session.models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}; listed once per session, failures cached with it; listed again after a provider change`
+// builtinHead is the fixed part of the system prompt before the host API.
+const builtinHead = `# Lua
+One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn and check it in later calls.
+The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". Keep what must outlive it in files.
+Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = read("bigfile.md"); print(slice(a, 100, 10)).
+Errors raise "fn: CODE: msg" (pcall); sh and agent return ok=false instead. Everything blocks except tasks.spawn.
+You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (tasks.get(id)).`
 
-// lifecycleLine tells the main agent about the config-side hooks. Subagents get
-// neither the line nor the agents.* functions: they start no children of their own.
-const lifecycleLine = "init.lua registers hooks and completions, not tool calls: subagent_start and subagent_end run around each agents.* child, and their results never reach you. A #name in a user message arrives already expanded."
+// builtinAPI lists the host functions.
+const builtinAPI = `## built-in
+sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check; also for http (curl), json (jq) and waiting (sleep)
+read(path) -> string; slice(s, from, count?) -> string  -- lines from..from+count-1; from<0 counts from the end
+write(path, s, o?)  -- o: append
+edit(path, old, new, o?) -> n  -- exact match; o: all
+patch(path, {{old, new}, ...}) -> n  -- several exact edits, all or nothing; an edit may set all=true
+list(dir) -> {name,dir,size}[]; glob(pat) -> string[]; exists(path) -> bool,kind; tmp(name?) -> path
+grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
+tasks.spawn(name, fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; name shows in the UI; o: timeout
+--   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
+--   stopped when the session changes (new/resume) or init.lua reloads
+tasks.list() -> {id,name,state}[]; tasks.get(id) -> {id,name,state,result?}; tasks.tail(id, n?) -> string; tasks.stop(id)
+tasks.wait(id, timeout?) -> result | nil,"timeout"; tasks.wait({id, ...}, timeout?) -> results[] (nil where not finished)
+--   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
+agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error}  -- a subagent; blocks until it answers
+--   in the background: tasks.spawn("review", function() return agent{prompt = "..."} end)
+view(path, ...)  -- attach images to the next request; log(msg)  -- write to Tracing only
+session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)
+models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}
+A #name in a user message arrives already expanded.`
 
 // BuiltinPrompt is the fixed part of the system prompt, for the main agent.
-const BuiltinPrompt = builtinBase + "\n" + lifecycleLine
+const BuiltinPrompt = builtinHead + "\n" + builtinAPI
 
 // Builtin is BuiltinPrompt for the given agent depth: subagents (depth > 0)
-// cannot start agents, so their prompt leaves agents.* out.
+// cannot start agents, so their prompt leaves agent{} out.
 func Builtin(depth int) string {
 	if depth == 0 {
 		return BuiltinPrompt
 	}
 	r := strings.NewReplacer(
-		"\n"+lifecycleLine, "",
-		"run longer work with tasks.spawn/agents.spawn", "run longer work with tasks.spawn",
-		"agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}\n", "",
-		"tasks.* and agents.* both have:", "tasks.* also has:",
-		"sh/web/agents.run return", "sh/web return",
+		"agent{prompt,model?,effort?,provider?,cwd?,timeout?} -> {ok,answer,session,error}  -- a subagent; blocks until it answers\n", "",
+		"--   in the background: tasks.spawn(\"review\", function() return agent{prompt = \"...\"} end)\n", "",
+		"sh and agent return", "sh returns",
 	)
-	return r.Replace(BuiltinPrompt) + "\nYou are a subagent: agents.* is not available."
+	return r.Replace(BuiltinPrompt) + "\nYou are a subagent: agent() is not available."
 }
 
-// Prompt renders the plugin-provided part of the system prompt: instructions and
-// dynamic pieces of every layer, in layer order.
+// Prompt renders the instructions of every layer, in layer order.
 func (c *Config) Prompt(ctx context.Context) string {
-	layers := c.layers // final once LoadConfig returns
 	var parts []string
-	for _, l := range layers {
-		for _, text := range l.instructions {
-			if t := strings.TrimSpace(text); t != "" {
-				parts = append(parts, t)
+	for _, l := range c.layers { // final once LoadConfig returns
+		for _, in := range l.instructions {
+			text := in.text
+			if in.fn != nil {
+				text = c.renderPrompt(ctx, l, in.fn)
 			}
-		}
-		for _, fn := range l.prompts {
-			if t := strings.TrimSpace(c.renderPrompt(ctx, l, fn)); t != "" {
+			if t := strings.TrimSpace(text); t != "" {
 				parts = append(parts, t)
 			}
 		}
@@ -84,44 +77,32 @@ func (c *Config) Prompt(ctx context.Context) string {
 func (c *Config) renderPrompt(ctx context.Context, l *Layer, fn *lua.LFunction) string {
 	pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	var out struct{ text string }
-	err := c.run(pctx, func(ctx context.Context) error {
-		L := c.v.L
-		prev := c.v.ctx
-		c.v.ctx = ctx
-		L.SetContext(ctx)
-		defer func() { c.v.ctx = prev; L.RemoveContext() }()
-		arg := L.NewTable()
-		arg.RawSetString("session", L.GetGlobal("session"))
-		arg.RawSetString("layer", lua.LString(l.Name))
-		if err := L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}, arg); err != nil {
-			c.env.Notice(fmt.Sprintf("%s: zel.prompt failed: %s", l.Name, errorMessage(err)))
-			return nil
-		}
-		res := L.Get(-1)
-		L.Pop(1)
+	var text string
+	err := c.call1(pctx, fn, nil, func(L *lua.LState, res lua.LValue) error {
 		if res != lua.LNil {
-			out.text = luaString(L, res)
+			text = luaString(L, res)
 		}
 		return nil
 	})
 	if err != nil {
+		if !errorsIsStop(err) {
+			c.env.Notice(fmt.Sprintf("%s: instructions failed: %s", l.Name, errorMessage(err)))
+		}
 		return ""
 	}
-	return out.text
+	return text
 }
 
-// FunctionDocs renders the plugin functions grouped by layer ("## name (path)").
-func (c *Config) FunctionDocs() string {
+// ToolDocs renders the tools grouped by layer ("## tools (path)").
+func (c *Config) ToolDocs() string {
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
 	for _, l := range c.layers {
 		var lines []string
-		for _, f := range l.fns {
-			if f.Hidden || c.fns[f.Name] != f {
-				continue
+		for _, t := range l.tools {
+			if c.tools[t.Name] == t {
+				lines = append(lines, renderTool(t)...)
 			}
-			lines = append(lines, renderFn(f)...)
 		}
 		if len(lines) == 0 {
 			continue
@@ -130,50 +111,28 @@ func (c *Config) FunctionDocs() string {
 		if home != "" && strings.HasPrefix(path, home+"/") {
 			path = "~" + strings.TrimPrefix(path, home)
 		}
-		fmt.Fprintf(&b, "\n## %s (%s)\n%s", l.Name, path, strings.Join(lines, "\n"))
+		fmt.Fprintf(&b, "\n## tools (%s)\n%s", path, strings.Join(lines, "\n"))
 	}
 	return b.String()
 }
 
-// SystemPrompt is the whole prompt: layer instructions, then the Lua API.
+// SystemPrompt is the whole prompt: layer instructions, then the Lua API and the tools.
 func (c *Config) SystemPrompt(ctx context.Context) string {
-	text := Builtin(c.env.Info().Depth) + c.FunctionDocs()
+	text := Builtin(c.env.Info().Depth) + c.ToolDocs()
 	if own := c.Prompt(ctx); own != "" {
 		return own + "\n\n" + text
 	}
 	return text
 }
 
-func renderFn(f *FnDef) []string {
-	var params []string
-	for _, p := range f.Params {
-		s := p.Name
-		if p.typ != nil && p.typ.Optional {
-			s += "?"
+// renderTool is name{...} and the first line of desc, then the other lines as comments.
+func renderTool(t *Tool) []string {
+	desc := strings.Split(t.Desc, "\n")
+	lines := []string{t.Name + "{...}  -- " + strings.TrimSpace(desc[0])}
+	for _, d := range desc[1:] {
+		if d = strings.TrimSpace(d); d != "" {
+			lines = append(lines, "--   "+d)
 		}
-		typ := p.Type
-		if p.typ != nil {
-			typ = p.typ.Raw
-		}
-		s += ": " + typ
-		if p.HasDefault {
-			data, _ := json.Marshal(p.Default)
-			s += "=" + string(data)
-		}
-		params = append(params, s)
-	}
-	head := fmt.Sprintf("%s(%s)", f.Name, strings.Join(params, ", "))
-	if f.Returns != "" {
-		head += " -> " + f.Returns
-	}
-	lines := []string{head + "  -- " + f.Summary}
-	for _, p := range f.Params {
-		if p.Desc != "" {
-			lines = append(lines, fmt.Sprintf("--   %s: %s", p.Name, p.Desc))
-		}
-	}
-	for _, e := range f.Examples {
-		lines = append(lines, "--   e.g. "+e)
 	}
 	return lines
 }

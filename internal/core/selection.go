@@ -32,7 +32,7 @@ func (s *session) SelectSession(ctx context.Context, provider, model, effort str
 	if err := SaveDefault(s.home, c.base, c.sel); err != nil {
 		return fmt.Errorf("model selected for this session, but the default was not saved: %w", err)
 	}
-	if base, err := LoadConfig(s.home, s.dir); err == nil {
+	if base, err := LoadConfig(s.home); err == nil {
 		_ = s.applyLocked(base)
 	}
 	return nil

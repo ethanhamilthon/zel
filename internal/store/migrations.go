@@ -46,6 +46,7 @@ var migrations = []string{
 		value TEXT NOT NULL,
 		PRIMARY KEY (scope, key)
 	) WITHOUT ROWID;`,
+	`DROP TABLE kv;`, // state.* was removed in 0.6
 }
 
 func migrate(db *sql.DB) error {

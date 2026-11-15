@@ -79,6 +79,7 @@ type model struct {
 	promptPending             int // seq of the expansion in flight; 0 when none
 	promptCancel              context.CancelFunc
 	subagents                 []core.SubagentRun
+	tasks                     []core.ActiveTask // running background tasks, one chat row each
 	frameAt                   time.Time
 	dirty                     bool
 	renderPending             bool
@@ -102,6 +103,9 @@ type SubagentRun = core.SubagentRun
 // activeSubagents is the running agents as last reported by the runtime. They
 // arrive as subagentsChanged messages, so rendering never queries anything.
 func (m model) activeSubagents() []SubagentRun { return m.subagents }
+
+// hasRows reports whether subagent or task rows show under the chat; they animate.
+func (m model) hasRows() bool { return len(m.subagents)+len(m.tasks) > 0 }
 
 func newComposer() textarea.Model {
 	input := textarea.New()
@@ -137,7 +141,7 @@ func newModel(a *core.Runtime, cwd string) model {
 	if session, err := ctl.Session(); err == nil {
 		m.entries, m.contextTokens = session.Records, session.Context
 	}
-	m.subagents = ctl.ActiveSubagents()
+	m.subagents, m.tasks = ctl.ActiveSubagents(), ctl.ActiveTasks()
 	m.refresh(true)
 	if len(ctl.Settings().Providers) == 0 {
 		m.menu = &menuState{}
@@ -303,7 +307,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.dirty || m.renderPending {
 			m.refresh(follow)
 		}
-		if len(m.subagents) > 0 {
+		if m.hasRows() {
 			return m, m.pulse()
 		}
 		return m, nil
@@ -315,7 +319,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ctl == nil {
 			return m, nil
 		}
-		if !m.ctl.Status().Busy && len(m.subagents) == 0 {
+		if !m.ctl.Status().Busy && !m.hasRows() {
 			m.refresh(follow)
 			return m, nil
 		}
@@ -323,9 +327,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh(follow)
 		return m, m.pulse()
 	case subagentsChanged:
-		m.subagents = m.ctl.ActiveSubagents()
+		m.subagents, m.tasks = m.ctl.ActiveSubagents(), m.ctl.ActiveTasks()
 		m.refresh(follow)
-		if len(m.subagents) > 0 {
+		if m.hasRows() {
 			return m, m.pulse()
 		}
 		return m, nil

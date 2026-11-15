@@ -157,9 +157,8 @@ func New(dir string, opts Options) (*Runtime, error) {
 	}
 	a.project, a.Shell.Dir = s.project, s.dir
 	s.loadLua()
-	// Initial selection: CLI flags, then zel.defaults, then the stored preferences.
-	defaults := s.LuaDefaults()
-	provider, model, effort := cmp.Or(opts.Provider, defaults.Provider), cmp.Or(opts.Model, defaults.Model), cmp.Or(opts.Effort, defaults.Effort)
+	// Initial selection: CLI flags, then the stored preferences.
+	provider, model, effort := opts.Provider, opts.Model, opts.Effort
 	if provider != "" || model != "" || effort != "" {
 		st := s.Settings()
 		if err := s.ConfigureSession(context.Background(), cmp.Or(provider, st.Provider), cmp.Or(model, st.Model), cmp.Or(effort, st.Effort)); err != nil {
@@ -208,7 +207,7 @@ func (s *session) loadConfig(dir string) error {
 	if s.cfg == nil {
 		s.cfg = &settingsState{}
 	}
-	base, err := LoadConfig(s.home, dir)
+	base, err := LoadConfig(s.home)
 	if err != nil {
 		return err
 	}

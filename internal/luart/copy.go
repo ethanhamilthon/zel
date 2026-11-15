@@ -125,7 +125,7 @@ func (c *copier) function(f *lua.LFunction, what string) (lua.LValue, error) {
 }
 
 // goFunction maps a Go function to the one with the same global name in the
-// target state ("sh", "fs.read", "string.format", a plugin function...).
+// target state ("sh", "read", "string.format", a tool from init.lua...).
 func (c *copier) goFunction(f *lua.LFunction, what string) (lua.LValue, error) {
 	if c.gnames == nil {
 		c.gnames = map[*lua.LFunction]string{}

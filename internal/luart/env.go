@@ -1,5 +1,5 @@
-// Package luart embeds the Lua runtime: one fresh VM per tool call with the host
-// API, and a long-lived config VM that runs init.lua plugins and hooks.
+// Package luart embeds the Lua runtime: the session's main VM for tool calls,
+// task VMs, the host API, and a long-lived config VM that runs init.lua tools and hooks.
 package luart
 
 import (
@@ -19,7 +19,7 @@ type SessionInfo struct {
 	LuaPath               []string // extra package.path directories
 }
 
-// ModelInfo is one model of a provider, as session.models() lists it.
+// ModelInfo is one model of a provider, as models() lists it.
 type ModelInfo struct {
 	Provider, Model string
 	ContextWindow   int64 // tokens; zero when the provider does not say
@@ -36,14 +36,14 @@ type TaskOpts struct {
 // function's first return value.
 type TaskFunc func(ctx context.Context, out io.Writer) (value any, err error)
 
-// AgentOpts are the options of agents.spawn.
+// AgentOpts are the options of agent{}.
 type AgentOpts struct {
 	Prompt, Model, Effort, Provider, Cwd string
 	Timeout                              time.Duration
 	Waited                               bool // the caller waits for the result: no notification is queued
 }
 
-// JobInfo is one row of tasks.list / agents.list. Name is set for tasks, Model
+// JobInfo is one row of tasks.list. Name is set for tasks, Model
 // and Prompt for agents.
 type JobInfo struct {
 	ID, Name, Model, State, Prompt string
@@ -81,20 +81,10 @@ type Agents interface {
 	Spawn(o AgentOpts) (id string, err error)
 }
 
-// StateStore keeps the values behind state.get/set/list.
-type StateStore interface {
-	Get(scope, key string) (value string, ok bool, err error)
-	Set(scope, key, value string) error
-	Delete(scope, key string) error
-	List(scope, prefix string) ([]string, error)
-	Size(scope string) (int, error)
-}
-
 // Env is everything the host functions need from the application.
 type Env interface {
 	Info() SessionInfo
 	ShellEnv() map[string]string
-	State() StateStore
 	Tasks() Tasks
 	Agents() Agents
 	View(path string) error

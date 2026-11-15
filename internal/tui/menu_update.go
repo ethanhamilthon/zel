@@ -60,19 +60,6 @@ func (m model) menuKey(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	mu := m.menu
 	n := len(m.menuRows())
-	if v.String() == "ctrl+x" {
-		id := ""
-		if mu.page == menuText && mu.parent == menuTasks {
-			id = mu.task
-		} else if mu.page == menuTasks && mu.selected < len(mu.tasks) {
-			id = mu.tasks[len(mu.tasks)-1-mu.selected].ID
-		}
-		if id != "" {
-			_ = m.ctl.StopTask(id)
-			m.refreshMenu()
-		}
-		return m, nil
-	}
 	if mu.page == menuText || mu.page == menuInfo {
 		switch v.String() {
 		case "esc":
@@ -218,38 +205,35 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			cmd := m.fetchModels()
 			return m, cmd
 		case 3:
-			mu.tasks, _ = m.ctl.Tasks()
-			open(menuTasks)
-		case 4:
 			mu.trace = m.sessionTrace()
 			mu.listCache = nil
 			mu.parent = menuMain
 			open(menuTracing)
 			mu.selected = max(0, len(mu.trace)-1)
-		case 5:
+		case 4:
 			mu.name = ""
 			open(menuRename)
-		case 6:
+		case 5:
 			info, err := m.ctl.Info()
 			if err != nil {
 				return m.closeMenu().reject(err)
 			}
 			mu.info = infoRows(info)
 			open(menuInfo)
-		case 7:
+		case 6:
 			m = m.closeMenu()
 			m.ctl.Reload()
 			m.refresh(true)
-		case 8:
+		case 7:
 			m.openText("Menu/Help", help())
 			return m, nil
-		case 10:
-			m.openProviders()
-		case 11:
-			open(menuSettings)
-		case 12:
-			return m.closeMenu().copyAnswer()
 		case 9:
+			m.openProviders()
+		case 10:
+			open(menuSettings)
+		case 11:
+			return m.closeMenu().copyAnswer()
+		case 8:
 			m = m.closeMenu()
 			return m.quit()
 		}
@@ -341,15 +325,6 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			return m.submit(m.ctl.SelectModel(mu.provider, mu.model, core.Efforts[index]))
 		}
 		return m, nil
-	case menuTasks:
-		if index < len(mu.tasks) {
-			mu.task = mu.tasks[len(mu.tasks)-1-index].ID
-			output, err := m.ctl.TaskOutput(mu.task)
-			if err != nil {
-				return m.reject(err)
-			}
-			m.openText(mu.task, m.taskText(mu.task, output))
-		}
 	case menuTracing:
 		if index < len(mu.trace) {
 			m.openTrace(index)
@@ -376,7 +351,7 @@ func (m model) openMenuPage(page menuPage) (tea.Model, tea.Cmd) {
 	if m.menu != nil && m.menu.page == page {
 		return m.closeMenu(), nil
 	}
-	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTasks: 3, menuTracing: 4, menuInfo: 6}[page]}
+	m.menu = &menuState{selected: map[menuPage]int{menuModel: 2, menuResume: 0, menuTracing: 3, menuInfo: 5}[page]}
 	next, cmd := m.menuActivate()
 	result := next.(model)
 	if result.menu != nil {

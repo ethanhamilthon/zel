@@ -2,9 +2,6 @@ package luart
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -122,7 +119,7 @@ func TestCancel(t *testing.T) {
 	env := newEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(150 * time.Millisecond); cancel() }()
-	r := (&Runner{Env: env}).Run(ctx, "sleep(10)")
+	r := (&Runner{Env: env}).Run(ctx, "while true do end")
 	if !r.IsError || !strings.Contains(r.Output, ECANCELED) {
 		t.Fatalf("%q", r.Output)
 	}
@@ -131,26 +128,26 @@ func TestCancel(t *testing.T) {
 func TestFS(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `
-fs.write("a/b.txt", "one\ntwo\nthree\n")
-fs.write("a/b.txt", "four\n", {append=true})
+write("a/b.txt", "one\ntwo\nthree\n")
+write("a/b.txt", "four\n", {append=true})
 local out = {}
-out[#out+1] = slice(fs.read("a/b.txt"), 2, 2) .. "\n"
-out[#out+1] = fs.edit("a/b.txt", "two", "2")
-out[#out+1] = select(2, fs.exists("a")) .. select(2, fs.exists("a/b.txt"))
-local ok, e = pcall(fs.edit, "a/b.txt", "zzz", "x"); out[#out+1] = e
-fs.write("a/c.txt", "x x")
-ok, e = pcall(fs.edit, "a/c.txt", "x", "y"); out[#out+1] = e
-out[#out+1] = fs.edit("a/c.txt", "x", "y", {all=true})
-ok, e = pcall(fs.read, "nope"); out[#out+1] = e
-out[#out+1] = json.encode(fs.glob("a/*.txt"))
-out[#out+1] = json.encode(fs.list("a"))
-out[#out+1] = fs.patch("a/c.txt", {{"y y", "z"}, {old = "z", new = "patched"}})
-ok, e = pcall(fs.patch, "a/c.txt", {{"patched", "q"}, {"missing", "w"}}); out[#out+1] = e
+out[#out+1] = slice(read("a/b.txt"), 2, 2) .. "\n"
+out[#out+1] = edit("a/b.txt", "two", "2")
+out[#out+1] = select(2, exists("a")) .. select(2, exists("a/b.txt"))
+local ok, e = pcall(edit, "a/b.txt", "zzz", "x"); out[#out+1] = e
+write("a/c.txt", "x x")
+ok, e = pcall(edit, "a/c.txt", "x", "y"); out[#out+1] = e
+out[#out+1] = edit("a/c.txt", "x", "y", {all=true})
+ok, e = pcall(read, "nope"); out[#out+1] = e
+out[#out+1] = glob("a/*.txt")
+out[#out+1] = list("a")
+out[#out+1] = patch("a/c.txt", {{"y y", "z"}, {old = "z", new = "patched"}})
+ok, e = pcall(patch, "a/c.txt", {{"patched", "q"}, {"missing", "w"}}); out[#out+1] = e
 return out`)
 	if r.IsError {
 		t.Fatal(r.Output)
 	}
-	for _, want := range []string{`two\nthree\n`, `dirfile`, `fs.edit: ENOMATCH`, `fs.edit: EAMBIG`, `fs.read: ENOENT: nope`, `[\"a/b.txt\",\"a/c.txt\"]`, `\"name\":\"b.txt\"`, `fs.patch: ENOMATCH: edit #2`} {
+	for _, want := range []string{`two\nthree\n`, `dirfile`, `edit: ENOMATCH`, `edit: EAMBIG`, `read: ENOENT: nope`, `["a/b.txt","a/c.txt"]`, `"name":"b.txt"`, `patch: ENOMATCH: edit #2`} {
 		if !strings.Contains(r.Output, want) {
 			t.Errorf("missing %q in %s", want, r.Output)
 		}
@@ -168,7 +165,7 @@ func TestGrepAndTmp(t *testing.T) {
 	os.MkdirAll(filepath.Join(env.cwd, "src"), 0o755)
 	os.WriteFile(filepath.Join(env.cwd, "src/a.go"), []byte("package a\nfunc Foo() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(env.cwd, "src/b.txt"), []byte("Foo here\n"), 0o644)
-	r := run(t, env, nil, `local g = fs.grep("Foo", {glob="*.go"}); return {#g, g[1].file, g[1].line}`)
+	r := run(t, env, nil, `local g = grep("Foo", {glob="*.go"}); return {#g, g[1].file, g[1].line}`)
 	if r.Output != `[1,"src/a.go",2]` {
 		t.Fatalf("%q", r.Output)
 	}
@@ -176,171 +173,103 @@ func TestGrepAndTmp(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("%v", rows)
 	}
-	r = run(t, env, nil, `local p = fs.tmp("x.json"); fs.write(p, "1"); return p`)
+	r = run(t, env, nil, `local p = tmp("x.json"); write(p, "1"); return p`)
 	if !strings.HasPrefix(r.Output, env.cwd+"/tmp/") || !strings.HasSuffix(r.Output, "/x.json") {
 		t.Fatalf("%q", r.Output)
 	}
 }
 
-func TestState(t *testing.T) {
-	env := newEnv(t)
-	r := run(t, env, nil, `
-state.set("a", {n=1, list={1,2}})
-state.set("b", "x", "project")
-state.set("c", 3)
-state.set("c", nil)
-return {state.get("a"), state.get("b", "project"), state.get("b"), state.list(), state.list("", "project")}`)
-	if r.Output != `[{"list":[1,2],"n":1},"x",null,["a"],["b"]]` && !strings.Contains(r.Output, `"x"`) {
-		t.Fatalf("%q", r.Output)
-	}
-	r = run(t, env, nil, `local ok, e = pcall(state.set, "k", string.rep("x", 70000)); return e`)
-	if !strings.Contains(r.Output, "state.set: ELIMIT") {
-		t.Fatalf("%q", r.Output)
-	}
-	r = run(t, env, nil, `local ok, e = pcall(state.set, "k", function() end); return e`)
-	if !strings.Contains(r.Output, "state.set: EINVAL") {
-		t.Fatalf("%q", r.Output)
-	}
-	r = run(t, env, nil, `local ok, e = pcall(state.get, "k", "world"); return e`)
-	if !strings.Contains(r.Output, "EINVAL") {
-		t.Fatalf("%q", r.Output)
-	}
-}
-
-func TestJobNamespaces(t *testing.T) {
+func TestTasksAndAgent(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `
 local n = 41
 local t = {x = {1, 2}}
 t.self = t
 local function inc(v) return v + 1 end
-local id = tasks.spawn(function()
+local id = tasks.spawn("copy check", function()
   print("hi from task")
   t.x[3] = 3; n = n + 100
   return {inc(n), #t.x, string.format("%d", 7), t.self == t, type(leaked)}
 end)
 leaked = 1
 local res = tasks.wait(id, 5)
-local slow = tasks.spawn(function() sleep(30) end, {name = "slow"})
-local st = tasks.status(slow)
+local slow = tasks.spawn("slow", function() while true do end end)
+local st = tasks.get(slow)
 local r2, why = tasks.wait(slow, 0.05)
 tasks.stop(slow)
-local a = agents.run{prompt="hello", model="m"}
-local aid = agents.spawn{prompt="p2"}
-local rs = agents.wait_all({aid}, 1)
-local ok, e = pcall(agents.status, id) -- a task id is not an agent
+local many = tasks.wait({id, slow}, 1)
+local a = agent{prompt="hello", model="m"}
 local co = coroutine.create(function() end)
-local ok2, e2 = pcall(tasks.spawn, function() return co end)
-return {type(id), res.value, res.out, n, #t.x, st, tostring(r2), why, tasks.result(slow).ok, a.answer, rs[1].answer, #tasks.list(), #agents.list(), e, e2, tasks.run == nil}`)
-	want := `["string",[142,3,"7",true,"nil"],"hi from task\n",41,2,"running","nil","timeout",false,"re: hello","re: p2",2,2,"agents.status: ENOENT: no such job","tasks.spawn: EINVAL: cannot copy upvalue 'co' (a thread) into the task",true]`
+local ok1, e1 = pcall(tasks.spawn, function() end)
+local ok2, e2 = pcall(tasks.spawn, "co", function() return co end)
+local ok3, e3 = pcall(tasks.get, nil)
+return {type(id), res.value, res.out, n, #t.x, st.state, st.name, st.result == nil, tostring(r2), why, many[1].ok, tasks.get(id).result.ok, a.answer, #tasks.list(), e1, e2, tasks.status == nil, agents == nil}`)
+	want := `["string",[142,3,"7",true,"nil"],"hi from task\n",41,2,"running","slow",true,"nil","timeout",true,true,"re: hello",2,"tasks.spawn: EINVAL: expected a name first: tasks.spawn(\"build checks\", function() ... end)","tasks.spawn: EINVAL: cannot copy upvalue 'co' (a thread) into the task",true,true]`
 	if r.Output != want {
 		t.Fatalf("%q", r.Output)
 	}
-	if len(env.spawned) != 2 || env.spawned[0].Model != "m" {
+	if len(env.spawned) != 1 || env.spawned[0].Model != "m" || !env.spawned[0].Waited {
 		t.Fatalf("%+v", env.spawned)
 	}
-	r = run(t, env, nil, `local ok, e = pcall(agents.spawn, {prompt="boom"}); return e`)
-	if !strings.Contains(r.Output, "agents.spawn: EFAIL: no budget") {
+	r = run(t, env, nil, `local ok, e = pcall(agent, {prompt="boom"}); return e`)
+	if !strings.Contains(r.Output, "agent: EFAIL: no budget") {
 		t.Fatalf("%q", r.Output)
 	}
 	env.depth = 1
-	r = run(t, env, nil, `local ok, e = pcall(agents.spawn, {prompt="x"}); return e`)
-	if !strings.Contains(r.Output, "agents.spawn: EDENIED") {
+	r = run(t, env, nil, `local ok, e = pcall(agent, {prompt="x"}); return e`)
+	if !strings.Contains(r.Output, "agent: EDENIED") {
 		t.Fatalf("subagent spawned an agent: %q", r.Output)
-	}
-	if p := Builtin(1); strings.Contains(p, "agents.spawn") || strings.Contains(p, "agents.run") || !strings.Contains(p, "tasks.spawn(fn") {
-		t.Fatalf("subagent prompt: %s", p)
 	}
 }
 
-func TestSessionModels(t *testing.T) {
+func TestModels(t *testing.T) {
 	env := newEnv(t)
 	env.models = []ModelInfo{{Provider: "p", Model: "m1", ContextWindow: 8000}, {Provider: "p", Model: "m2"}}
 	env.failures = map[string]string{"bad": "401 unauthorized"}
-	r := run(t, env, nil, `local m, f = session.models(); return {#m, m[1].model, m[1].context_window, m[2].context_window, f.bad}`)
+	r := run(t, env, nil, `local m, f = models(); return {#m, m[1].model, m[1].context_window, m[2].context_window, f.bad}`)
 	if r.IsError || r.Output != `[2,"m1",8000,0,"401 unauthorized"]` {
 		t.Fatalf("%q", r.Output)
 	}
 	// Without models or failures both values are still tables, so pairs(failures) is safe.
 	env.models, env.failures = nil, nil
-	r = run(t, env, nil, `local m, f = session.models(); local n = 0; for _ in pairs(f) do n = n + 1 end; return {#m, n}`)
+	r = run(t, env, nil, `local m, f = models(); local n = 0; for _ in pairs(f) do n = n + 1 end; return {#m, n}`)
 	if r.IsError || r.Output != `[0,0]` {
 		t.Fatalf("%q", r.Output)
 	}
 }
 
-func TestBuiltinPromptNamesSessionFields(t *testing.T) {
-	for _, depth := range []int{0, 1} {
-		p := Builtin(depth)
-		for _, want := range []string{
-			"session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)",
-			"session.models() -> models, failures",
-			"log.info/warn/notice(msg)",
-			"stopped when the session changes (new/resume) or init.lua reloads",
-		} {
-			if !strings.Contains(p, want) {
-				t.Fatalf("depth %d prompt misses %q", depth, want)
-			}
-		}
-	}
-	if !isBuiltin("session.models") {
-		t.Fatal("session.models can be overridden by a plugin")
-	}
-}
-
 func TestMiscHost(t *testing.T) {
 	env := newEnv(t)
-	r := run(t, env, nil, `view("a.png", "b.png"); session.rename("name"); log.notice("hi"); log.warn("w"); return {session.id, session.model, json.decode('{"a":[1,2]}').a[2], json.encode({1}, {indent=2})}`)
+	r := run(t, env, nil, `view("a.png", "b.png"); session.rename("name"); log("w", 1); return {session.id, session.model, web == nil, json == nil, state == nil, sleep == nil}`)
 	if r.IsError {
 		t.Fatal(r.Output)
 	}
-	if len(env.viewed) != 2 || env.viewed[0] != env.cwd+"/a.png" || env.renamed != "name" || env.notices[0] != "hi" || env.logs[0] != "warn: w" {
+	if len(env.viewed) != 2 || env.viewed[0] != env.cwd+"/a.png" || env.renamed != "name" || env.logs[0] != "info: w 1" {
 		t.Fatalf("%+v", env)
 	}
-	if !strings.HasPrefix(r.Output, `["s1","m",2,`) {
+	if r.Output != `["s1","m",true,true,true,true]` {
 		t.Fatalf("%q", r.Output)
 	}
 }
 
-func TestWeb(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		w.Header().Set("X-Echo", r.Method)
-		if r.URL.Path == "/missing" {
-			w.WriteHeader(404)
-		}
-		_, _ = w.Write([]byte(r.Method + ":" + string(body)))
-	}))
-	defer srv.Close()
-	env := newEnv(t)
-	r := run(t, env, nil, `
-local g = web.get("`+srv.URL+`/x")
-local p = web.post("`+srv.URL+`/x", {json = {a = 1}})
-local m = web.get("`+srv.URL+`/missing")
-local bad = web.get("http://127.0.0.1:1/")
-local q = web.request{url = "`+srv.URL+`/y", method = "PUT", body = "zz", headers = {["X-A"] = "b"}}
-print(g.ok, g.status, g.body, p.body, m.ok, m.status, bad.ok, bad.status, q.body)`)
-	if r.IsError || r.Output != "true\t200\tGET:\t"+`POST:{"a":1}`+"\tfalse\t404\tfalse\t0\tPUT:zz" {
-		t.Fatalf("%q", r.Output)
-	}
-}
-
-// The main agent's built-in prompt says what the config-side hooks do; subagents
-// get neither that line nor the agents.* functions.
-func TestBuiltinPromptLifecycleByDepth(t *testing.T) {
+// The prompt lists every host global; a subagent's prompt leaves agent{} out.
+func TestBuiltinPromptByDepth(t *testing.T) {
 	main, sub := Builtin(0), Builtin(1)
-	for _, want := range []string{"init.lua registers hooks and completions, not tool calls", "subagent_start and subagent_end run around each agents.* child", "#name in a user message arrives already expanded", "agents.spawn{prompt,model"} {
+	for name := range builtinNames {
+		if !strings.Contains(main, name) {
+			t.Errorf("main prompt misses %s", name)
+		}
+	}
+	for _, want := range []string{"session.{id,cwd,root,parent,depth,model,effort}; session.rename(name)", "tasks.spawn(name, fn, o?)", "agent{prompt", "#name in a user message arrives already expanded"} {
 		if !strings.Contains(main, want) {
-			t.Fatalf("main prompt misses %q", want)
+			t.Errorf("main prompt misses %q", want)
 		}
 	}
-	for _, unwanted := range []string{"subagent_start", "#name", "agents.spawn", "agents.run", "agents.* child"} {
-		if strings.Contains(sub, unwanted) {
-			t.Fatalf("subagent prompt mentions %q", unwanted)
-		}
+	if strings.Contains(sub, "agent{") || !strings.Contains(sub, "agent() is not available") || !strings.Contains(sub, "tasks.spawn(name, fn") {
+		t.Fatalf("subagent prompt: %q", sub)
 	}
-	if !strings.Contains(sub, "agents.* is not available") {
-		t.Fatalf("subagent prompt lost the agents restriction: %q", sub[max(0, len(sub)-200):])
+	if !isBuiltin("session.models") || !isBuiltin("read") || isBuiltin("proj.read") {
+		t.Fatal("isBuiltin")
 	}
 }
 
@@ -384,12 +313,12 @@ func TestSpecialFilesAreRefusedNotWaitedFor(t *testing.T) {
 	env := newEnv(t)
 	mkfifo(t, filepath.Join(env.cwd, "pipe"))
 	for _, code := range []string{
-		`return fs.read("pipe")`,
-		`return fs.list("pipe")`,
-		`return fs.write("pipe", "x")`,
-		`return fs.edit("pipe", "a", "b")`,
-		`return fs.patch("pipe", {{"a", "b"}})`,
-		`return fs.grep("x", {path = "pipe"})`,
+		`return read("pipe")`,
+		`return list("pipe")`,
+		`return write("pipe", "x")`,
+		`return edit("pipe", "a", "b")`,
+		`return patch("pipe", {{"a", "b"}})`,
+		`return grep("x", {path = "pipe"})`,
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		start := time.Now()

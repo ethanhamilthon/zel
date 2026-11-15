@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +23,7 @@ func initLua(t *testing.T, code string) func(home, dir string) {
 
 func TestMessageHookRewritesUserText(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `require("zel").on("message", function(ev) return ev.text:upper() end)`))
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `return {hooks = {message = function(text) return text:upper() end}}`))
 	if _, err := turn(t, a, "hello there"); err != nil {
 		t.Fatal(err)
 	}
@@ -37,20 +35,19 @@ func TestMessageHookRewritesUserText(t *testing.T) {
 func TestMessageHookObservesNotificationWithoutRewriting(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-require("zel").on("message", function(ev)
- if ev.notice then
-  state.set("observed_notice", ev.text)
+return {hooks = {message = function(text, notice)
+ if notice then
+  write("observed_notice", text)
   return "DO-NOT-REWRITE"
  end
-end)`))
+end}}`))
 	input := notification("t1 finished")
 	got := a.hookInput(context.Background(), input)
 	if got.Text != input.Text || !got.Notice {
 		t.Fatalf("notification changed: %+v", got)
 	}
-	value, ok, err := (kvState{s: a.session()}).Get("session", "observed_notice")
-	if err != nil || !ok || !strings.Contains(value, "t1 finished") {
-		t.Fatalf("observed notice = %q, %v, %v", value, ok, err)
+	if value := readSessionFile(t, a, "observed_notice"); !strings.Contains(value, "t1 finished") {
+		t.Fatalf("observed notice = %q", value)
 	}
 }
 
@@ -58,10 +55,10 @@ func TestTurnEndHookInjectsOnceAndIsBounded(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
 local n = 0
-require("zel").on("turn_end", function(ev)
+return {hooks = {turn_end = function(answer, running)
   n = n + 1
-  if n == 1 then return {notify = "CHECK-AGAIN"} end
-end)`))
+  if n == 1 and #running == 0 then return "CHECK-AGAIN" end
+end}}`))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +68,7 @@ end)`))
 	}
 
 	fp2 := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	b := newTestAgentWith(t, fp2, Options{}, initLua(t, `require("zel").on("turn_end", function() return "AGAIN" end)`))
+	b := newTestAgentWith(t, fp2, Options{}, initLua(t, `return {hooks = {turn_end = function() return "AGAIN" end}}`))
 	if _, err := turn(t, b, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +85,7 @@ func TestSessionModelsListsOnceAndKeepsFailures(t *testing.T) {
 		case strings.Contains(body, `"c1"`):
 			return textReply("done")
 		}
-		return luaReply("c1", `local m, f = session.models(); session.models()
+		return luaReply("c1", `local m, f = models(); models()
 print(#m .. " " .. m[1].provider .. "/" .. m[1].model .. " " .. m[1].context_window .. " " .. tostring(f.dead ~= nil))`)
 	}}
 	a := newTestAgent(t, fp, Options{})
@@ -150,7 +147,7 @@ func TestSessionModelsCancelledCallDoesNotWaitForListing(t *testing.T) {
 		return n
 	}
 	// A background task starts the listing and the provider holds it.
-	if res := a.runLua(context.Background(), `return tasks.spawn(function() return #session.models() end, {name = "list"})`); res.IsError {
+	if res := a.runLua(context.Background(), `return tasks.spawn("list", function() return #models() end)`); res.IsError {
 		t.Fatal(res.Output)
 	}
 	for deadline := time.Now().Add(5 * time.Second); listings() == 0; time.Sleep(10 * time.Millisecond) {
@@ -162,7 +159,7 @@ func TestSessionModelsCancelledCallDoesNotWaitForListing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	answered := make(chan luart.Result, 1)
-	go func() { answered <- a.runLua(ctx, `return #session.models()`) }()
+	go func() { answered <- a.runLua(ctx, `return #models()`) }()
 	select {
 	case res := <-answered:
 		if !res.IsError || !strings.Contains(res.Output, "ECANCELED") {
@@ -179,7 +176,7 @@ func TestSessionModelsCancelledCallDoesNotWaitForListing(t *testing.T) {
 	if _, done, err := (luaEnv{a.session()}).Tasks().Wait(context.Background(), "t1", 5*time.Second); !done || err != nil {
 		t.Fatalf("task after release: done %v, err %v", done, err)
 	}
-	if res := a.runLua(context.Background(), `return #session.models()`); res.IsError || res.Output != "1" || listings() != 1 {
+	if res := a.runLua(context.Background(), `return #models()`); res.IsError || res.Output != "1" || listings() != 1 {
 		t.Fatalf("answer after release %+v, listings %d", res, listings())
 	}
 }
@@ -204,7 +201,7 @@ func TestSessionModelsRefreshesOnProviderChangeAndNewSession(t *testing.T) {
 		return n
 	}
 	answer := func() string {
-		res := a.runLua(context.Background(), `local m, f = session.models(); return #m .. " " .. tostring(f.dead ~= nil)`)
+		res := a.runLua(context.Background(), `local m, f = models(); return #m .. " " .. tostring(f.dead ~= nil)`)
 		if res.IsError {
 			t.Fatal(res.Output)
 		}
@@ -251,7 +248,7 @@ func TestMainVMPersistsAcrossCalls(t *testing.T) {
 		}
 		return textReply("done")
 	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `require("zel").on("session_end", function(ev) state.set("ended", ev.reason, "project") end)`))
+	a := newTestAgentWith(t, fp, Options{}, initLua(t, `return {hooks = {session_end = function(reason) write("ended", reason) end}}`))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -261,8 +258,8 @@ func TestMainVMPersistsAcrossCalls(t *testing.T) {
 	if err := a.NewSession(); err != nil {
 		t.Fatal(err)
 	}
-	if v, ok, _ := a.db.KVGet("project:"+a.projectRoot(), "ended"); !ok || v != `"new"` {
-		t.Fatalf("session_end: %q %v", v, ok)
+	if v := readSessionFile(t, a, "ended"); v != "new" {
+		t.Fatalf("session_end: %q", v)
 	}
 }
 
@@ -286,22 +283,20 @@ func agentProvider(parentCode string, onChild func(prompt string)) *fakeProvider
 	}}
 }
 
-func TestAgentsRunAndSpawn(t *testing.T) {
+func TestAgentInlineAndInATask(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // agents run in-process: no zel executable needed
 	fp := agentProvider(`
-local r = agents.run{prompt = "child-ping"}
+local r = agent{prompt = "child-ping"}
 print(r.ok, r.answer, r.session ~= "")
-local id = agents.spawn{prompt = "child-pong"}
-print(type(id), #agents.list(), agents.get(id).prompt)
-local res = agents.wait(id, 8)
-print(res.ok, res.answer, agents.status(id), agents.result(id).answer)
-print(agents.tail(id, 5))`, nil)
+local id = tasks.spawn("pong", function() return agent{prompt = "child-pong"} end)
+local res = tasks.wait(id, 8)
+print(res.ok, res.value.answer, tasks.get(id).state, #tasks.list())`, nil)
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
 	out := fp.requests()[len(fp.requests())-1]
-	for _, want := range []string{"true\\tanswer to: child-ping\\ttrue", "string\\t2\\tchild-pong", "true\\tanswer to: child-pong\\tdone\\tanswer to: child-pong"} {
+	for _, want := range []string{"true\\tanswer to: child-ping\\ttrue", "true\\tanswer to: child-pong\\tdone\\t1"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q: %s", want, out)
 		}
@@ -311,23 +306,19 @@ print(agents.tail(id, 5))`, nil)
 	if got := a.Queue().Take(); len(got) != 0 {
 		t.Fatalf("waited results were queued too: %+v", got)
 	}
-	// The children ran in this process, as sessions of their own.
-	if list, err := a.Tasks(); err != nil || len(list) != 2 || !strings.HasPrefix(list[0].Command, "agent: child-ping") {
-		t.Fatalf("tasks %+v %v", list, err)
-	}
 	if got := a.ActiveSubagents(); len(got) != 0 {
 		t.Fatalf("finished agents still active: %+v", got)
 	}
 }
 
 func TestUnwaitedAgentResultArrivesAsMessage(t *testing.T) {
-	fp := agentProvider(`agents.spawn{prompt = "child-later"}`, nil)
+	fp := agentProvider(`tasks.spawn("later", function() return agent{prompt = "child-later"} end)`, nil)
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
 	got := awaitInput(t, a)
-	if got[0].Text != "<notification>a1 finished</notification>" {
+	if got[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("message %q", got[0].Text)
 	}
 }
@@ -342,7 +333,7 @@ func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
 			<-gate
 			return textReply("late")
 		case strings.Contains(body, "child-outer") && !strings.Contains(body, `"n1"`):
-			return luaReply("n1", `print(select(2, pcall(agents.run, {prompt = "child-inner"})))`)
+			return luaReply("n1", `print(select(2, pcall(agent, {prompt = "child-inner"})))`)
 		case strings.Contains(body, "child-outer") && strings.Contains(body, "EDENIED"):
 			return textReply("outer was denied")
 		case strings.Contains(body, "child-outer"):
@@ -351,12 +342,12 @@ func TestAgentsConcurrentNestedAndStopped(t *testing.T) {
 			return textReply("inner answer")
 		}
 		return luaReply("c1", `
-local nested = agents.spawn{prompt = "child-outer"}
-local stuck = agents.spawn{prompt = "child-stuck"}
-local r = agents.wait_all({nested}, 8)
-print(r[1].ok, r[1].answer)
-local x = agents.stop(stuck)
-print(agents.wait(stuck, 8).ok, agents.status(stuck))`)
+local nested = tasks.spawn("outer", function() return agent{prompt = "child-outer"} end)
+local stuck = tasks.spawn("stuck", function() return agent{prompt = "child-stuck"} end)
+local r = tasks.wait({nested}, 8)
+print(r[1].value.ok, r[1].value.answer)
+tasks.stop(stuck)
+print(tasks.wait(stuck, 8).ok, tasks.get(stuck).state)`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	t.Cleanup(func() { close(gate) }) // runs before the server closes
@@ -369,6 +360,12 @@ print(agents.wait(stuck, 8).ok, agents.status(stuck))`)
 			t.Fatalf("missing %q: %s", want, out)
 		}
 	}
+	// Stopping the task stops the agent it waited for.
+	for deadline := time.Now().Add(5 * time.Second); len(a.ActiveSubagents()) != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stuck agent outlived its task: %+v", a.ActiveSubagents())
+		}
+	}
 }
 
 func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
@@ -378,7 +375,7 @@ func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
 			<-gate
 			return textReply("late")
 		}
-		return luaReply("c1", `agents.spawn{prompt = "child-hang"}`)
+		return luaReply("c1", `tasks.spawn("hang", function() return agent{prompt = "child-hang"} end)`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	t.Cleanup(func() { close(gate) })
@@ -407,7 +404,7 @@ func TestAgentDepthLimitAndParentShutdown(t *testing.T) {
 func TestTaskFunctionNotifiesOnce(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `local tag = "v1"; tasks.spawn(function() sleep(0.2); return tag end, {name = "k"})`)
+			return luaReply("c1", `local tag = "v1"; tasks.spawn("k", function() sh("sleep 0.2"); return tag end)`)
 		}
 		return textReply("done")
 	}}
@@ -430,9 +427,9 @@ func TestInitLuaSnapshotAndReload(t *testing.T) {
 	var path string
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
 		path = filepath.Join(dir, ".zel", "init.lua")
-		writeFile(t, path, `require("zel").instructions("FIRST")`)
+		writeFile(t, path, `return {instructions = "FIRST"}`)
 	})
-	writeFile(t, path, `require("zel").instructions("SECOND")`)
+	writeFile(t, path, `return {instructions = "SECOND"}`)
 	if _, err := turn(t, a, "one"); err != nil {
 		t.Fatal(err)
 	}
@@ -457,9 +454,9 @@ func TestReloadKeepsOldSnapshotOnBrokenInitLua(t *testing.T) {
 	var path string
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
 		path = filepath.Join(dir, ".zel", "init.lua")
-		writeFile(t, path, `require("zel").instructions("GOOD")`)
+		writeFile(t, path, `return {instructions = "GOOD"}`)
 	})
-	writeFile(t, path, `require("zel").instructions("NEW"); error("boom")`)
+	writeFile(t, path, `error("boom"); return {instructions = "NEW"}`)
 	if err := a.Reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +466,7 @@ func TestReloadKeepsOldSnapshotOnBrokenInitLua(t *testing.T) {
 	if req := fp.requests()[0]; !strings.Contains(req, "GOOD") || strings.Contains(req, "NEW") {
 		t.Fatalf("old snapshot lost: %s", req)
 	}
-	writeFile(t, path, `require("zel").instructions("FIXED")`)
+	writeFile(t, path, `return {instructions = "FIXED"}`)
 	if err := a.Reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -490,19 +487,22 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 		return string(data)
 	}
 	bin := t.TempDir()
-	writeFile(t, filepath.Join(bin, "ddgs"), "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\necho '[{\"title\":\"T\",\"href\":\"http://x\",\"body\":\"B\"}]' > \"$out\"\n")
+	writeFile(t, filepath.Join(bin, "ddgs"), "#!/bin/sh\necho '1. T http://x'\n")
 	if err := os.Chmod(filepath.Join(bin, "ddgs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `for _, h in ipairs(web.search("q", 1)) do print(h.url, h.title) end`)
+			return luaReply("c1", `print(web.search{q = "q", n = 1})`)
 		}
 		return textReply("done")
 	}}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		writeFile(t, filepath.Join(home, "init.lua"), read("global-init.lua")+"\n"+read("web-plugin.lua"))
+		writeFile(t, filepath.Join(home, "init.lua"), `return {dofile(os.getenv("ZEL_HOME_TEST") .. "/global.lua"), require("web")}`)
+		writeFile(t, filepath.Join(home, "global.lua"), read("global-init.lua"))
+		writeFile(t, filepath.Join(home, "lua", "web.lua"), read("web-plugin.lua"))
+		t.Setenv("ZEL_HOME_TEST", home)
 		writeFile(t, filepath.Join(dir, "AGENTS.md"), "AGENTS-TEXT")
 		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), read("project-init.lua"))
 	})
@@ -510,7 +510,7 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := fp.requests()[0]
-	for _, want := range []string{"web.search(q: string", "web.fetch(url: string", "zel.check(pkg?: string", "AGENTS-TEXT", "## project", "## global"} {
+	for _, want := range []string{"web.search{...}  -- DuckDuckGo", "web.fetch{...}", "zel.check{...}  -- start gofmt", "AGENTS-TEXT", "git status:", "today: "} {
 		if !strings.Contains(req, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
@@ -525,7 +525,7 @@ func TestDocumentedExamplesLoad(t *testing.T) {
 
 func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
-		return luaReply("c1", "local h = tasks.spawn(function() sh('sleep 30') end, {name='bg'})\nfs.write('spawned', h)\nsleep(20)")
+		return luaReply("c1", "local h = tasks.spawn('bg', function() sh('sleep 30') end)\nwrite('spawned', h)\nwhile true do end")
 	}}
 	a := newTestAgent(t, fp, Options{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -552,106 +552,14 @@ func TestCancelEndsRunningCallAndKeepsBackground(t *testing.T) {
 	if a.RunningTasks() != 1 {
 		t.Fatalf("the spawned task did not survive: %d running", a.RunningTasks())
 	}
-	_ = a.StopTask("t1")
+	_ = (luaEnv{a.session()}).Tasks().Stop("t1")
 }
 
-// storedString reads a string kept by state.set in the project scope.
-func storedString(t *testing.T, a *Runtime, key string) string {
+// readSessionFile reads a file a hook or a call wrote in the session directory ("" when missing).
+func readSessionFile(t *testing.T, a *Runtime, name string) string {
 	t.Helper()
-	raw, ok, err := a.db.KVGet("project:"+a.projectRoot(), key)
-	if err != nil || !ok {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
-// awaitStored waits until a stored string reaches want.
-func awaitStored(t *testing.T, a *Runtime, key, want string) {
-	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); storedString(t, a, key) != want; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("%s = %q, want %q", key, storedString(t, a, key), want)
-		}
-	}
-}
-
-func TestSubagentLifecycleHooksRunOncePerSubagent(t *testing.T) {
-	gate := make(chan struct{})
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case strings.Contains(body, "child-stuck"):
-			<-gate
-			return textReply("late")
-		case childMarker.MatchString(body):
-			return textReply("answer to: " + childMarker.FindString(body))
-		}
-		return luaReply("c1", `
-agents.run{prompt = "child-ping"}
-local stuck = agents.spawn{prompt = "child-stuck"}
-agents.stop(stuck)
-print(agents.wait(stuck, 8).ok)
-print(agents.run{prompt = "child-bad", provider = "missing"}.ok)`)
-	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-local zel = require("zel")
-local function record(key, value)
-	state.set(key, (state.get(key, "project") or "") .. value .. ";", "project")
-end
-zel.on("subagent_start", function(ev) record("start." .. ev.id, ev.model) end)
-zel.on("subagent_end", function(ev) record("end." .. ev.id, ev.status) end)`))
-	t.Cleanup(func() { close(gate) }) // runs before the server closes
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	// The start hooks run beside the subagents and the end hooks just after
-	// their results are published, so wait for every expected record.
-	wants := map[string]string{"start.a1": "m;", "start.a2": "m;", "start.a3": "m;", "end.a1": "done;", "end.a2": "stopped;", "end.a3": "failed;"}
-	for key, want := range wants {
-		awaitStored(t, a, key, want)
-	}
-	time.Sleep(50 * time.Millisecond) // a duplicate hook would have landed by now
-	for key, want := range wants {
-		if got := storedString(t, a, key); got != want {
-			t.Errorf("%s = %q, want %q: hooks ran more than once or out of order", key, got, want)
-		}
-	}
-}
-
-// A plugin function holds the config lock while it waits for a subagent; the
-// subagent's lifecycle hooks need that lock, so they must not block the result.
-func TestSubagentHooksDoNotBlockPluginFunctionWaiting(t *testing.T) {
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case childMarker.MatchString(body):
-			return textReply("answer to: " + childMarker.FindString(body))
-		}
-		return luaReply("c1", `print(review())`)
-	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-local zel = require("zel")
-zel.fn{name = "review", summary = "runs a subagent", run = function()
-	return agents.run{prompt = "child-ping"}.answer
-end}
-zel.on("subagent_start", function(ev) sh("true") end)
-zel.on("subagent_end", function(ev) sh("true") end)`))
-	start := time.Now()
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("plugin call waited %s for its subagent", elapsed)
-	}
-	if out := fp.requests(); !strings.Contains(out[len(out)-1], "answer to: child-ping") {
-		t.Fatalf("plugin result missing: %s", out)
-	}
+	data, _ := os.ReadFile(filepath.Join(a.Shell.Dir, name))
+	return string(data)
 }
 
 // Overlapping foreground operations keep their own entries: a call ends only
@@ -720,7 +628,7 @@ func TestPromptCompletionsExpandAndFollowReload(t *testing.T) {
 	var projectDir string
 	setup := func(home, dir string) {
 		projectDir = dir
-		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `require("zel").complete("plan", function() return "first plan" end)`)
+		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `return {completions = {plan = function() return "first plan" end}}`)
 	}
 	a := newTestAgentWith(t, fp, Options{}, setup)
 	ctl := NewController(a, func(Event) {})
@@ -733,16 +641,16 @@ func TestPromptCompletionsExpandAndFollowReload(t *testing.T) {
 	if ctl.HasPromptTokens("plain #unknown text") {
 		t.Fatal("an unregistered name must not count as a completion")
 	}
-	writeFile(t, filepath.Join(projectDir, ".zel", "init.lua"), `require("zel").complete("plan", function() return "second plan" end)`)
+	writeFile(t, filepath.Join(projectDir, ".zel", "init.lua"), `return {completions = {plan = function() return "second plan" end}}`)
 	ctl.Reload()
 	if got, err := ctl.ExpandPrompt(context.Background(), "#plan"); err != nil || got != "second plan" {
 		t.Fatalf("after reload ExpandPrompt = %q, %v", got, err)
 	}
 }
 
-// A subagent's end hook belongs to the snapshot that ran its start hook. A reload
-// in between neither drops that end hook nor hands it to the new snapshot.
-func TestSubagentEndStaysWithItsSnapshotAcrossReload(t *testing.T) {
+// A running subagent is stopped at shutdown, and a slow session_end runs within
+// the same budget instead of adding its own.
+func TestShutdownBoundsRunningSubagentAndSessionEnd(t *testing.T) {
 	gate := make(chan struct{})
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		switch {
@@ -752,120 +660,13 @@ func TestSubagentEndStaysWithItsSnapshotAcrossReload(t *testing.T) {
 			<-gate
 			return textReply("late")
 		}
-		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
-	}}
-	first := `
-local zel = require("zel")
-zel.on("subagent_start", function(ev) state.set("start." .. ev.id, "v1", "project") end)
-zel.on("subagent_end", function(ev) state.set("end." .. ev.id, "v1:" .. ev.status, "project") end)`
-	second := `
-local zel = require("zel")
-zel.on("subagent_end", function(ev) state.set("end2." .. ev.id, "v2:" .. ev.status, "project") end)`
-	var path string
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		path = filepath.Join(dir, ".zel", "init.lua")
-		writeFile(t, path, first)
-	})
-	release := sync.OnceFunc(func() { close(gate) })
-	t.Cleanup(release) // runs before the session closes
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	awaitStored(t, a, "start.a1", "v1")
-	writeFile(t, path, second)
-	if err := a.Reload(); err != nil {
-		t.Fatal(err)
-	}
-	release()
-	awaitStored(t, a, "end.a1", "v1:done")
-	time.Sleep(50 * time.Millisecond) // a misrouted hook would have landed by now
-	if got := storedString(t, a, "end2.a1"); got != "" {
-		t.Fatalf("the reloaded snapshot received an end hook it never matched a start for: %q", got)
-	}
-}
-
-// Starting a new session stops the old session's subagents. Each one still gets
-// its end hook exactly once, from the snapshot that started it.
-func TestSubagentEndRunsOnceWhenSessionSwitches(t *testing.T) {
-	gate := make(chan struct{})
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case strings.Contains(body, "child-stuck"):
-			<-gate
-			return textReply("late")
-		}
-		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
-	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-local zel = require("zel")
-zel.on("subagent_start", function(ev) state.set("start." .. ev.id, "ok", "project") end)
-zel.on("subagent_end", function(ev)
-	state.set("end." .. ev.id, (state.get("end." .. ev.id, "project") or "") .. ev.status .. ";", "project")
-end)`))
-	t.Cleanup(func() { close(gate) })
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	awaitStored(t, a, "start.a1", "ok")
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	awaitStored(t, a, "end.a1", "stopped;")
-	time.Sleep(50 * time.Millisecond) // a duplicate end hook would have landed by now
-	if got := storedString(t, a, "end.a1"); got != "stopped;" {
-		t.Fatalf("end hook ran more than once: %q", got)
-	}
-}
-
-// Shutdown has one budget. A start hook that outlives it does not hold Close,
-// even though the subagent it belongs to finished before shutdown began.
-func TestShutdownBoundsSlowSubagentHooks(t *testing.T) {
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case childMarker.MatchString(body):
-			return textReply("answer to: " + childMarker.FindString(body))
-		}
-		return luaReply("c1", `agents.spawn{prompt = "child-ping"}`)
-	}}
-	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-local zel = require("zel")
-zel.on("subagent_start", function(ev) state.set("started", "1", "project"); sleep(30) end)
-zel.on("subagent_end", function(ev) sleep(30) end)`))
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	awaitStored(t, a, "started", "1")
-	start := time.Now()
-	a.Close()
-	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-		t.Fatalf("shutdown took %s: a subagent hook outlived the session budget", took)
-	}
-}
-
-// A running subagent is stopped at shutdown, and its end hook, which is slow too,
-// runs within the same budget instead of adding its own.
-func TestShutdownBoundsRunningSubagentAndItsEndHook(t *testing.T) {
-	gate := make(chan struct{})
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case strings.Contains(body, "child-stuck"):
-			<-gate
-			return textReply("late")
-		}
-		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
+		return luaReply("c1", `tasks.spawn("stuck", function() return agent{prompt = "child-stuck"} end)`)
 	}}
 	var endFile string
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
 		endFile = filepath.Join(dir, "ended.txt")
 		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-local zel = require("zel")
-zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status); sleep(30) end)`)
+return {hooks = {session_end = function(reason) write("`+endFile+`", reason); while true do end end}}`)
 	})
 	t.Cleanup(func() { close(gate) })
 	if _, err := turn(t, a, "go"); err != nil {
@@ -879,10 +680,13 @@ zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status); sleep(30
 	start := time.Now()
 	a.Close()
 	if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-		t.Fatalf("shutdown took %s: the subagent or its end hook outlived the budget", took)
+		t.Fatalf("shutdown took %s: the subagent or session_end outlived the budget", took)
 	}
-	if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
-		t.Fatalf("the end hook did not run for the stopped subagent: %q, %v", got, err)
+	if got, err := os.ReadFile(endFile); err != nil || string(got) != "quit" {
+		t.Fatalf("session_end did not run: %q, %v", got, err)
+	}
+	if len(a.ActiveSubagents()) != 0 {
+		t.Fatal("the subagent outlived the session")
 	}
 }
 
@@ -911,7 +715,7 @@ func TestShutdownAbandonsJobThatIgnoresCancel(t *testing.T) {
 func TestPromptExpansionStopsWithItsCaller(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgentWith(t, fp, Options{}, initLua(t, `
-require("zel").complete("slow", function() sleep(30); return "never" end)`))
+return {completions = {slow = function() while true do end end}}`))
 	ctl := NewController(a, func(Event) {})
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -942,51 +746,6 @@ require("zel").complete("slow", function() sleep(30); return "never" end)`))
 	}
 }
 
-// A start hook that raises an error does not change the lifecycle: the child still
-// ends, its timeout is reported to the end hook, and the end hook runs exactly once.
-func TestSubagentTimeoutWithFailingStartHookEndsOnce(t *testing.T) {
-	gate := make(chan struct{})
-	fp := &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case strings.Contains(body, "child-stuck"):
-			<-gate
-			return textReply("late")
-		}
-		return luaReply("c1", `agents.spawn{prompt = "child-stuck", timeout = 0.2}`)
-	}}
-	var endFile string
-	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		endFile = filepath.Join(dir, "ends.txt")
-		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-local zel = require("zel")
-zel.on("subagent_start", function(ev) error("start hook failed on purpose") end)
-zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status .. ";", {append = true}) end)`)
-	})
-	release := sync.OnceFunc(func() { close(gate) })
-	t.Cleanup(release)
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if got, err := os.ReadFile(endFile); err == nil && len(got) > 0 {
-			if string(got) != "timeout;" {
-				t.Fatalf("end hook ran with %q, want one timeout", got)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the end hook never ran for the timed-out subagent")
-		}
-	}
-	release()
-	time.Sleep(50 * time.Millisecond) // a duplicate end hook would have landed by now
-	if got, _ := os.ReadFile(endFile); string(got) != "timeout;" {
-		t.Fatalf("end hook ran more than once: %q", got)
-	}
-}
-
 // namedPipe makes a FIFO. Reading it from Lua is a host call that blocks until a
 // writer opens it, which is how a stuck host operation looks from the session.
 func namedPipe(t *testing.T, path string) string {
@@ -1005,138 +764,6 @@ func releasePipe(path string) {
 	}
 }
 
-// awaitSubagentRunning waits until a subagent of a runs.
-func awaitSubagentRunning(t *testing.T, a *Runtime) {
-	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); len(a.ActiveSubagents()) == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the subagent never started")
-		}
-	}
-}
-
-// stuckChildProvider runs the parent's spawn of a child that only ends when it is
-// cancelled, as a cooperative subagent does.
-func stuckChildProvider(gate chan struct{}) *fakeProvider {
-	return &fakeProvider{reply: func(n int, body string) string {
-		switch {
-		case strings.Contains(body, `"c1"`):
-			return textReply("done")
-		case strings.Contains(body, "child-stuck"):
-			<-gate
-			return textReply("late")
-		}
-		return luaReply("c1", `agents.spawn{prompt = "child-stuck"}`)
-	}}
-}
-
-// A slow session_end must not cost a cooperative subagent its end hook. The subagent
-// is cancelled first and its end hook runs while the budget lasts; session_end runs
-// after it with what is left. Quitting and switching sessions order them alike.
-func TestSlowSessionEndDoesNotDropFastSubagentEnd(t *testing.T) {
-	for _, leave := range []struct {
-		name string
-		do   func(*Runtime) error
-	}{
-		{"quit", func(a *Runtime) error { a.Close(); return nil }},
-		{"new session", func(a *Runtime) error { return a.NewSession() }},
-	} {
-		t.Run(leave.name, func(t *testing.T) {
-			gate := make(chan struct{})
-			var endFile, seenFile string
-			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
-				endFile = filepath.Join(dir, "ended.txt")
-				seenFile = filepath.Join(dir, "seen.txt")
-				writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-local zel = require("zel")
-zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status) end)
-zel.on("session_end", function()
-	if session.depth ~= 0 then return end
-	fs.write("`+seenFile+`", tostring(fs.exists("`+endFile+`")))
-	sleep(30)
-end)`)
-			})
-			t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
-			if _, err := turn(t, a, "go"); err != nil {
-				t.Fatal(err)
-			}
-			awaitSubagentRunning(t, a)
-			start := time.Now()
-			if err := leave.do(a); err != nil {
-				t.Fatal(err)
-			}
-			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-				t.Fatalf("leaving took %s: session_end outlived the budget", took)
-			}
-			if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
-				t.Fatalf("the end hook of the cancelled subagent was lost behind session_end: %q, %v", got, err)
-			}
-			if got, err := os.ReadFile(seenFile); err != nil || string(got) != "true" {
-				t.Fatalf("session_end ran before the end hook of the subagent: %q, %v", got, err)
-			}
-		})
-	}
-}
-
-// A subagent_start hook still running when the shutdown begins is cancelled with the
-// subagent, so it cannot hold up the subagent's end hook.
-func TestShutdownCancelsPendingSubagentStart(t *testing.T) {
-	gate := make(chan struct{})
-	var endFile string
-	a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
-		endFile = filepath.Join(dir, "ended.txt")
-		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-local zel = require("zel")
-zel.on("subagent_start", function() state.set("started", "1", "project"); sleep(30) end)
-zel.on("subagent_end", function(ev) fs.write("`+endFile+`", ev.status) end)`)
-	})
-	t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	awaitStored(t, a, "started", "1")
-	start := time.Now()
-	a.Close()
-	if took := time.Since(start); took > luart.SessionEndTimeout/2 {
-		t.Fatalf("shutdown took %s: the pending start hook held the end hook", took)
-	}
-	if got, err := os.ReadFile(endFile); err != nil || string(got) != "stopped" {
-		t.Fatalf("the end hook did not run: %q, %v", got, err)
-	}
-}
-
-// A subagent_end hook stuck in a host read that never returns does not hold shutdown:
-// Close returns at the budget, and the hook that did not finish is logged.
-func TestShutdownStuckSubagentEndHookIsBounded(t *testing.T) {
-	gate := make(chan struct{})
-	var fifo string
-	a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
-		fifo = namedPipe(t, filepath.Join(dir, "stuck"))
-		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-require("zel").on("subagent_end", function() io.open("`+fifo+`", "r"):read("a") end)`)
-	})
-	t.Cleanup(func() { close(gate) }) // after the agent: its server closes last
-	t.Cleanup(func() { go releasePipe(fifo) })
-	if _, err := turn(t, a, "go"); err != nil {
-		t.Fatal(err)
-	}
-	awaitSubagentRunning(t, a)
-	if !closeWithin(a, luart.SessionEndTimeout+3*time.Second) {
-		t.Fatal("shutdown waited past its budget for a stuck subagent end hook")
-	}
-	// The hook gives up at the same moment the shutdown does, so its entry follows Close.
-	var events []byte
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		events, _ = os.ReadFile(EventsLog(a.Home(), a.SessionID()))
-		if strings.Contains(string(events), "stopped early") || time.Now().After(deadline) {
-			break
-		}
-	}
-	if !strings.Contains(string(events), "subagent_end") || !strings.Contains(string(events), "stopped early") {
-		t.Fatalf("the skipped end hook is not logged: %q", events)
-	}
-}
-
 // A completion stuck in a host read ends with its caller, and closing the session does
 // not wait for its VM: the VM is freed once the blocked read returns.
 func TestStuckCompletionDoesNotHoldSessionClose(t *testing.T) {
@@ -1145,7 +772,7 @@ func TestStuckCompletionDoesNotHoldSessionClose(t *testing.T) {
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
 		fifo = namedPipe(t, filepath.Join(dir, "stuck"))
 		writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-require("zel").complete("stuck", function() return io.open("`+fifo+`", "r"):read("a") end)`)
+return {completions = {stuck = function() return io.open("`+fifo+`", "r"):read("a") end}}`)
 	})
 	t.Cleanup(func() { go releasePipe(fifo) })
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -1171,217 +798,6 @@ func closeWithin(a *Runtime, d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
-	}
-}
-
-// A deadline-expired subagent_end hook must never race with session replacement
-// (NewSession or Resume) or route warnings into the new session's log. Both a
-// single cooperative handler and a 200-handler burst must isolate warnings to
-// the old session and clean up the abandoned work cleanly.
-func TestDeadlineExpiredSubagentEndHookAcrossSessionSwitch(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		resume bool
-		copies int
-	}{
-		{"new/single", false, 1},
-		{"new/200", false, 200},
-		{"resume/single", true, 1},
-		{"resume/200", true, 200},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			gate := make(chan struct{})
-			initCode := fmt.Sprintf(`
-for i = 1, %d do
-	require("zel").on("subagent_end", function() sleep(30) end)
-end`, tc.copies)
-			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, initLua(t, initCode))
-			t.Cleanup(func() { close(gate) })
-
-			var targetID string
-			if tc.resume {
-				if err := a.Save(); err != nil {
-					t.Fatal(err)
-				}
-				targetID = a.SessionID()
-				if err := a.NewSession(); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			if _, err := turn(t, a, "go"); err != nil {
-				t.Fatal(err)
-			}
-			awaitSubagentRunning(t, a)
-
-			oldSess := a.session()
-			oldID := a.SessionID()
-			oldCfg := oldSess.lua.get()
-			if oldCfg == nil {
-				t.Fatal("missing old config snapshot")
-			}
-
-			start := time.Now()
-			var err error
-			if tc.resume {
-				err = a.Resume(targetID)
-			} else {
-				err = a.NewSession()
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-				t.Fatalf("session switch took %s past shutdown budget", took)
-			}
-
-			newID := a.SessionID()
-			if newID == oldID {
-				t.Fatalf("session ID did not change: %s", newID)
-			}
-
-			// Eventual cleanup of the abandoned job goroutine and pinned config snapshot.
-			drained := make(chan struct{})
-			go func() {
-				oldSess.tasks.wg.Wait()
-				close(drained)
-			}()
-			select {
-			case <-drained:
-			case <-time.After(5 * time.Second):
-				t.Fatal("abandoned subagent_end / job did not finish cleaning up")
-			}
-			oldSess.lua.mu.Lock()
-			pins := len(oldSess.lua.pins)
-			oldSess.lua.mu.Unlock()
-			if pins != 0 {
-				t.Fatalf("old config snapshot retained %d pins after drain", pins)
-			}
-
-			a.LogEvent("notice", "in-new")
-
-			var oldEvents []byte
-			for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-				oldEvents, _ = os.ReadFile(EventsLog(a.Home(), oldID))
-				if strings.Contains(string(oldEvents), "stopped early") || time.Now().After(deadline) {
-					break
-				}
-			}
-			if !strings.Contains(string(oldEvents), "subagent_end") || !strings.Contains(string(oldEvents), "stopped early") {
-				t.Fatalf("old session %s missing subagent_end warning: %q", oldID, oldEvents)
-			}
-			if strings.Contains(string(oldEvents), "in-new") {
-				t.Fatalf("old session %s received new session notice: %q", oldID, oldEvents)
-			}
-			newEvents, _ := os.ReadFile(EventsLog(a.Home(), newID))
-			if strings.Contains(string(newEvents), "subagent_end") || strings.Contains(string(newEvents), "stopped early") {
-				t.Fatalf("new session %s received old subagent_end warning: %q", newID, newEvents)
-			}
-			if !strings.Contains(string(newEvents), "in-new") {
-				t.Fatalf("new session %s missing its own notice: %q", newID, newEvents)
-			}
-		})
-	}
-}
-
-// An abandoned non-cooperative subagent_end hook survives session switch while
-// pinned to its old session, routes later warnings strictly to the old session,
-// and releases its task waiter and config snapshot once unblocked.
-func TestAbandonedSubagentEndHookCleansUpAfterReleaseAcrossSessionSwitch(t *testing.T) {
-	for _, resume := range []bool{false, true} {
-		name := "new"
-		if resume {
-			name = "resume"
-		}
-		t.Run(name, func(t *testing.T) {
-			gate := make(chan struct{})
-			var fifo string
-			a := newTestAgentWith(t, stuckChildProvider(gate), Options{}, func(home, dir string) {
-				fifo = namedPipe(t, filepath.Join(dir, "stuck-end"))
-				writeFile(t, filepath.Join(dir, ".zel", "init.lua"), `
-local zel = require("zel")
-zel.on("subagent_end", function() io.open("`+fifo+`", "r"):read("a") end)
-for i = 1, 20 do
-	zel.on("subagent_end", function() sleep(30) end)
-end`)
-			})
-			t.Cleanup(func() { close(gate) })
-			release := sync.OnceFunc(func() { go releasePipe(fifo) })
-			t.Cleanup(release)
-
-			var targetID string
-			if resume {
-				if err := a.Save(); err != nil {
-					t.Fatal(err)
-				}
-				targetID = a.SessionID()
-				if err := a.NewSession(); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			if _, err := turn(t, a, "go"); err != nil {
-				t.Fatal(err)
-			}
-			awaitSubagentRunning(t, a)
-
-			oldSess := a.session()
-			oldID := a.SessionID()
-			oldCfg := oldSess.lua.get()
-
-			start := time.Now()
-			var err error
-			if resume {
-				err = a.Resume(targetID)
-			} else {
-				err = a.NewSession()
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if took := time.Since(start); took > luart.SessionEndTimeout+3*time.Second {
-				t.Fatalf("session switch took %s past shutdown budget", took)
-			}
-			newID := a.SessionID()
-			if newID == oldID {
-				t.Fatalf("session ID did not change")
-			}
-
-			// Still pinned until the blocked hook is released.
-			oldSess.lua.mu.Lock()
-			pinsBefore := oldSess.lua.pins[oldCfg]
-			oldSess.lua.mu.Unlock()
-			if pinsBefore != 1 {
-				t.Fatalf("pins before release = %d, want 1", pinsBefore)
-			}
-
-			release()
-			drained := make(chan struct{})
-			go func() {
-				oldSess.tasks.wg.Wait()
-				close(drained)
-			}()
-			select {
-			case <-drained:
-			case <-time.After(5 * time.Second):
-				t.Fatal("abandoned subagent_end did not drain after release")
-			}
-			oldSess.lua.mu.Lock()
-			pinsAfter := len(oldSess.lua.pins)
-			oldSess.lua.mu.Unlock()
-			if pinsAfter != 0 {
-				t.Fatalf("pins after release = %d, want 0", pinsAfter)
-			}
-
-			oldEvents, _ := os.ReadFile(EventsLog(a.Home(), oldID))
-			if !strings.Contains(string(oldEvents), "subagent_end") || !strings.Contains(string(oldEvents), "stopped early") {
-				t.Fatalf("old session %s missing subagent_end warnings: %q", oldID, oldEvents)
-			}
-			newEvents, _ := os.ReadFile(EventsLog(a.Home(), newID))
-			if strings.Contains(string(newEvents), "subagent_end") || strings.Contains(string(newEvents), "stopped early") {
-				t.Fatalf("new session %s leaked old subagent_end warnings: %q", newID, newEvents)
-			}
-		})
 	}
 }
 
@@ -1448,16 +864,16 @@ func TestAbandonedHostCallClearsCoreActivity(t *testing.T) {
 	// the late return of session.rename must not remove the third call's activity.
 	call3 := make(chan luart.Result, 1)
 	go func() {
-		call3 <- a.runLua(context.Background(), "sleep(0.25); return 'ok'")
+		call3 <- a.runLua(context.Background(), "sh('sleep 0.25'); return 'ok'")
 	}()
-	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "sleeping 0.25 sec"; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); a.Activity() != "running bash: sleep …"; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("never observed sleeping activity (got %q)", a.Activity())
 		}
 	}
 	rollback()
 	time.Sleep(50 * time.Millisecond)
-	if got := a.Activity(); got != "sleeping 0.25 sec" {
+	if got := a.Activity(); got != "running bash: sleep …" {
 		t.Fatalf("late host return removed later activity: %q", got)
 	}
 	select {
@@ -1511,17 +927,6 @@ func TestSurvivingEnvironmentWorkIsolatedAcrossSessionSwitch(t *testing.T) {
 		t.Fatalf("a.Shell.Env = %q, want %q", got, newID)
 	}
 
-	// Session-scoped KV stays isolated.
-	if err := oldEnv.State().Set("session", "from_old", "1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, err := (luaEnv{a.session()}).State().Get("session", "from_old"); err != nil || ok {
-		t.Fatalf("new session saw old session KV: ok=%v err=%v", ok, err)
-	}
-	if got, ok, err := oldEnv.State().Get("session", "from_old"); err != nil || !ok || got != "1" {
-		t.Fatalf("old session KV = %q, %v, %v", got, ok, err)
-	}
-
 	// Closed old environment cannot spawn tasks/agents, attach views, or rename.
 	if _, err := oldEnv.Tasks().Spawn(func(context.Context, io.Writer) (any, error) { return nil, nil }, luart.TaskOpts{Name: "late"}); err == nil {
 		t.Fatal("oldEnv.Tasks().Spawn succeeded after session switch")
@@ -1564,11 +969,8 @@ func TestSurvivingEnvironmentWorkIsolatedAcrossSessionSwitch(t *testing.T) {
 	}
 	endOldAct()
 
-	// Closing the runtime (twice) leaves DB calls from oldEnv safe (error, no panic/race).
+	// Closing the runtime (twice) leaves calls from oldEnv safe (no panic/race).
 	a.Close()
 	a.Close()
-	if err := oldEnv.State().Set("session", "after_close", "1"); err == nil {
-		t.Fatal("expected DB closed error after Runtime.Close")
-	}
 	oldEnv.Log("warn", "after-close-log")
 }

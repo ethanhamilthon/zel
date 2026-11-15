@@ -179,38 +179,15 @@ func (c *Controller) selectLocked(provider, model, effort string) error {
 	return nil
 }
 
-func (c *Controller) Tasks() (tasks []Task, err error) {
-	c.view(func() { tasks, err = c.a.Tasks() })
-	return tasks, err
-}
-
-// TaskOutput returns the tail of a session task's output log.
-func (c *Controller) TaskOutput(id string) (string, error) {
-	tasks, err := c.Tasks()
-	if err != nil {
-		return "", fail(CodeFailed, "%s", err)
-	}
-	for _, t := range tasks {
-		if t.ID == id {
-			return TaskOutput(t), nil
-		}
-	}
-	return "", fail(CodeInvalid, "task not found: %s", id)
-}
-
 func (c *Controller) ActiveSubagents() (list []SubagentRun) {
 	c.view(func() { list = c.a.ActiveSubagents() })
 	return list
 }
 
-func (c *Controller) StopTask(id string) error {
-	var err error
-	c.view(func() {
-		if err = c.a.StopTask(id); err != nil {
-			err = fail(CodeInvalid, "%s", err.Error())
-		}
-	})
-	return err
+// ActiveTasks lists the running background tasks for the chat rows.
+func (c *Controller) ActiveTasks() (list []ActiveTask) {
+	c.view(func() { list = c.a.ActiveTasks() })
+	return list
 }
 
 // Trace returns everything the session has done: the system prompt, the messages,
@@ -255,10 +232,4 @@ func (c *Controller) UpdateSettings(s Settings) (err error) {
 		err = c.a.UpdateSettings(s)
 	})
 	return err
-}
-
-// StartTask runs Lua code as a background task of the current session.
-func (c *Controller) StartTask(command string) (id string, err error) {
-	c.view(func() { id, err = c.a.StartTask(command) })
-	return id, err
 }

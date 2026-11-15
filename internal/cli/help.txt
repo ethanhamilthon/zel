@@ -1,94 +1,37 @@
 zel - minimal AI coding agent
 
 USAGE
-  zel [--config FILE]
-  zel -p PROMPT [--model MODEL] [--provider NAME] [--effort LEVEL] [--config FILE]
-  zel session -s ID
-  zel session rename [-s ID] NAME...
-  zel session rename ID NAME...
-  zel models [--json]
-  zel events [-s ID]
-  zel init
-  zel update
+  zel                     open the TUI
+  zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL]
+                          run one task without the TUI: prints the session ID,
+                          then the final answer (exit 0, nonzero on error, 130
+                          when cancelled); flags apply to this run only
+  zel update              replace this binary with the latest release
   zel version
-  zel --help | -h | help
+  zel help
 
-GETTING STARTED
-  Run zel in a terminal. First-run onboarding adds your provider, then lets you
-  choose a model and reasoning effort. Manage providers and preferences through
-  Ctrl+K > Providers / Settings. There is no setup command or TOML config.
-  Preferences and API keys are stored locally in ~/.zel/zel.db, not encrypted.
+CONFIG
+  Providers, models and preferences live in the UI (Ctrl+K) and in ~/.zel/zel.db.
+  Extensions: ~/.zel/init.lua, then the nearest .zel/init.lua up from here.
+  A file returns {instructions, tools, hooks, completions} or a list of them:
 
-COMMANDS
-  init            Create ./.zel/init.lua here (it loads local AGENTS.md as
-                  instructions, if present). Never overwrite it.
-  update          Replace this binary with the latest GitHub release.
-  --config FILE   Load this extra init.lua (a .lua file) after all other layers.
-  -p PROMPT       Run one task without the TUI. Print the persisted session ID
-                  first, then the final answer and exit. Diagnostics go to stderr.
-  --model MODEL   Override the model for this headless session only.
-  --provider NAME Override the provider for this headless session only.
-  --effort LEVEL  Override reasoning effort for this headless session only.
-  session -s ID   Read a saved session, including while it is running.
-  session rename  Rename a saved session. Positional ID NAME... works when
-                  no -s and no ZEL_SESSION_ID.
-  models          List PROVIDER<TAB>MODEL; --json prints {models, failures}.
-  events          Print the session event log, oldest first.
-  -s ID           Target a session; defaults to ZEL_SESSION_ID.
+    return {
+      instructions = "Read code first.",
+      tools = {hello = {desc = "greets. args: who", fn = function(a) return "hi " .. a.who end}},
+      hooks = {turn_end = function(answer, running) end},
+      completions = {plan = function() return read("PLAN.md") end},
+    }
 
-INIT.LUA
-  The model has one tool: lua (raw Lua code; every
-  invocation has a fixed 30-second timeout; the VM keeps globals between
-  calls). There is no bash tool; shell runs through sh(); background work is
-  tasks.spawn(fn) and subagents (agents.*) run inside the application.
-  Config is Lua: ~/.zel/init.lua, then the nearest .zel/init.lua up from the
-  working directory, then --config FILE. Layers instruct (zel.instructions,
-  zel.prompt), set defaults, register functions (zel.fn) shown in the system
-  prompt, hook events (session_start, session_end, message,
-  turn_end, subagent_start, subagent_end), and prompt completions
-  (zel.complete). Layers are read once per session (and on resume);
-  Menu > Reload re-reads them. ZEL.md is no longer read. See docs/lua-api.md.
+  Hooks: session_start(), message(text, notice), turn_end(answer, running),
+  session_end(reason). Menu > Reload rereads the files. See docs/lua-api.md.
 
-OUTPUT
-  A lua call returns print() output plus the returned value, not truncated
-  (1 MiB safety cap). Finished background jobs and hook text reach the agent
-  as <notification> messages.
+KEYS
+  Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
+  Ctrl+T tracing  Ctrl+Y copy answer  Ctrl+D stop the turn  Ctrl+Q quit
+  @ completes paths, # completes prompt completions
 
 ENVIRONMENT
-  ZEL_HOME        State directory, default ~/.zel: zel.db, init.lua, locks/,
-                  attachments/, tasks/, and events/.
-  ZEL_CONFIG      Explicit init.lua file; set by --config, inherited by tools.
-  ZEL_SESSION_ID  Active session ID, exported to sh().
-  ZEL_DEPTH       Agent nesting depth, exported to sh().
+  ZEL_HOME   data directory (default ~/.zel)
+  sh() gets ZEL_SESSION_ID and ZEL_DEPTH
 
-INTERFACE
-  Ctrl+K Menu, Ctrl+M Models, Ctrl+R Resume, Ctrl+I Info, Ctrl+T Tracing,
-  Ctrl+Q Quit. Esc dismisses UI; Ctrl+D stops the active turn. Ctrl+Y copies the last answer as plain text (Menu: Copy answer). Selection and copying use terminal shortcuts (Cmd+C / Ctrl+C); mouse reporting is disabled. Ctrl+M / Ctrl+I need Kitty keyboard protocol.
-  Onboarding: Tab / Shift+Tab switch steps, Left / Right move the cursor,
-  Enter advances. Navigation hints appear at the bottom of the screen.
-  @ in the composer completes file paths.
-  Tracing search supports :user text, :lua text, and every other entry type.
-  Chat shows only user messages, answers, and the working indicator.
-
-SECURITY
-  Commands execute with your user permissions and network access;
-  this is not a sandbox. API keys support {{$VARIABLE}} environment references.
-  Zel uses fresh data and does not migrate or read Dashy configuration.
-  The TUI emits OSC 7501 terminal status reports.
-
-HEADLESS
-  Example: zel -p "Review this project" --model MODEL --effort high
-  Flags override saved defaults; --config overrides instruction layers.
-  Model/provider/effort overrides never change saved defaults. Supported effort
-  values are none, minimal, low, medium, high, xhigh and max (provider-dependent).
-  The first stdout line is the session ID, emitted before any model request.
-  Read it with zel session -s ID, or resume it from the TUI after it exits.
-  A successful task exits 0; failure is nonzero; cancellation exits 130.
-  No streaming output, progress or tool logs are printed to stdout.
-
-RETENTION
-  Task logs keep their first 8 MiB plus a truncation marker and drain the rest.
-  At most 64 unresolved task completions are admitted per session; consume their
-  results before starting more. Composer input has a separate 64-item limit.
-  Captured image originals are retained until manually deleted, including for
-  saved sessions; deleting them removes the source needed for later crops.
+Lua and shell run with your permissions and network access; there is no sandbox.

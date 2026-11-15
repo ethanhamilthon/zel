@@ -1,23 +1,30 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
 	"zel/internal/core"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 )
 
@@ -887,7 +894,7 @@ func TestMenuSearchGapBelowHeader(t *testing.T) {
 func TestTracingPageListsSessionTrace(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 90, 30
-	m.menu = &menuState{page: menuMain, selected: 4}
+	m.menu = &menuState{page: menuMain, selected: 3}
 	if next, _ := m.menuActivate(); next != nil {
 		m = next.(model)
 	}
@@ -1043,7 +1050,7 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 		}
 	}
 	m.openMenu()
-	m.menu.selected = 6
+	m.menu.selected = 5
 	next, _ := m.menuActivate()
 	m = key(next.(model), tea.KeyMsg{Type: tea.KeyEsc})
 	if m.menu == nil || m.menu.page != menuMain {
@@ -1125,41 +1132,27 @@ func TestInputHasNoLineLimitAndUsesAvailableScreen(t *testing.T) {
 	}
 }
 
-func TestTaskWindowsRefreshWithoutReopening(t *testing.T) {
-	m, _ := freshModel(t)
-	t.Cleanup(m.ctl.Close)
-	if _, err := m.ctl.StartTask("sleep(600)"); err != nil {
-		t.Fatal(err)
+// Each running task has its own row under the chat: a blinking dot, its name and
+// how long it runs. The rows animate, and they go away when the tasks end.
+func TestTaskRowsShowUnderTheChat(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width, m.height = 60, 20
+	m.tasks = []core.ActiveTask{{ID: "t1", Name: "build checks", Started: time.Now().Add(-4*time.Minute - 8*time.Second)}, {ID: "t2", Started: time.Now()}}
+	block := ansi.Strip(m.subagentBlock())
+	if !strings.Contains(block, "build checks · 4m8s") || !strings.Contains(block, "t2 · ") || strings.Contains(block, "◆") {
+		t.Fatalf("rows: %q", block)
 	}
-	m.menu = &menuState{page: menuTasks}
-	m.refreshMenu()
-	if len(m.menu.tasks) != 1 {
-		t.Fatalf("tasks: %+v", m.menu.tasks)
+	if !m.hasRows() {
+		t.Fatal("task rows must keep the indicator animating")
 	}
-	task := m.menu.tasks[0]
-	defer m.ctl.StopTask(task.ID)
-	m.menu = &menuState{page: menuText, parent: menuTasks, task: task.ID, offset: 1}
-	if err := os.WriteFile(task.Log, []byte("first line\nnew output\n"), 0600); err != nil {
-		t.Fatal(err)
+	shown := ansi.Strip(m.formatTaskRow(core.ActiveTask{Name: "x", Started: time.Now()}))
+	hidden := ansi.Strip(m.formatTaskRow(core.ActiveTask{Name: "x", Started: time.Now().Add(-taskBlink - 10*time.Millisecond)}))
+	if !strings.HasPrefix(shown, "●") || strings.HasPrefix(hidden, "●") {
+		t.Fatalf("the dot does not blink: %q / %q", shown, hidden)
 	}
-	m.refreshMenu()
-	if !strings.Contains(m.menu.text, "new output") || m.menu.offset != 1 {
-		t.Fatal("task output did not refresh or lost its scroll position")
-	}
-	if err := m.ctl.StopTask(task.ID); err != nil {
-		t.Fatal(err)
-	}
-	m.menu = &menuState{page: menuTasks}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		m.refreshMenu()
-		if len(m.menu.tasks) == 1 && m.menu.tasks[0].Status != "running" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("task status did not refresh")
-		}
-		time.Sleep(time.Millisecond)
+	m.tasks = nil
+	if m.subagentBlock() != "" || m.hasRows() {
+		t.Fatal("rows stay after the tasks ended")
 	}
 }
 
@@ -1412,7 +1405,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 	m.menu = &menuState{page: menuMain}
 	want := []menuRow{
 		{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
-		{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
+		{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
 		{"Settings", "Output, compaction, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
@@ -1422,7 +1415,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 	}
 	m.width, m.height = 80, 30
 	lines := m.pageLines("", m.menuWidth())
-	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 3 more items") {
+	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 2 more items") {
 		t.Fatalf("main menu overflow hint = %q", lines)
 	}
 }
@@ -1541,7 +1534,7 @@ func TestTracingOpensLatestEntry(t *testing.T) {
 			if shortcut {
 				m = key(m, tea.KeyMsg{Type: tea.KeyCtrlT})
 			} else {
-				m.menu = &menuState{page: menuMain, selected: 4}
+				m.menu = &menuState{page: menuMain, selected: 3}
 				next, _ := m.menuActivate()
 				m = next.(model)
 			}
@@ -1983,11 +1976,39 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 	}
 }
 
-func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
-	m := bareModel(t, t.TempDir())
-	id := m.ctl.Status().Session
-	if _, err := m.ctl.StartTask("sleep(30)"); err != nil {
+// taskModel is a chat whose session starts with one background task running:
+// its init.lua spawns it from session_start.
+func taskModel(t *testing.T) model {
+	t.Helper()
+	t.Setenv("ZEL_HOME", t.TempDir())
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	initLua := `return {hooks = {session_start = function() tasks.spawn("hold", function() sh("sleep 30") end) end}}`
+	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := core.New(project, core.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	m := newModel(a, project)
+	t.Cleanup(m.ctl.Close)
+	for deadline := time.Now().Add(5 * time.Second); m.ctl.Status().Tasks != 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the session_start task never started")
+		}
+	}
+	return m
+}
+
+func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
+	m := taskModel(t)
+	id := m.ctl.Status().Session
+	if got := m.ctl.ActiveTasks(); len(got) != 1 || got[0].Name != "hold" {
+		t.Fatalf("active tasks: %+v", got)
 	}
 	next, _ := m.switchSession("")
 	m = next.(model)
@@ -2002,7 +2023,8 @@ func TestSessionSwitchConfirmsStoppingTasks(t *testing.T) {
 	m = next.(model)
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.ctl.Status().Session == id || m.ctl.Status().Tasks != 0 {
+	// The new session's own session_start starts a fresh task; the old one is stopped.
+	if m.ctl.Status().Session == id {
 		t.Fatal("confirmation did not switch and stop tasks")
 	}
 }
@@ -2037,11 +2059,8 @@ func TestEventSpoolFailureIsFatalAndExplicit(t *testing.T) {
 	}
 }
 
-func TestLiveTraceDoesNotPrecedeOlderTasksOrNotices(t *testing.T) {
+func TestLiveTraceDoesNotPrecedeOlderNotices(t *testing.T) {
 	m := bareModel(t, t.TempDir())
-	if _, err := m.ctl.StartTask("sleep(30)"); err != nil {
-		t.Fatal(err)
-	}
 	m.ctl.LogEvent("notice", "older notice")
 	m.entries = []entry{{Kind: "reasoning", Text: "live thinking", Preview: true, Meta: &core.Metadata{At: time.Now().Add(time.Second)}}}
 	trace := m.sessionTrace()
@@ -2499,7 +2518,7 @@ func BenchmarkTextPageOpen(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				m.menu = &menuState{page: menuText, parent: menuTasks, text: text}
+				m.menu = &menuState{page: menuText, parent: menuTracing, text: text}
 				_ = m.menuView()
 			}
 		})
@@ -2511,7 +2530,7 @@ func BenchmarkTextPageScroll(b *testing.B) {
 		b.Run(fmt.Sprint(size>>10, "KB"), func(b *testing.B) {
 			m := bareModel(b, b.TempDir())
 			m.width, m.height = 100, 40
-			m.menu = &menuState{page: menuText, parent: menuTasks, text: perfText(size)}
+			m.menu = &menuState{page: menuText, parent: menuTracing, text: perfText(size)}
 			_ = m.menuView()
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -2798,9 +2817,11 @@ func TestPromptCompletionComposerFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	initLua := `
-require("zel").complete("plan", function() return "PLAN BODY" end)
-require("zel").complete("polish", function() return "POLISH BODY" end)
-require("zel").complete("boom", function() error("broken") end)`
+return {completions = {
+  plan = function() return "PLAN BODY" end,
+  polish = function() return "POLISH BODY" end,
+  boom = function() error("broken") end,
+}}`
 	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2869,7 +2890,7 @@ func TestPromptExpansionCancelKeepsDraft(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	initLua := `require("zel").complete("slow", function() sleep(30) return "SLOW BODY" end)`
+	initLua := `return {completions = {slow = function() sh("sleep 30") return "SLOW BODY" end}}`
 	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2926,9 +2947,11 @@ func TestPromptCompletionWrapsAndReplacesMidText(t *testing.T) {
 		t.Fatal(err)
 	}
 	initLua := `
-require("zel").complete("plan", function() return "PLAN BODY" end)
-require("zel").complete("polish", function() return "POLISH BODY" end)
-require("zel").complete("boom", function() return "BOOM" end)`
+return {completions = {
+  plan = function() return "PLAN BODY" end,
+  polish = function() return "POLISH BODY" end,
+  boom = function() return "BOOM" end,
+}}`
 	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2976,7 +2999,7 @@ func TestPromptExpansionSessionChangeKeepsDraft(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(`require("zel").complete("plan", function() return "PLAN BODY" end)`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(`return {completions = {plan = function() return "PLAN BODY" end}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.m.ctl.Reload()
@@ -2996,4 +3019,303 @@ func TestPromptExpansionSessionChangeKeepsDraft(t *testing.T) {
 	if !hasEntry(m, "prompt_error", "the session changed while the prompt was expanding") {
 		t.Fatalf("the reason must be shown: %+v", m.entries)
 	}
+}
+
+// ---- test helpers ----
+
+func probeLayout(value string, width int) []composerRow {
+	if value == "" {
+		return nil
+	}
+	probe := textarea.New()
+	probe.CharLimit = 0
+	probe.MaxWidth = 10000
+	probe.Prompt = ""
+	probe.ShowLineNumbers = false
+	probe.SetWidth(width)
+	var rows []composerRow
+	base := 0
+	for _, line := range strings.Split(value, "\n") {
+		runes := []rune(line)
+		probe.SetValue(line)
+		col := 0
+		for {
+			probe.SetCursor(col)
+			info := probe.LineInfo()
+			end := min(info.StartColumn+info.Width, len(runes))
+			rows = append(rows, composerRow{base + info.StartColumn, base + end})
+			if info.RowOffset+1 >= info.Height || info.Width <= 0 {
+				break
+			}
+			col = info.StartColumn + info.Width
+		}
+		base += len(runes) + 1
+	}
+	return rows
+}
+
+// Bubble Tea requires the full terminal file interface, not just Write and Fd.
+var _ term.File = (*cursorOutput)(nil)
+
+type cursorBuffer struct{ strings.Builder }
+
+func (*cursorBuffer) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (*cursorBuffer) Close() error { return nil }
+
+type fixture struct {
+	m       model
+	a       *core.Runtime
+	fail    atomic.Bool
+	hold    atomic.Pointer[chan struct{}]
+	reached chan struct{}
+	project string
+}
+
+func newFixture(t *testing.T, providers bool) *fixture {
+	t.Helper()
+	f := &fixture{project: t.TempDir(), reached: make(chan struct{}, 64)}
+	home := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
+			return
+		}
+		if f.fail.Load() {
+			http.Error(w, `{"error":{"message":"rejected"}}`, http.StatusBadRequest)
+			return
+		}
+		stream := bytes.Contains(body, []byte(`"stream":true`))
+		if stream {
+			select {
+			case f.reached <- struct{}{}:
+			default:
+			}
+		}
+		if hold := f.hold.Load(); hold != nil {
+			select {
+			case <-*hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if !stream {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"s","object":"response","status":"completed","output":[{"type":"message","id":"m","role":"assistant","status":"completed","content":[{"type":"output_text","text":"summary text","annotations":[]}]}]}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n")
+	}))
+	t.Cleanup(server.Close)
+	s := core.DefaultSettings()
+	if providers {
+		s.Provider, s.Model = "p", "m"
+		s.Providers["p"] = core.Provider{BaseURL: server.URL}
+	}
+	if err := core.WriteConfig(home, s); err != nil {
+		t.Fatal(err)
+	}
+	a, err := core.New(f.project, core.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.a, f.m = a, newModel(a, f.project)
+	requestSignals.Store(f.m.ctl, f.reached)
+	t.Cleanup(func() {
+		f.m.ctl.Close()
+		a.Close()
+	})
+	return f
+}
+
+func (f *fixture) pump() {
+	for {
+		e, ok := f.m.events.TryPop()
+		if !ok {
+			f.m = flushFrame(f.m)
+			return
+		}
+		next, _ := f.m.Update(e)
+		f.m = next.(model)
+	}
+}
+
+func (f *fixture) settle(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		f.pump()
+		if !f.m.ctl.Status().Busy {
+			f.pump()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("turn did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (f *fixture) run(t *testing.T, text string) {
+	t.Helper()
+	next, _ := f.m.sendInput(core.Input{Text: text})
+	f.m = next.(model)
+	f.settle(t)
+}
+
+func flushFrame(m model) model {
+	if m.dirty {
+		next, _ := m.Update(redraw{})
+		m = next.(model)
+	}
+	return m
+}
+
+var requestSignals sync.Map
+
+func heldFixture(t *testing.T) (*fixture, func()) {
+	t.Helper()
+	f := newFixture(t, true)
+	hold := make(chan struct{})
+	f.hold.Store(&hold)
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	return f, release
+}
+
+func heldModel(t *testing.T) (model, *core.Runtime, func()) {
+	t.Helper()
+	f, release := heldFixture(t)
+	return f.m, f.a, release
+}
+
+func awaitRequest(t *testing.T, m model) {
+	t.Helper()
+	signals, ok := requestSignals.Load(m.ctl)
+	if !ok {
+		t.Fatal("model has no provider")
+	}
+	select {
+	case <-signals.(chan struct{}):
+	case <-time.After(10 * time.Second):
+		t.Fatal("provider did not receive the request")
+	}
+}
+
+func busyModel(t *testing.T) (model, func()) {
+	t.Helper()
+	m, _, release := heldModel(t)
+	m = startBusy(t, m)
+	return m, release
+}
+
+func startBusy(t *testing.T, m model) model {
+	t.Helper()
+	if err := m.ctl.Input(core.Input{Text: "busy"}); err != nil {
+		t.Fatal(err)
+	}
+	awaitRequest(t, m)
+	return settle(m)
+}
+
+func awaitIdle(t *testing.T, m model) model {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m = settle(m)
+		if !m.ctl.Status().Busy {
+			return settle(m)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("operation did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func settle(m model) model {
+	for {
+		event, ok := m.events.TryPop()
+		if !ok {
+			return flushFrame(m)
+		}
+		next, _ := m.Update(event)
+		m = next.(model)
+	}
+}
+
+func key(m model, k tea.KeyMsg) model {
+	next, _ := m.Update(k)
+	return settle(next.(model))
+}
+
+func agentEvent(e core.TurnEvent) core.Event { return core.Event{Kind: "agent", Agent: &e} }
+
+func freshAgent(t testing.TB) *core.Runtime {
+	t.Helper()
+	t.Setenv("ZEL_HOME", t.TempDir())
+	a, err := core.New(t.TempDir(), core.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	return a
+}
+
+func freshModel(t testing.TB) (model, *core.Runtime) {
+	t.Helper()
+	a := freshAgent(t)
+	m := newModel(a, a.Shell.Dir)
+	t.Cleanup(m.ctl.Close)
+	return m, a
+}
+
+func bareModel(t testing.TB, cwd string) model {
+	t.Helper()
+	m, _ := freshModel(t)
+	m.cwd = cwd
+	m.menu = nil // Most unit tests exercise chat, not first-run onboarding.
+	return m
+}
+
+func renderEntry(e entry, width, limit int) string { return renderEntryMode(e, width, limit, true) }
+
+func (m *model) timeline() string { return strings.Join(m.timelineRows(0), "\n") }
+
+// setConfig updates database preferences and reloads it.
+func setConfig(t *testing.T, ctl *core.Controller, change func(*core.Settings)) {
+	t.Helper()
+	home, err := core.ZelHome("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := core.LoadConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change(&s)
+	if err := core.WriteConfig(home, s); err != nil {
+		t.Fatal(err)
+	}
+	ctl.Reload()
+}
+
+func (m *model) applyAgent(e core.TurnEvent) {
+	m.entries = core.ApplyEvent(m.entries, e)
+	if e.Meta != nil && e.Meta.ContextInput != nil {
+		m.contextTokens = *e.Meta.ContextInput
+	}
+}
+
+func captureTerm(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var out bytes.Buffer
+	termOut = &out
+	t.Cleanup(func() { termOut = nil })
+	return &out
 }

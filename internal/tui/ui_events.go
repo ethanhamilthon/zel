@@ -70,7 +70,7 @@ func forwardControl(ctx context.Context, events *eventQueue, program *tea.Progra
 // a tick of another generation is stale and ignored.
 type workingTick struct{ gen uint64 }
 
-// subagentsChanged tells the UI that the set of running agents or a step count changed.
+// subagentsChanged tells the UI that the running agents or tasks, or a step count, changed.
 type subagentsChanged struct{}
 
 // workingFrame is the refresh interval for the working loader and elapsed time.
@@ -162,15 +162,18 @@ func subagentColor(elapsed time.Duration) lipgloss.Color {
 	return lipgloss.Color(background.BlendRgb(accent, brightness).Hex())
 }
 
-// subagentBlock renders the indicator rows for running subagents (zel -p children).
+// subagentBlock renders the indicator rows for running subagents, then one row
+// for each running background task.
 func (m model) subagentBlock() string {
-	subagents := m.activeSubagents()
-	if len(subagents) == 0 {
-		return ""
+	var rows []string
+	for _, child := range m.activeSubagents() {
+		rows = append(rows, m.formatSubagentRow(child))
 	}
-	rows := make([]string, len(subagents))
-	for i, child := range subagents {
-		rows[i] = m.formatSubagentRow(child)
+	for _, task := range m.tasks {
+		rows = append(rows, m.formatTaskRow(task))
+	}
+	if len(rows) == 0 {
+		return ""
 	}
 	return strings.Join(rows, "\n\n") + "\n\n"
 }
@@ -195,6 +198,25 @@ func (m model) formatSubagentRow(child SubagentRun) string {
 	pad := max(1, m.width-ansi.StringWidth(icon)-1)
 	text := ansi.Truncate(strings.Join(parts, " · "), pad, "…")
 	return lipgloss.NewStyle().Foreground(subagentColor(elapsed)).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
+}
+
+// taskBlink is the half period of the task marker: shown, then hidden.
+const taskBlink = 600 * time.Millisecond
+
+// formatTaskRow renders a running background task: [blinking dot] name · working-time
+func (m model) formatTaskRow(task core.ActiveTask) string {
+	elapsed := time.Since(task.Started)
+	icon := "●"
+	if (elapsed/taskBlink)%2 == 1 {
+		icon = " "
+	}
+	name := task.Name
+	if name == "" {
+		name = task.ID
+	}
+	pad := max(1, m.width-ansi.StringWidth(icon)-1)
+	text := ansi.Truncate(name+" · "+formatDuration(elapsed), pad, "…")
+	return lipgloss.NewStyle().Foreground(inputBlue).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
 }
 
 func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
@@ -240,7 +262,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.entries, m.contextTokens = slices.Clone(e.Session.Records), e.Session.Context
 		m.turnIndex = len(m.entries)
 		m.cache = nil
-		m.subagents = m.ctl.ActiveSubagents()
+		m.subagents, m.tasks = m.ctl.ActiveSubagents(), m.ctl.ActiveTasks()
 		m.pasteGeneration++
 		m.pasting = false
 		m.dismissFileCompletion()
@@ -295,7 +317,7 @@ func (m *model) setComposer(text string) {
 
 type menuTick struct{}
 
-// menuPulse is the timer of the open live pages (Info, Tasks, Tracing, Resume).
+// menuPulse is the timer of the open live pages (Info, Tracing, Resume).
 // It has one owner: m.menuPulsing says whether a tick is outstanding.
 func menuPulse() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return menuTick{} })
@@ -312,7 +334,7 @@ func liveMenuPage(mu *menuState) (menuPage, bool) {
 		page = mu.parent
 	}
 	switch page {
-	case menuInfo, menuTasks, menuTracing, menuResume:
+	case menuInfo, menuTracing, menuResume:
 		return page, true
 	}
 	return 0, false
@@ -332,8 +354,7 @@ func (m *model) ensureMenuPulse() tea.Cmd {
 type menuRequest struct {
 	menu  *menuState
 	page  menuPage
-	text  bool // a text page of the list is open
-	task  string
+	text  bool              // a text page of the list is open
 	live  []core.TraceEntry // streaming entries that are not in the session trace yet
 	index int
 }
@@ -344,9 +365,6 @@ type menuSnapshot struct {
 	menu     *menuState
 	page     menuPage
 	info     []menuRow
-	tasks    []core.Task
-	taskText string
-	hasTask  bool
 	trace    []core.TraceEntry
 	sessions []core.SessionSummary
 }
@@ -357,7 +375,7 @@ func (m *model) menuRequest() (menuRequest, bool) {
 		return menuRequest{}, false
 	}
 	mu := m.menu
-	req := menuRequest{menu: mu, page: page, text: mu.page == menuText, task: mu.task, index: mu.traceIndex}
+	req := menuRequest{menu: mu, page: page, text: mu.page == menuText, index: mu.traceIndex}
 	if page == menuTracing {
 		req.live = m.liveTrace()
 	}
@@ -371,15 +389,6 @@ func (r menuRequest) load(ctl *core.Controller) menuSnapshot {
 	case menuInfo:
 		if info, err := ctl.Info(); err == nil {
 			snap.info = infoRows(info)
-		}
-	case menuTasks:
-		if tasks, err := ctl.Tasks(); err == nil {
-			snap.tasks = tasks
-		}
-		if r.text {
-			if text, err := ctl.TaskOutput(r.task); err == nil {
-				snap.taskText, snap.hasTask = text, true
-			}
 		}
 	case menuTracing:
 		trace := append(ctl.Trace(), r.live...)
@@ -411,15 +420,6 @@ func (m *model) applyMenuSnapshot(snap menuSnapshot) {
 	case menuInfo:
 		if snap.info != nil && !reflect.DeepEqual(mu.info, snap.info) {
 			mu.info, changed = snap.info, true
-		}
-	case menuTasks:
-		if snap.tasks != nil && !reflect.DeepEqual(mu.tasks, snap.tasks) {
-			mu.tasks, changed = snap.tasks, true
-		}
-		if mu.page == menuText && snap.hasTask {
-			if text := m.taskText(mu.task, snap.taskText); text != mu.text {
-				mu.text = text
-			}
 		}
 	case menuTracing:
 		if !slices.EqualFunc(mu.trace, snap.trace, func(a, b core.TraceEntry) bool {
@@ -464,7 +464,7 @@ func (m *model) menuSnapshotCmd() tea.Cmd {
 		return nil
 	}
 	status := m.ctl.Status()
-	active := status.Busy || status.Tasks > 0 || len(m.subagents) > 0
+	active := status.Busy || status.Tasks > 0 || m.hasRows()
 	if mu.loaded && !active && !mu.wasActive && !m.menuDirty {
 		return nil
 	}

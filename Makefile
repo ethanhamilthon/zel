@@ -1,4 +1,4 @@
-.PHONY: install dev test clean mockup
+.PHONY: install dev test clean
 
 BINDIR ?= $(HOME)/.local/bin
 DEV_HOME ?= $(HOME)/.zeldev
@@ -23,6 +23,3 @@ test:
 clean:
 	rm -rf $(DEV_HOME)
 
-# Render the current TUI states into docs/mockup/index.html.
-mockup:
-	ZEL_MOCKUP=$(CURDIR)/docs/mockup go test ./internal/tui -run TestMockupFrames -count=1

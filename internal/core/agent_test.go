@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,7 +76,7 @@ func TestFailedTurnClosesWithItsError(t *testing.T) {
 		t.Fatalf("closing = %+v", closing)
 	}
 	// The closing message survives a reload from the database with its time and steps.
-	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	stored, err := storedRecords(t, a)
 	if err != nil || len(stored) == 0 || stored[len(stored)-1].Kind != "turn_end" || stored[len(stored)-1].Meta == nil || stored[len(stored)-1].Meta.Steps != 1 {
 		t.Fatalf("stored %+v %v", stored, err)
 	}
@@ -157,7 +158,7 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 2 {
 		t.Fatalf("live closing = %+v", live)
 	}
-	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	stored, err := storedRecords(t, a)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("stored %+v %v", stored, err)
 	}
@@ -196,7 +197,7 @@ func TestStoppedStreamCountsStepsSeenBeforeCancel(t *testing.T) {
 	if live := events[len(events)-1]; live.Kind != "turn_end" || live.Text != "stopped by user" || live.Meta == nil || live.Meta.Steps != 1 {
 		t.Fatalf("live closing = %+v", live)
 	}
-	stored, err := ReadSession(a.Shell.Dir, a.SessionID())
+	stored, err := storedRecords(t, a)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("stored %+v %v", stored, err)
 	}
@@ -379,7 +380,7 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
 				`{"type":"function_call","call_id":"c1","name":"lua","arguments":%q},`+
 				`{"type":"function_call","call_id":"c2","name":"lua","arguments":%q}]}}`,
-				args("fs.write('started', '')\nsleep(1)\nprint('late')"), args("fs.write('second', '')")))
+				args("write('started', '')\nsh('sleep 1')\nprint('late')"), args("write('second', '')")))
 		}
 		return textReply("ok")
 	}}
@@ -431,19 +432,19 @@ func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 
 func TestTaskStopAndSessionClose(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := a.StartTask("sleep(30)"); err != nil {
+	if _, err := startTask(a, "while true do end"); err != nil {
 		t.Fatal(err)
 	}
 	if a.RunningTasks() != 1 {
 		t.Fatal("task not running")
 	}
-	if err := a.StopTask("t1"); err != nil {
+	if err := (luaEnv{a.session()}).Tasks().Stop("t1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := awaitInput(t, a); got[0].Text != "<notification>t1 stopped</notification>" {
 		t.Fatalf("result %+v", got)
 	}
-	if _, err := a.StartTask("sh('sleep 30')"); err != nil {
+	if _, err := startTask(a, "sh('sleep 30')"); err != nil {
 		t.Fatal(err)
 	}
 	old, start := a.SessionID(), time.Now()
@@ -453,7 +454,7 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	if time.Since(start) > 5*time.Second || a.RunningTasks() != 0 || len(a.Queue().Take()) != 0 {
 		t.Fatal("session change did not stop the task quietly")
 	}
-	if list, err := sessionTasks(a.db, old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
+	if list, err := a.db.Tasks(old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
 		t.Fatalf("tasks %+v %v", list, err)
 	}
 }
@@ -673,7 +674,7 @@ func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
 	for i := 0; i < maxQueued; i++ {
 		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
 	}
-	if _, err := a.StartTask("return 1"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
+	if _, err := startTask(a, "return 1"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
 		t.Fatalf("admission: %v", err)
 	}
 	for i := 0; i < maxQueued; i++ {
@@ -691,7 +692,7 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	if _, err := a.db.Exec(`CREATE TRIGGER fail_task_finish BEFORE UPDATE ON tasks BEGIN SELECT RAISE(FAIL, 'completion blocked'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.StartTask("return 1"); err != nil {
+	if _, err := startTask(a, "return 1"); err != nil {
 		t.Fatal(err)
 	}
 	a.session().tasks.wg.Wait()
@@ -732,7 +733,7 @@ func TestSavedImageOriginalsRetainedAndMissingReported(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	records, err := ReadSession(a.Shell.Dir, a.SessionID())
+	records, err := storedRecords(t, a)
 	if err != nil || !slices.ContainsFunc(records, func(r Record) bool { return strings.Contains(r.Text, "Original image unavailable") }) {
 		t.Fatalf("missing-source notice: %v err=%v", records, err)
 	}
@@ -793,7 +794,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	h := newHarness(t, &fakeModel{gate: gate})
 	h.send("first")
 	h.inFlight(1)
-	if _, err := h.a.StartTask("print('notice A')"); err != nil {
+	if _, err := startTask(h.a, "print('notice A')"); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); h.a.RunningTasks() > 0; time.Sleep(time.Millisecond) {
@@ -877,7 +878,7 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 		}
 	}
 	write := func(text string) {
-		writeRaw("require('zel').instructions('" + text + "')")
+		writeRaw("return {instructions = '" + text + "'}")
 	}
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
@@ -1223,7 +1224,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 		return textReply("ok")
 	}}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		s, err := LoadConfig(home, dir)
+		s, err := LoadConfig(home)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1250,4 +1251,30 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	if err := s.readSession(); err != nil || s.compacted != want || want.Drop == 0 {
 		t.Fatalf("resumed bounds %+v, want %+v (%v)", s.compacted, want, err)
 	}
+}
+
+// storedRecords reads the session's records back from the database, with a
+// connection of its own.
+func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
+	t.Helper()
+	db, err := openDB(a.DBPath())
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	s := &session{db: db, id: a.SessionID(), acts: &activities{}}
+	if err := s.readSession(); err != nil {
+		return nil, err
+	}
+	return s.Records(), nil
+}
+
+// startTask runs code as a background task of the current session, as tasks.spawn does.
+func startTask(a *Runtime, code string) (string, error) {
+	r := a.runLua(context.Background(), "return tasks.spawn('test', function() "+code+" end)")
+	if r.IsError {
+		return "", errors.New(r.Output)
+	}
+	lines := strings.Split(strings.TrimSpace(r.Output), "\n")
+	return lines[len(lines)-1], nil
 }

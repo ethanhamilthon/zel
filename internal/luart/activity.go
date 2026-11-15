@@ -3,7 +3,6 @@ package luart
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,8 +19,8 @@ const maxLabel = 160 // runes; the UI truncates again to the terminal width
 
 // simpleVerbs are host functions labeled by a verb and their first argument.
 var simpleVerbs = map[string]string{
-	"view": "viewing", "fs.read": "reading", "fs.edit": "editing", "fs.patch": "editing",
-	"fs.glob": "finding files", "fs.exists": "checking",
+	"view": "viewing", "read": "reading", "edit": "editing", "patch": "editing",
+	"glob": "finding files", "exists": "checking",
 }
 
 // backgroundKey marks the context of a background task (tasks.spawn); its host
@@ -141,91 +140,62 @@ func (v *vm) describe(name string, L *lua.LState) string {
 		return phrase(verb, arg(1))
 	}
 	switch name {
-	case "print", "slice", "json.encode", "json.decode", "log.info", "log.warn":
+	case "print", "slice", "log":
 		return "" // bookkeeping: no label
 	case "sh":
 		if label := shellLabel(arg(1)); label != "" {
 			return "running bash: " + label
 		}
 		return "running bash"
-	case "sleep":
-		return phrase("sleeping", arg(1), "sec")
-	case "fs.write":
+	case "write":
 		if opts(L, 3).RawGetString("append") == lua.LTrue {
 			return phrase("appending to", arg(1))
 		}
 		return phrase("writing", arg(1))
-	case "fs.list":
+	case "list":
 		return phrase("listing", fallback(arg(1), "."))
-	case "fs.grep":
+	case "grep":
 		// The pattern is free text that may be a secret, so only the directory shows.
 		if p := field(2, "path"); p != "" {
 			return phrase("searching in", p)
 		}
 		return "searching files"
-	case "fs.tmp":
+	case "tmp":
 		return "creating a temp file"
-	case "web.get":
-		return phrase("GET", safeURL(arg(1)))
-	case "web.post":
-		return phrase("POST", safeURL(arg(1)))
-	case "web.request":
-		return phrase(fallback(strings.ToUpper(field(1, "method")), "GET"), safeURL(field(1, "url")))
-	case "state.get":
-		return "reading state"
-	case "state.set":
-		// Keys are free text and may hold secrets: the label names the action only.
-		if L.Get(2) == lua.LNil {
-			return "deleting state"
-		}
-		return "writing state"
-	case "state.list":
-		return "listing state keys"
-	case "log.notice":
-		return "showing a notice"
-	case "session.models":
+	case "models":
 		return "listing models"
 	case "session.rename":
 		return "renaming session"
-	case "agents.spawn":
-		return phrase("starting agent in", v.agentModel(L))
-	case "agents.run":
+	case "agent":
 		return phrase("running agent in", v.agentModel(L))
 	}
-	if ns, op, _ := strings.Cut(name, "."); ns == "tasks" || ns == "agents" {
-		return v.jobLabel(ns, op, L)
+	if ns, op, _ := strings.Cut(name, "."); ns == "tasks" {
+		return v.jobLabel(op, L)
 	}
-	return phrase("running", name) // plugin functions (zel.fn) and anything else
+	return phrase("running", name) // tools from init.lua and anything else
 }
 
-// jobLabel describes a call of the tasks or agents namespace.
-func (v *vm) jobLabel(ns, op string, L *lua.LState) string {
-	noun, id := strings.TrimSuffix(ns, "s"), textOf(L.Get(1))
+// jobLabel describes a call of the tasks namespace.
+func (v *vm) jobLabel(op string, L *lua.LState) string {
+	id := textOf(L.Get(1))
 	switch op {
 	case "spawn":
-		if ns == "tasks" {
-			return phrase("starting task", textOf(opts(L, 2).RawGetString("name")))
-		}
+		return phrase("starting task", id)
 	case "list":
-		return "listing " + ns
-	case "get", "status":
-		return phrase("checking", noun, id)
+		return "listing tasks"
+	case "get":
+		return phrase("checking task", id)
 	case "wait":
-		return phrase("waiting for", noun, id)
-	case "wait_all":
-		n := 0
 		if t, ok := L.Get(1).(*lua.LTable); ok {
-			n = t.Len()
+			return phrase("waiting for", fmt.Sprintf("%d tasks", t.Len()))
 		}
-		return phrase("waiting for", fmt.Sprintf("%d %ss", n, noun))
-	case "result":
-		return phrase("reading the result of", noun, id)
+		return phrase("waiting for task", id)
 	case "tail":
-		return phrase("reading the output of", noun, id)
+		return phrase("reading the output of task", id)
 	case "stop":
-		return phrase("stopping", noun, id)
+		return phrase("stopping task", id)
 	}
-	return phrase("running", ns+"."+op)
+	return phrase("running", "tasks."+op)
 }
 
 // agentModel is the model an agent call names, or the session's, with its effort after a slash.
@@ -268,27 +238,6 @@ func phrase(parts ...string) string {
 		}
 	}
 	return strings.Join(keep, " ")
-}
-
-// safeURL shows the scheme and host. Credentials, paths, queries and fragments
-// are where secrets go, so only the presence of a path, query or fragment shows
-// ("…"). Text that is not a URL with a scheme and host shows as "…".
-func safeURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "…"
-	}
-	out := u.Scheme + "://" + u.Host
-	if p := u.EscapedPath(); p != "" && p != "/" {
-		out += "/…"
-	}
-	if u.RawQuery != "" {
-		out += "?…"
-	}
-	if u.Fragment != "" || u.RawFragment != "" {
-		out += "#…"
-	}
-	return out
 }
 
 // inertCommands are programs whose plain path arguments show in a label. Every

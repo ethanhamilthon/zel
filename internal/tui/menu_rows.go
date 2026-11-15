@@ -9,14 +9,11 @@ import (
 	"zel/internal/core"
 )
 
-// rowsCacheable reports whether the rows of the page depend only on the snapshot
-// data. A running task shows its elapsed time, so the Tasks page is rebuilt then.
+// rowsCacheable reports whether the rows of the page depend only on the snapshot data.
 func (mu *menuState) rowsCacheable() bool {
 	switch mu.page {
 	case menuTracing, menuResume:
 		return true
-	case menuTasks:
-		return !slices.ContainsFunc(mu.tasks, func(t core.Task) bool { return t.Status == "running" })
 	}
 	return false
 }
@@ -26,7 +23,7 @@ func (m model) rawMenuRows() []menuRow {
 	if !mu.rowsCacheable() {
 		return m.buildMenuRows()
 	}
-	count := len(mu.trace) + len(mu.tasks) + len(mu.sessions)
+	count := len(mu.trace) + len(mu.sessions)
 	if c := mu.listCache; c != nil && c.page == mu.page && c.count == count && c.rev == mu.rev {
 		return c.rows
 	}
@@ -96,14 +93,6 @@ func (m model) buildMenuRows() []menuRow {
 				row.detail = "current"
 			}
 			rows = append(rows, row)
-		}
-	case menuTasks:
-		for i := len(mu.tasks) - 1; i >= 0; i-- {
-			label, detail := taskRow(mu.tasks[i])
-			rows = append(rows, menuRow{label, detail})
-		}
-		if rows == nil {
-			rows = []menuRow{{"No background tasks", ""}}
 		}
 	case menuTracing:
 		for _, e := range mu.trace {

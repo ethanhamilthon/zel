@@ -30,58 +30,43 @@ func jobErr(L *lua.LState, fn string, err error) {
 	raise(L, fn, EFAIL, "%v", err)
 }
 
-func (v *vm) installJobs(name string, jobs func() Jobs, spawn, run lua.LGFunction) {
-	fn := func(op string) string { return name + "." + op }
+// installTasks installs the tasks namespace: Lua functions in the background.
+func (v *vm) installTasks() {
+	jobs := func() Jobs { return v.env.Tasks() }
 	fns := map[string]lua.LGFunction{
-		"spawn": spawn,
+		"spawn": v.tasksSpawn,
 		"list": func(L *lua.LState) int {
 			out := L.NewTable()
 			for _, j := range jobs().List() {
-				out.Append(v.jobRow(name, j))
+				out.Append(v.jobRow(j, nil))
 			}
 			L.Push(out)
 			return 1
 		},
 		"get": func(L *lua.LState) int {
-			j, ok := jobs().Get(L.CheckString(1))
+			id := L.CheckString(1)
+			j, ok := jobs().Get(id)
 			if !ok {
 				L.Push(lua.LNil)
 				return 1
 			}
-			L.Push(v.jobRow(name, j))
-			return 1
-		},
-		"status": func(L *lua.LState) int {
-			j, ok := jobs().Get(L.CheckString(1))
-			if !ok {
-				jobErr(L, fn("status"), ErrNoJob)
-			}
-			L.Push(lua.LString(j.State))
+			res, _, _ := jobs().Result(id)
+			L.Push(v.jobRow(j, res))
 			return 1
 		},
 		"wait": func(L *lua.LState) int {
+			if _, many := L.Get(1).(*lua.LTable); many {
+				return v.waitAll(L, "tasks.wait", jobs())
+			}
 			res, ok, err := jobs().Wait(v.ctx, L.CheckString(1), seconds(L, 2))
 			if err != nil {
-				jobErr(L, fn("wait"), err)
+				jobErr(L, "tasks.wait", err)
 			}
 			if !ok {
-				v.ctxErr(fn("wait"))
+				v.ctxErr("tasks.wait")
 				L.Push(lua.LNil)
 				L.Push(lua.LString("timeout"))
 				return 2
-			}
-			L.Push(toLua(L, res))
-			return 1
-		},
-		"wait_all": func(L *lua.LState) int { return v.waitAll(L, fn("wait_all"), jobs()) },
-		"result": func(L *lua.LState) int {
-			res, ok, err := jobs().Result(L.CheckString(1))
-			if err != nil {
-				jobErr(L, fn("result"), err)
-			}
-			if !ok {
-				L.Push(lua.LNil)
-				return 1
 			}
 			L.Push(toLua(L, res))
 			return 1
@@ -93,39 +78,35 @@ func (v *vm) installJobs(name string, jobs func() Jobs, spawn, run lua.LGFunctio
 			}
 			text, err := jobs().Tail(L.CheckString(1), n)
 			if err != nil {
-				jobErr(L, fn("tail"), err)
+				jobErr(L, "tasks.tail", err)
 			}
 			L.Push(lua.LString(text))
 			return 1
 		},
 		"stop": func(L *lua.LState) int {
 			if err := jobs().Stop(L.CheckString(1)); err != nil {
-				jobErr(L, fn("stop"), err)
+				jobErr(L, "tasks.stop", err)
 			}
 			return 0
 		},
 	}
-	if run != nil {
-		fns["run"] = run
-	}
-	v.table(name, fns)
+	v.table("tasks", fns)
 }
 
-func (v *vm) jobRow(namespace string, j JobInfo) *lua.LTable {
+// jobRow is a task as tasks.list and tasks.get show it; res is its result once it ended.
+func (v *vm) jobRow(j JobInfo, res map[string]any) *lua.LTable {
 	row := v.L.NewTable()
 	row.RawSetString("id", lua.LString(j.ID))
+	row.RawSetString("name", lua.LString(j.Name))
 	row.RawSetString("state", lua.LString(j.State))
-	if namespace == "agents" {
-		row.RawSetString("model", lua.LString(j.Model))
-		row.RawSetString("prompt", lua.LString(j.Prompt))
-	} else {
-		row.RawSetString("name", lua.LString(j.Name))
+	if res != nil {
+		row.RawSetString("result", toLua(v.L, res))
 	}
 	return row
 }
 
 // waitAll waits for every ID of the list against one shared deadline and
-// returns the results by position; unfinished jobs leave a hole.
+// returns the results by position; unfinished tasks leave a hole.
 func (v *vm) waitAll(L *lua.LState, fn string, jobs Jobs) int {
 	list := L.CheckTable(1)
 	var deadline time.Time
@@ -136,7 +117,7 @@ func (v *vm) waitAll(L *lua.LState, fn string, jobs Jobs) int {
 	for i := 1; i <= list.Len(); i++ {
 		id, ok := list.RawGetInt(i).(lua.LString)
 		if !ok {
-			raise(L, fn, EINVAL, "item #%d is not a job id", i)
+			raise(L, fn, EINVAL, "item #%d is not a task id", i)
 		}
 		var left time.Duration
 		if !deadline.IsZero() {
@@ -164,16 +145,22 @@ func (v *vm) waitAll(L *lua.LState, fn string, jobs Jobs) int {
 	return 1
 }
 
-// tasksSpawn starts fn in the background: a fresh task VM on its own
-// goroutine gets a copy of fn and everything it captured.
+// tasksSpawn starts fn in the background: tasks.spawn(name, fn, o?). A fresh
+// task VM on its own goroutine gets a copy of fn and everything it captured.
 func (v *vm) tasksSpawn(L *lua.LState) int {
-	fn := L.CheckFunction(1)
+	name, ok := L.Get(1).(lua.LString)
+	if !ok || strings.TrimSpace(string(name)) == "" {
+		raise(L, "tasks.spawn", EINVAL, "expected a name first: tasks.spawn(\"build checks\", function() ... end)")
+	}
+	fn, ok := L.Get(2).(*lua.LFunction)
+	if !ok {
+		raise(L, "tasks.spawn", EINVAL, "arg #2 must be a function")
+	}
 	if fn.IsG {
 		raise(L, "tasks.spawn", EINVAL, "expected a Lua function, got a Go function; wrap it: function() return f(...) end")
 	}
-	o := opts(L, 2)
-	var to TaskOpts
-	to.Name, _ = optString(o, "name")
+	o := opts(L, 3)
+	to := TaskOpts{Name: strings.Join(strings.Fields(string(name)), " ")}
 	if n, ok := optNumber(o, "timeout"); ok && n > 0 {
 		to.Timeout = time.Duration(n * float64(time.Second))
 	}
@@ -190,18 +177,6 @@ func (v *vm) tasksSpawn(L *lua.LState) int {
 	}
 	L.Push(lua.LString(id))
 	return 1
-}
-
-// CodeTask compiles code into the body of a task with its own VM, for tasks
-// started from outside Lua. discard frees the VM when the task never runs.
-func CodeTask(env Env, cfg *Config, code string) (run TaskFunc, discard func(), err error) {
-	tv := newVM(env, cfg, roleTask)
-	fn, err := tv.L.Load(strings.NewReader(code), "task")
-	if err != nil {
-		tv.close()
-		return nil, nil, err
-	}
-	return tv.task(fn), tv.close, nil
 }
 
 // task returns the body of a task: call fn in this VM, then close it. What
@@ -229,15 +204,16 @@ func (v *vm) task(fn *lua.LFunction) TaskFunc {
 	}
 }
 
-// waitFinished pushes the result of a job started by run: it waits for the end
-// or raises when the invocation is cancelled or out of time. The job itself
-// keeps running then; its result arrives as a message.
+// waitFinished pushes the result of a job started by agent{}: it waits for the end,
+// or stops the job and raises when the call is cancelled or out of time. Nobody
+// else waits for that job, so it must not run on unseen.
 func (v *vm) waitFinished(L *lua.LState, fn string, jobs Jobs, id string) int {
 	res, done, err := jobs.Wait(v.ctx, id, 0)
 	if err != nil {
 		jobErr(L, fn, err)
 	}
 	if !done {
+		_ = jobs.Stop(id)
 		v.ctxErr(fn)
 		raise(L, fn, EFAIL, "job did not finish")
 	}
@@ -268,20 +244,12 @@ func (v *vm) agentOpts(L *lua.LState, fn string, waited bool) AgentOpts {
 	return a
 }
 
-func (v *vm) agentsSpawn(L *lua.LState) int {
-	id, err := v.env.Agents().Spawn(v.agentOpts(L, "agents.spawn", false))
-	if err != nil {
-		raise(L, "agents.spawn", EFAIL, "%v", err)
-	}
-	L.Push(lua.LString(id))
-	return 1
-}
-
-func (v *vm) agentsRun(L *lua.LState) int {
+// agentRun runs a subagent and waits for its answer: agent{prompt, ...}.
+func (v *vm) agentRun(L *lua.LState) int {
 	agents := v.env.Agents()
-	id, err := agents.Spawn(v.agentOpts(L, "agents.run", true))
+	id, err := agents.Spawn(v.agentOpts(L, "agent", true))
 	if err != nil {
-		raise(L, "agents.run", EFAIL, "%v", err)
+		raise(L, "agent", EFAIL, "%v", err)
 	}
-	return v.waitFinished(L, "agents.run", agents, id)
+	return v.waitFinished(L, "agent", agents, id)
 }

@@ -26,7 +26,7 @@ func main() {
 		ctx, cancel = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	}
 	defer cancel()
-	if err := cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, cli.Options{Open: core.New, Interactive: tui.Run}); err != nil {
+	if err := cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, cli.Options{Open: core.New, Interactive: tui.Run}); err != nil {
 		code := cli.ExitCode(err)
 		if !cli.IsReported(err) {
 			fmt.Fprintln(os.Stderr, err)

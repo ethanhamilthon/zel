@@ -56,7 +56,7 @@ func newVM(env Env, cfg *Config, r role) *vm {
 	v.out = &v.buf
 	v.installHost()
 	if cfg != nil {
-		cfg.installFns(v)
+		cfg.installTools(v)
 	}
 	return v
 }
@@ -70,7 +70,7 @@ func (v *vm) close() {
 	v.L.Close()
 }
 
-// agentsAllowed reports whether agents.* works here: subagents cannot start
+// agentsAllowed reports whether agent{} works here: subagents cannot start
 // subagents of their own.
 func (v *vm) agentsAllowed() bool { return v.env.Info().Depth == 0 }
 

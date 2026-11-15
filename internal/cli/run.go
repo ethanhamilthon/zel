@@ -3,15 +3,11 @@ package cli
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/mattn/go-isatty"
@@ -68,10 +64,20 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "events", "session", "init":
+	case "version", "help", "--help", "-h":
 		return true
 	}
 	return false
+}
+
+// removed are the commands and flags 0.6 dropped, with what to do instead.
+var removed = map[string]string{
+	"init":     "create .zel/init.lua yourself; it returns a table, see zel help",
+	"session":  "resume sessions from the TUI (Ctrl+R) and read them in Tracing (Ctrl+T)",
+	"models":   "pick models in the TUI (Ctrl+M)",
+	"events":   "notices and errors are in Tracing (Ctrl+T)",
+	"--config": "put the file in ~/.zel/init.lua or .zel/init.lua",
+	"-config":  "put the file in ~/.zel/init.lua or .zel/init.lua",
 }
 
 type failedWriter struct {
@@ -97,36 +103,22 @@ type Options struct {
 	Interactive func(context.Context, *core.Runtime, string) error
 }
 
-func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer, options Options) error {
+func Run(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	w := &failedWriter{w: out}
-	err := run(ctx, args, in, w, diagnostics, options)
+	err := run(ctx, args, in, w, options)
 	if err == nil && w.err != nil {
 		err = fmt.Errorf("write output: %w", w.err)
 	}
 	return err
 }
 
-func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer, options Options) error {
+func run(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	if len(args) > 0 {
+		name, _, _ := strings.Cut(args[0], "=")
+		if hint, ok := removed[name]; ok {
+			return fmt.Errorf("%s was removed in zel 0.6: %s", name, hint)
+		}
 		switch args[0] {
-		case "init":
-			if len(args) != 1 {
-				return errors.New("usage: zel init")
-			}
-			dir, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			created, err := core.InitProject(dir)
-			if err != nil {
-				return err
-			}
-			if created {
-				fmt.Fprintln(out, "Created .zel/init.lua")
-			} else {
-				fmt.Fprintln(out, ".zel/init.lua already exists; left unchanged")
-			}
-			return nil
 		case "version", "help", "--help", "-h":
 			if len(args) > 1 {
 				return fmt.Errorf("%s takes no arguments", args[0])
@@ -137,12 +129,6 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 				fmt.Fprint(out, helpText)
 			}
 			return nil
-		case "events":
-			return eventsCommand(args[1:], out)
-		case "session":
-			return sessionSubcommand(args[1:], out)
-		case "models":
-			return modelsCommand(ctx, args[1:], out, diagnostics)
 		case "update":
 			return updateCommand(ctx, args[1:], out)
 		}
@@ -150,91 +136,19 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 	return sessionCommand(ctx, args, in, out, options)
 }
 
-func flagSet(name string, define func(*flag.FlagSet)) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	define(fs)
-	return fs
-}
-
-// parseWithConfig parses fs with a --config flag and exports the file as ZEL_CONFIG,
-// so the agent, its lua tool and helper commands all read the same layers.
-func parseWithConfig(fs *flag.FlagSet, args []string) error {
-	configPath := fs.String("config", "", "config file merged on top of the others")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *configPath == "" {
-		return nil
-	}
-	resolved, err := core.ResolvePath(*configPath)
-	if err != nil {
-		return err
-	}
-	path, err := filepath.Abs(resolved)
-	if err != nil {
-		return err
-	}
-	return os.Setenv("ZEL_CONFIG", path)
-}
-
-func modelsCommand(ctx context.Context, args []string, out, diagnostics io.Writer) error {
-	var asJSON bool
-	fs := flagSet("models", func(fs *flag.FlagSet) { fs.BoolVar(&asJSON, "json", false, "print JSON") })
-	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return errors.New("usage: zel models [--json]")
-	}
-	cwd, _ := os.Getwd() // only resolves a relative ZEL_HOME, which then reports its own error
-	home, err := core.ZelHome(cwd)
-	if err != nil {
-		return err
-	}
-	settings, err := core.LoadConfig(home, cwd)
-	if err != nil {
-		return err
-	}
-	providers := settings.Providers
-	if len(providers) == 0 {
-		return errors.New("no providers configured: open zel to add a provider")
-	}
-	choices, errs := core.AllModels(ctx, providers)
-	if ctx.Err() != nil {
-		return cancelled
-	}
-	if asJSON {
-		failures := map[string]string{}
-		for name, err := range errs {
-			failures[name] = err.Error()
-		}
-		data, _ := json.Marshal(map[string]any{"models": modelList(choices), "failures": failures})
-		fmt.Fprintf(out, "%s\n", data)
-	} else {
-		for _, c := range choices {
-			fmt.Fprintf(out, "%s\t%s\n", c.Provider, c.Model)
-		}
-		for _, name := range slices.Sorted(maps.Keys(errs)) {
-			fmt.Fprintf(diagnostics, "%s: %v\n", name, errs[name])
-		}
-	}
-	if len(errs) > 0 {
-		return &ExitError{Code: 1, Reported: true}
-	}
-	return nil
-}
-
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	var prompt, provider, model, effort string
-	fs := flagSet("zel", func(fs *flag.FlagSet) {
-		fs.StringVar(&prompt, "p", "", "run a prompt without the TUI")
-		fs.StringVar(&provider, "provider", "", "provider for this run")
-		fs.StringVar(&model, "model", "", "model for this run")
-		fs.StringVar(&effort, "effort", "", "reasoning effort for this run")
-	})
-	if err := parseWithConfig(fs, args); err != nil {
+	fs := flag.NewFlagSet("zel", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&prompt, "p", "", "run a prompt without the TUI")
+	fs.StringVar(&provider, "provider", "", "provider for this run")
+	fs.StringVar(&model, "model", "", "model for this run")
+	fs.StringVar(&effort, "effort", "", "reasoning effort for this run")
+	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w (see zel --help)", err)
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+		return fmt.Errorf("unknown command: %s (see zel --help)", strings.Join(fs.Args(), " "))
 	}
 	headless := false
 	fs.Visit(func(f *flag.Flag) {
@@ -306,70 +220,4 @@ func cancelledOr(ctx context.Context, err error) error {
 		return cancelled
 	}
 	return err
-}
-
-// modelList is the JSON shape used by the models helper.
-func modelList(choices []core.ModelChoice) []map[string]string {
-	list := make([]map[string]string, 0, len(choices))
-	for _, c := range choices {
-		list = append(list, map[string]string{"provider": c.Provider, "model": c.Model})
-	}
-	return list
-}
-
-func sessionSubcommand(args []string, out io.Writer) error {
-	if len(args) > 0 && args[0] == "rename" {
-		return renameSessionCommand(args[1:])
-	}
-	return readSessionCommand(args, out)
-}
-
-func renameSessionCommand(args []string) error {
-	var id string
-	fs := flagSet("session rename", func(fs *flag.FlagSet) { fs.StringVar(&id, "s", "", "session ID") })
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	rest := fs.Args()
-	var name string
-	if id = strings.TrimSpace(id); id != "" {
-		name = strings.TrimSpace(strings.Join(rest, " "))
-	} else if envID := strings.TrimSpace(os.Getenv("ZEL_SESSION_ID")); envID != "" {
-		id, name = envID, strings.TrimSpace(strings.Join(rest, " "))
-	} else if len(rest) >= 2 {
-		id, name = strings.TrimSpace(rest[0]), strings.TrimSpace(strings.Join(rest[1:], " "))
-	}
-	if id == "" || name == "" {
-		return errors.New("usage: zel session rename [-s ID] NAME...")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	return core.RenameSession(cwd, id, name)
-}
-
-func readSessionCommand(args []string, out io.Writer) error {
-	var id string
-	fs := flagSet("session", func(fs *flag.FlagSet) { fs.StringVar(&id, "s", "", "session ID") })
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if id == "" || fs.NArg() != 0 {
-		return errors.New("usage: zel session -s SESSION_ID")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	records, err := core.ReadSession(cwd, id)
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if _, err := fmt.Fprintf(out, "[%s]\n%s\n\n", record.Kind, record.Text); err != nil {
-			return err
-		}
-	}
-	return nil
 }

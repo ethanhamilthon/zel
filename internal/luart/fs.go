@@ -104,17 +104,17 @@ func (v *vm) openFile(L *lua.LState, fn, path string, flag int, perm os.FileMode
 
 func (v *vm) fsRead(L *lua.LState) int {
 	path := L.CheckString(1)
-	f, info := v.openFile(L, "fs.read", path, os.O_RDONLY, 0, false)
+	f, info := v.openFile(L, "read", path, os.O_RDONLY, 0, false)
 	defer f.Close()
 	if info.Size() > maxReadBytes {
-		raise(L, "fs.read", ELIMIT, "%s is %d bytes, over the %d MiB safety cap; use sh (head, sed -n) for parts", path, info.Size(), maxReadBytes>>20)
+		raise(L, "read", ELIMIT, "%s is %d bytes, over the %d MiB safety cap; use sh (head, sed -n) for parts", path, info.Size(), maxReadBytes>>20)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
 	if err != nil {
-		v.fsErr(L, "fs.read", path, err)
+		v.fsErr(L, "read", path, err)
 	}
 	if len(data) > maxReadBytes {
-		raise(L, "fs.read", ELIMIT, "%s grew past the %d MiB safety cap while it was read", path, maxReadBytes>>20)
+		raise(L, "read", ELIMIT, "%s grew past the %d MiB safety cap while it was read", path, maxReadBytes>>20)
 	}
 	L.Push(lua.LString(string(data)))
 	return 1
@@ -124,7 +124,7 @@ func (v *vm) fsWrite(L *lua.LState) int {
 	path, content := L.CheckString(1), L.CheckString(2)
 	abs := v.resolve(path)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		v.fsErr(L, "fs.write", path, err)
+		v.fsErr(L, "write", path, err)
 	}
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if optBool(opts(L, 3), "append") {
@@ -134,13 +134,13 @@ func (v *vm) fsWrite(L *lua.LState) int {
 	if info, err := os.Stat(abs); err == nil {
 		mode = info.Mode().Perm()
 	}
-	f, _ := v.openFile(L, "fs.write", path, flags, mode, false)
+	f, _ := v.openFile(L, "write", path, flags, mode, false)
 	_, err := f.WriteString(content)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		v.fsErr(L, "fs.write", path, err)
+		v.fsErr(L, "write", path, err)
 	}
 	return 0
 }
@@ -148,9 +148,9 @@ func (v *vm) fsWrite(L *lua.LState) int {
 func (v *vm) fsEdit(L *lua.LState) int {
 	path, old, repl := L.CheckString(1), L.CheckString(2), L.CheckString(3)
 	all := optBool(opts(L, 4), "all")
-	text := v.readForEdit(L, "fs.edit", path)
-	text, n := replaceOnce(L, "fs.edit", path, "", text, old, repl, all)
-	v.writeEdited(L, "fs.edit", path, text)
+	text := v.readForEdit(L, "edit", path)
+	text, n := replaceOnce(L, "edit", path, "", text, old, repl, all)
+	v.writeEdited(L, "edit", path, text)
 	L.Push(lua.LNumber(n))
 	return 1
 }
@@ -161,14 +161,14 @@ func (v *vm) fsPatch(L *lua.LState) int {
 	path := L.CheckString(1)
 	edits := L.CheckTable(2)
 	if edits.Len() == 0 {
-		raise(L, "fs.patch", EINVAL, "no edits")
+		raise(L, "patch", EINVAL, "no edits")
 	}
-	text := v.readForEdit(L, "fs.patch", path)
+	text := v.readForEdit(L, "patch", path)
 	total := 0
 	for i := 1; i <= edits.Len(); i++ {
 		e, ok := edits.RawGetInt(i).(*lua.LTable)
 		if !ok {
-			raise(L, "fs.patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
+			raise(L, "patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
 		}
 		old, okOld := optString(e, "old")
 		repl, okNew := optString(e, "new")
@@ -179,13 +179,13 @@ func (v *vm) fsPatch(L *lua.LState) int {
 			repl, okNew = lua.LVAsString(e.RawGetInt(2)), e.RawGetInt(2).Type() == lua.LTString
 		}
 		if !okOld || !okNew {
-			raise(L, "fs.patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
+			raise(L, "patch", EINVAL, "edit #%d must be {old, new} or {old=, new=}", i)
 		}
 		var n int
-		text, n = replaceOnce(L, "fs.patch", path, fmt.Sprintf("edit #%d: ", i), text, old, repl, optBool(e, "all"))
+		text, n = replaceOnce(L, "patch", path, fmt.Sprintf("edit #%d: ", i), text, old, repl, optBool(e, "all"))
 		total += n
 	}
-	v.writeEdited(L, "fs.patch", path, text)
+	v.writeEdited(L, "patch", path, text)
 	L.Push(lua.LNumber(total))
 	return 1
 }
@@ -232,14 +232,14 @@ func replaceOnce(L *lua.LState, fn, path, prefix, text, old, repl string, all bo
 
 func (v *vm) fsList(L *lua.LState) int {
 	path := L.CheckString(1)
-	f, info := v.openFile(L, "fs.list", path, os.O_RDONLY, 0, true)
+	f, info := v.openFile(L, "list", path, os.O_RDONLY, 0, true)
 	defer f.Close()
 	if !info.IsDir() {
-		raise(L, "fs.list", EFAIL, "%s is not a directory", path)
+		raise(L, "list", EFAIL, "%s is not a directory", path)
 	}
 	entries, err := f.ReadDir(-1)
 	if err != nil {
-		v.fsErr(L, "fs.list", path, err)
+		v.fsErr(L, "list", path, err)
 	}
 	slices.SortFunc(entries, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	out := L.NewTable()
@@ -284,11 +284,11 @@ func (v *vm) fsTmp(L *lua.LState) int {
 		dir = os.TempDir()
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		raise(L, "fs.tmp", EFAIL, "%v", err)
+		raise(L, "tmp", EFAIL, "%v", err)
 	}
 	unique, err := os.MkdirTemp(dir, "t")
 	if err != nil {
-		raise(L, "fs.tmp", EFAIL, "%v", err)
+		raise(L, "tmp", EFAIL, "%v", err)
 	}
 	L.Push(lua.LString(filepath.Join(unique, name)))
 	return 1
@@ -361,7 +361,7 @@ func (v *vm) fsGlob(L *lua.LState) int {
 	pattern := L.CheckString(1)
 	re, err := globRegexp(filepath.ToSlash(pattern))
 	if err != nil {
-		raise(L, "fs.glob", EINVAL, "%v", err)
+		raise(L, "glob", EINVAL, "%v", err)
 	}
 	cwd := v.env.Info().Cwd
 	var found []string
@@ -392,12 +392,12 @@ func (v *vm) fsGrep(L *lua.LState) int {
 	}
 	if info, err := os.Stat(root); err == nil {
 		if err := checkPlain(info, true); err != nil {
-			raise(L, "fs.grep", EINVAL, "%s: %v", path, err)
+			raise(L, "grep", EINVAL, "%s: %v", path, err)
 		}
 	}
 	if !fixed {
 		if _, err := regexp.Compile(pattern); err != nil {
-			raise(L, "fs.grep", EINVAL, "bad pattern: %v", err)
+			raise(L, "grep", EINVAL, "bad pattern: %v", err)
 		}
 	}
 	rows, ok := v.rgGrep(root, pattern, glob, fixed, limit)

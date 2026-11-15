@@ -1,7 +1,6 @@
 package luart
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -149,37 +148,6 @@ func toLua(L *lua.LState, v any) lua.LValue {
 		}
 		return toLua(L, generic)
 	}
-}
-
-// encodeJSON renders a Lua value as JSON; indent is empty for the compact form.
-func encodeJSON(v lua.LValue, indent string) (string, error) {
-	g, err := toGo(v)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if indent != "" {
-		enc.SetIndent("", indent)
-	}
-	if err := enc.Encode(g); err != nil {
-		return "", err
-	}
-	return string(bytes.TrimRight(buf.Bytes(), "\n")), nil
-}
-
-func decodeJSON(L *lua.LState, s string) (lua.LValue, error) {
-	dec := json.NewDecoder(bytes.NewReader([]byte(s)))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		return nil, err
-	}
-	if dec.More() {
-		return nil, fmt.Errorf("trailing data after the JSON value")
-	}
-	return toLua(L, v), nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

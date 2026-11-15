@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -14,60 +13,12 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-type memState struct {
-	mu sync.Mutex
-	m  map[string]map[string]string
-}
-
-func (s *memState) Get(scope, key string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	v, ok := s.m[scope][key]
-	return v, ok, nil
-}
-func (s *memState) Set(scope, key, value string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.m[scope] == nil {
-		s.m[scope] = map[string]string{}
-	}
-	s.m[scope][key] = value
-	return nil
-}
-func (s *memState) Delete(scope, key string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m[scope], key)
-	return nil
-}
-func (s *memState) List(scope, prefix string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var keys []string
-	for k := range s.m[scope] {
-		if strings.HasPrefix(k, prefix) {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	return keys, nil
-}
-func (s *memState) Size(scope string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := 0
-	for k, v := range s.m[scope] {
-		n += len(k) + len(v)
-	}
-	return n, nil
-}
-
 type fakeJob struct {
-	id, kind string
-	done     chan struct{}
-	result   map[string]any
-	stopped  bool
-	cancel   func()
+	id, kind, name string
+	done           chan struct{}
+	result         map[string]any
+	stopped        bool
+	cancel         func()
 }
 
 func (j *fakeJob) state() string {
@@ -81,7 +32,6 @@ func (j *fakeJob) state() string {
 
 type fakeEnv struct {
 	cwd      string
-	state    *memState
 	mu       sync.Mutex
 	jobs     map[string]*fakeJob
 	notices  []string
@@ -122,14 +72,13 @@ func (e *fakeEnv) Models(ctx context.Context) ([]ModelInfo, map[string]string) {
 }
 
 func newEnv(t *testing.T) *fakeEnv {
-	return &fakeEnv{cwd: t.TempDir(), state: &memState{m: map[string]map[string]string{}}, jobs: map[string]*fakeJob{}}
+	return &fakeEnv{cwd: t.TempDir(), jobs: map[string]*fakeJob{}}
 }
 
 func (e *fakeEnv) Info() SessionInfo {
 	return SessionInfo{ID: "s1", Cwd: e.cwd, Root: e.cwd, Model: "m", Effort: "low", Depth: e.depth, Home: e.cwd + "/.zel", TmpDir: e.cwd + "/tmp", LuaPath: []string{e.cwd + "/.zel/lua"}}
 }
 func (e *fakeEnv) ShellEnv() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }
-func (e *fakeEnv) State() StateStore           { return e.state }
 
 // fakeSet is one namespace of the fake env's jobs.
 type fakeSet struct {
@@ -154,7 +103,7 @@ func (s fakeSet) List() []JobInfo {
 	var out []JobInfo
 	for _, j := range s.e.jobs {
 		if j.kind == s.kind {
-			out = append(out, JobInfo{ID: j.id, State: j.state()})
+			out = append(out, JobInfo{ID: j.id, Name: j.name, State: j.state()})
 		}
 	}
 	return out
@@ -164,7 +113,7 @@ func (s fakeSet) Get(id string) (JobInfo, bool) {
 	if err != nil {
 		return JobInfo{}, false
 	}
-	return JobInfo{ID: j.id, State: j.state()}, true
+	return JobInfo{ID: j.id, Name: j.name, State: j.state()}, true
 }
 func (s fakeSet) Wait(ctx context.Context, id string, timeout time.Duration) (map[string]any, bool, error) {
 	j, err := s.find(id)
@@ -222,7 +171,7 @@ func (s fakeTasks) Spawn(run TaskFunc, o TaskOpts) (string, error) {
 	e := s.e
 	e.mu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
-	j := &fakeJob{id: fmt.Sprintf("t%d", len(e.jobs)+1), kind: "task", done: make(chan struct{}), cancel: cancel}
+	j := &fakeJob{id: fmt.Sprintf("t%d", len(e.jobs)+1), kind: "task", name: o.Name, done: make(chan struct{}), cancel: cancel}
 	e.jobs[j.id] = j
 	e.mu.Unlock()
 	go func() {
@@ -268,11 +217,10 @@ func (e *fakeEnv) Rename(name string) error {
 func TestHostActivityLabelsAndEnds(t *testing.T) {
 	env := newEnv(t)
 	r := run(t, env, nil, `
-fs.write("notes.txt", "x")
-print(fs.read("notes.txt"))
-print(pcall(fs.read, "missing.txt"))
-sleep(0)
-local id = tasks.spawn(function() sleep(0) return 1 end)
+write("notes.txt", "x")
+print(read("notes.txt"))
+print(pcall(read, "missing.txt"))
+local id = tasks.spawn("probe", function() return exists("notes.txt") end)
 tasks.wait(id, 5)
 return "ok"`)
 	if r.IsError {
@@ -293,10 +241,10 @@ return "ok"`)
 			fg = append(fg, act.label)
 		}
 	}
-	if want := "writing notes.txt|reading notes.txt|reading missing.txt|sleeping 0 sec|starting task|waiting for task t1"; strings.Join(fg, "|") != want {
+	if want := "writing notes.txt|reading notes.txt|reading missing.txt|starting task probe|waiting for task t1"; strings.Join(fg, "|") != want {
 		t.Errorf("foreground activities = %q, want %q", strings.Join(fg, "|"), want)
 	}
-	if strings.Join(bg, "|") != "sleeping 0 sec" {
+	if strings.Join(bg, "|") != "checking notes.txt" {
 		t.Errorf("background activities = %q", strings.Join(bg, "|"))
 	}
 }
@@ -353,38 +301,15 @@ func TestShellLabelsHideArgumentsAndCredentials(t *testing.T) {
 	}
 }
 
-// A URL's path, query and fragment, and whatever is not a URL, stay out of a web label.
-func TestSafeURLShowsOnlySchemeAndHost(t *testing.T) {
-	for raw, want := range map[string]string{
-		"https://user:pw@example.com/a/b?access=xyz": "https://example.com/…?…",
-		"https://example.com/bot123:AAA/getUpdates":  "https://example.com/…",
-		"https://example.com":                        "https://example.com",
-		"https://example.com/#frag":                  "https://example.com#…",
-		"alice:hunter2@example.com":                  "…",
-		"example.com/x?token=1":                      "…",
-	} {
-		if got := safeURL(raw); got != want {
-			t.Errorf("safeURL(%q) = %q, want %q", raw, got, want)
-		}
-	}
-	if got := labelOf(t, "web.get", lua.LString("http://user:pw@127.0.0.1:1/x?token=abc")); got != "GET http://127.0.0.1:1/…?…" {
-		t.Errorf("web label = %q", got)
-	}
-}
-
-// State keys and search patterns are free text that may be secrets: their labels
-// name the action and never the value; a search shows only its directory.
-func TestStateAndSearchLabelsHideFreeText(t *testing.T) {
+// Search patterns are free text that may be secrets: a search shows only its directory.
+func TestSearchLabelsHideFreeText(t *testing.T) {
 	const secret = "hunter2hunter2"
 	for _, c := range []struct {
 		name string
 		args []lua.LValue
 		want string
 	}{
-		{"state.get", []lua.LValue{lua.LString(secret)}, "reading state"},
-		{"state.set", []lua.LValue{lua.LString(secret), lua.LString("v")}, "writing state"},
-		{"state.set", []lua.LValue{lua.LString(secret), lua.LNil}, "deleting state"},
-		{"fs.grep", []lua.LValue{lua.LString(secret)}, "searching files"},
+		{"grep", []lua.LValue{lua.LString(secret)}, "searching files"},
 	} {
 		if got := labelOf(t, c.name, c.args...); got != c.want || strings.Contains(got, secret) {
 			t.Errorf("%s label = %q, want %q", c.name, got, c.want)
@@ -395,17 +320,18 @@ func TestStateAndSearchLabelsHideFreeText(t *testing.T) {
 // Every host function has a label, except the instant bookkeeping functions that
 // never block, where a label would only flicker. Session values are not functions.
 func TestEveryHostFunctionHasALabelExceptBookkeeping(t *testing.T) {
-	bookkeeping := map[string]bool{"print": true, "slice": true, "json.encode": true, "json.decode": true, "log.info": true, "log.warn": true}
-	names := []string{"print"}
-	for ns, fns := range builtinFns {
-		for _, fn := range fns {
-			switch {
-			case ns == "": // the global namespace
-				names = append(names, fn)
-			case ns == "session" && fn != "models" && fn != "rename":
-			default:
-				names = append(names, ns+"."+fn)
+	bookkeeping := map[string]bool{"print": true, "slice": true, "log": true}
+	var names []string
+	for name := range builtinNames {
+		switch name {
+		case "tasks":
+			for _, fn := range []string{"spawn", "list", "get", "wait", "tail", "stop"} {
+				names = append(names, "tasks."+fn)
 			}
+		case "session":
+			names = append(names, "session.rename")
+		default:
+			names = append(names, name)
 		}
 	}
 	seen := map[string]bool{}
@@ -434,8 +360,7 @@ func TestEveryHostFunctionHasALabelExceptBookkeeping(t *testing.T) {
 func TestActivityEndsOnCancelAndCoversExtensions(t *testing.T) {
 	env := newEnv(t)
 	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.fn{name = "zel.wait", summary = "waits", run = function() sleep(30) return 1 end}`)}})
+return {tools = {["zel.wait"] = {desc = "waits", fn = function() while true do end end}}}`)}})
 	defer cfg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

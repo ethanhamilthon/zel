@@ -24,7 +24,6 @@ const (
 	menuResume
 	menuModel
 	menuEffort
-	menuTasks
 	menuTracing
 	menuRename
 	menuInfo
@@ -40,7 +39,7 @@ const (
 
 var menuTitles = map[menuPage]string{
 	menuMain: "Menu", menuResume: "Menu/Resume", menuModel: "Menu/Models", menuEffort: "Menu/Models/Effort",
-	menuTasks: "Menu/Tasks", menuTracing: "Menu/Tracing",
+	menuTracing:   "Menu/Tracing",
 	menuProviders: "Menu/Providers", menuProvider: "Menu/Providers/Provider", menuForm: "Menu/Settings/Edit", menuSettings: "Menu/Settings", menuAccent: "Menu/Settings/Accent", menuRename: "Menu/Rename", menuInfo: "Menu/Info", menuHelp: "Menu/Help",
 }
 
@@ -48,7 +47,7 @@ type menuRow struct{ label, detail string }
 
 var mainRows = []menuRow{
 	{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
-	{"Tasks", "Background tasks"}, {"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
+	{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
 	{"Providers", "Add, edit, remove"}, {"Settings", "Output, compaction, accent"},
@@ -78,7 +77,7 @@ type menuState struct {
 	parent          menuPage // where Esc returns from a text page
 	title, text     string   // the title and body of a text page
 	provider, model string   // the model chosen on the Model page, waiting for an effort
-	task, name      string   // the task opened on the Tasks page; the Rename text
+	name            string   // the Rename text
 	query           string   // the search text of the current page
 	search          *textarea.Model
 	status          string
@@ -86,7 +85,6 @@ type menuState struct {
 	target          string
 	sessions        []core.SessionSummary
 	info            []menuRow
-	tasks           []core.Task
 	trace           []core.TraceEntry
 	rev             uint64   // changes whenever a snapshot replaced the data above
 	ctx             []string // searchable text of the trace entries

@@ -35,9 +35,10 @@ type tasks struct {
 	wg           sync.WaitGroup
 	report       func(string)
 	jobs         map[string]*job
+	changed      func() // called after a job started or ended; never nil
 	order        []string
-	// life is the lifecycle context of the session: subagent hooks run under it, and
-	// it ends with the session's shutdown budget (see startBudget).
+	// life is the lifecycle context of the session; it ends with the session's
+	// shutdown budget (see startBudget).
 	life     context.Context
 	stopLife context.CancelFunc
 	budget   sync.Once
@@ -59,7 +60,7 @@ func (s *session) newTasks() *tasks {
 	life, stopLife := context.WithCancel(s.lifeParent())
 	return &tasks{db: s.db, session: s.id, log: filepath.Join(s.home, "tasks"),
 		queue: s.queue, report: func(text string) { s.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
-		life: life, stopLife: stopLife}
+		life: life, stopLife: stopLife, changed: s.tree.notify}
 }
 
 // proc is one running job: a Lua task or an in-process agent.
@@ -84,6 +85,9 @@ func (t *tasks) spawnProc(command string, o startOpts, launch func(io.Writer, *j
 		j = jb
 		return launch(file, jb)
 	})
+	if err == nil {
+		t.changed()
+	}
 	return j, err
 }
 
@@ -205,7 +209,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		}
 		persistErr := t.finish(id, status, exit)
 		took := time.Since(started)
-		res := j.complete(status, code, took)
+		j.complete(status, code, took)
 		notice := notification(j.noticeText(status))
 		if persistErr != nil {
 			warning := "Task " + id + " completion could not be persisted; saved status may be stale: " + persistErr.Error()
@@ -223,8 +227,9 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		delete(t.running, id)
 		t.mu.Unlock()
 		close(j.done)
-		if j.endHook != nil {
-			j.endHook(status, res)
+		t.changed()
+		if j.afterEnd != nil {
+			j.afterEnd()
 		}
 	}()
 	return id, nil
@@ -253,24 +258,17 @@ func (t *tasks) Running() int {
 }
 
 // startBudget starts the session's shutdown budget, once: after
-// luart.SessionEndTimeout the lifecycle context ends, so the hooks still pending
-// are skipped and close stops waiting for jobs.
+// luart.SessionEndTimeout the lifecycle context ends, so session_end hooks still
+// pending are skipped and close stops waiting for jobs.
 func (t *tasks) startBudget() {
 	t.budget.Do(func() { time.AfterFunc(luart.SessionEndTimeout, t.stopLife) })
 }
 
-// close ends the session's jobs and then its session_end hooks (sessionEnd may be
-// nil), all within one shutdown budget that starts here:
-//
-//  1. begin: no job starts any more, running jobs are cancelled, and the start hooks
-//     still pending are cancelled too, so none of them delays an end hook.
-//  2. drain: the jobs end and their end hooks run, until the budget ends.
-//  3. sessionEnd: runs with what is left of the budget, so a slow session_end cannot
-//     take the time that cooperative jobs need to stop and deliver their end hooks.
-//
-// A job still running when the budget ends is abandoned: its result is not queued,
-// and the end hooks that have not run yet find the budget spent and log that they
-// were skipped. Close is idempotent; a later call only waits for what is left.
+// close ends the session's jobs and then runs its session_end hooks (sessionEnd may
+// be nil), all within one shutdown budget that starts here: running jobs are
+// cancelled, close waits for them until the budget ends, and sessionEnd gets what
+// is left. A job still running when the budget ends is abandoned and its result is
+// not queued. Close is idempotent; a later call only waits for what is left.
 func (t *tasks) close(sessionEnd func(ctx context.Context)) {
 	t.startBudget()
 	t.begin()
@@ -281,7 +279,7 @@ func (t *tasks) close(sessionEnd func(ctx context.Context)) {
 	t.stopLife()
 }
 
-// begin stops new jobs and cancels the running ones and the pending subagent starts.
+// begin stops new jobs and cancels the running ones.
 func (t *tasks) begin() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -290,14 +288,9 @@ func (t *tasks) begin() {
 		t.stopped[id] = true
 		p.cancel()
 	}
-	for _, j := range t.jobs {
-		if j.stopStart != nil {
-			j.stopStart()
-		}
-	}
 }
 
-// drain waits until every job has ended, its end hook included, or the budget ends.
+// drain waits until every job has ended or the budget ends.
 // No job can start after begin, so the wait group cannot grow while it runs.
 func (t *tasks) drain() {
 	drained := make(chan struct{})
@@ -384,32 +377,6 @@ func (s *session) LogEvent(kind, text string) {
 	fmt.Fprintf(file, "%s %s %s\n", time.Now().Format(time.RFC3339Nano), kind, text)
 }
 
-func SessionTasks(home, session string) ([]Task, error) {
-	db, err := openDB(DBPath(home))
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	return sessionTasks(db, session)
-}
-
-func (a *Runtime) Tasks() ([]Task, error) { return a.session().Tasks() }
-
-func (s *session) Tasks() ([]Task, error) { return sessionTasks(s.db, s.id) }
-
-func (a *Runtime) StopTask(id string) error { return a.session().StopTask(id) }
-
-func (s *session) StopTask(id string) error {
-	if s.tasks == nil {
-		return fmt.Errorf("task %s is not running", id)
-	}
-	return s.tasks.stop(id)
-}
-
-func sessionTasks(db *store.Store, session string) ([]Task, error) { return db.Tasks(session) }
-
-func TaskOutput(task Task) string { return tail(task.Log) }
-
 // Task logs retain their first 8 MiB plus a marker; further output is drained
 // without growing the file or blocking the child on an unread pipe.
 const taskLogLimit = 8 << 20
@@ -446,22 +413,28 @@ func (w *taskLog) Write(p []byte) (int, error) {
 	return size, nil
 }
 
-// StartTask runs Lua code as a background task of this session; its result
-// is announced like any task's.
-func (a *Runtime) StartTask(code string) (string, error) { return a.session().StartTask(code) }
+// ActiveTask is a background task that is running, as the chat shows it.
+type ActiveTask struct {
+	ID, Name string
+	Started  time.Time
+}
 
-func (s *session) StartTask(code string) (string, error) {
-	if s.tasks == nil {
-		return "", errors.New("no active session")
+// ActiveTasks lists the running background tasks, oldest first. Subagents are
+// not tasks; a subagent started from a task shows as that task.
+func (a *Runtime) ActiveTasks() []ActiveTask { return a.session().ActiveTasks() }
+
+func (s *session) ActiveTasks() []ActiveTask {
+	t := s.tasks
+	if t == nil {
+		return nil
 	}
-	run, discard, err := luart.CodeTask(luaEnv{s}, s.lua.get(), code)
-	if err != nil {
-		return "", err
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []ActiveTask
+	for _, id := range t.order {
+		if j := t.jobs[id]; j != nil && j.kind == "task" && t.running[id] != nil {
+			out = append(out, ActiveTask{ID: j.id, Name: j.name, Started: j.started})
+		}
 	}
-	j, err := s.tasks.spawnLua(run, startOpts{name: oneLine(code)})
-	if err != nil {
-		discard()
-		return "", err
-	}
-	return j.id, nil
+	return out
 }

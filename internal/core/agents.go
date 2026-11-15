@@ -126,7 +126,7 @@ func (a *Runtime) ActiveSubagents() []SubagentRun {
 }
 
 // OnSubagentsChanged registers fn to run whenever the set of running agents or
-// their step counts change. fn must not block.
+// background tasks, or a step count, changes. fn must not block.
 func (a *Runtime) OnSubagentsChanged(fn func()) {
 	a.tree.mu.Lock()
 	a.tree.changed = fn
@@ -149,33 +149,14 @@ func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
 	model := cmp.Or(o.Model, s.Settings().Model)
 	ctx, cancel := context.WithCancel(context.Background())
 	var failed bool
-	holder, depth, budget := s.lua, s.depth+1, s.tasks.life
-	startCtx, stopStart := context.WithCancel(budget)
+	budget := s.tasks.life
 	j, err := s.tasks.spawnProc("agent: "+oneLine(o.Prompt), startOpts{kind: "agent", prompt: o.Prompt, model: model, waited: o.Waited, timeout: o.Timeout},
 		func(log io.Writer, j *job) (*proc, error) {
-			// The lifecycle hooks run on goroutines of their own. They wait for the Lua
-			// config lock, which a plugin function can hold while it waits for this very
-			// subagent, so no hook may sit on the path to the subagent's result. Both
-			// hooks use the snapshot pinned here, which the end hook releases: a reload
-			// or a session change never sends an end hook to a snapshot that did not
-			// run its start hook. Both are bounded by the session's shutdown budget; the
-			// start hook alone is also cancelled when the shutdown begins (see tasks.close).
-			cfg := holder.pin()
-			started := make(chan struct{})
-			j.stopStart = stopStart
-			j.endHook = func(status string, res map[string]any) {
-				defer holder.unpin(cfg)
-				<-started
-				deliverSubagent(budget, cfg, "subagent_end", subagentEndInfo(j, o, status, res))
-				j.runDeferredClose()
-			}
+			// The child's session closes after the result is published, so its own
+			// session_end cannot delay the answer the caller waits for.
+			j.afterEnd = j.runDeferredClose
 			done := make(chan error, 1)
 			go func() {
-				go func() {
-					defer close(started)
-					defer stopStart()
-					deliverSubagent(startCtx, cfg, "subagent_start", subagentStartInfo(j, o, cwd, depth))
-				}()
 				err := s.runChild(ctx, j, log, cwd, o, budget)
 				failed = err != nil
 				done <- err
@@ -190,7 +171,6 @@ func (s *session) spawnAgent(o luart.AgentOpts) (*job, error) {
 		})
 	if err != nil {
 		cancel()
-		stopStart()
 		return nil, err
 	}
 	return j, nil
@@ -223,8 +203,7 @@ func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 		j.setOutcome(agentOutcome{Error: err.Error()})
 		return err
 	}
-	// The child's session closes after the end hook of this subagent (see spawnAgent),
-	// so its own session_end cannot delay the report the parent waits for.
+	// The child's session closes after its result is published (see spawnAgent).
 	j.deferClose(child.Close)
 	if ctx.Err() != nil {
 		j.setOutcome(agentOutcome{Session: outcome.Session})
@@ -262,31 +241,4 @@ func (s *session) runChild(ctx context.Context, j *job, log io.Writer, cwd strin
 	fmt.Fprintf(log, "%s\n", outcome.Answer)
 	j.setOutcome(outcome)
 	return nil
-}
-
-// deliverSubagent runs one lifecycle hook of the snapshot that owns a subagent,
-// under the session's shutdown budget ctx. Nothing it returns reaches the agent.
-func deliverSubagent(ctx context.Context, cfg *luart.Config, event string, info map[string]any) {
-	if cfg == nil || !cfg.HasHook(event) {
-		return
-	}
-	cfg.Subagent(luart.WithBackground(ctx), event, info)
-}
-
-// subagentStartInfo is the payload of subagent_start: the identity of the
-// subagent and what it was asked to do.
-func subagentStartInfo(j *job, o luart.AgentOpts, cwd string, depth int) map[string]any {
-	return map[string]any{"id": j.id, "prompt": o.Prompt, "model": j.model, "effort": o.Effort,
-		"provider": o.Provider, "cwd": cwd, "depth": depth}
-}
-
-// subagentEndInfo is the payload of subagent_end: the final status and outcome.
-// error is present only when the subagent did not succeed.
-func subagentEndInfo(j *job, o luart.AgentOpts, status string, res map[string]any) map[string]any {
-	info := map[string]any{"id": j.id, "status": status, "ok": res["ok"], "ms": res["ms"],
-		"model": j.model, "effort": o.Effort, "answer": res["answer"], "session": res["session"]}
-	if msg, ok := res["error"].(string); ok {
-		info["error"] = msg
-	}
-	return info
 }

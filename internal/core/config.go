@@ -13,11 +13,8 @@ const APIChat = config.APIChat
 var Efforts = config.Efforts
 var DefaultSettings = config.DefaultSettings
 var Redact = config.Redact
-var FlagConfig = config.FlagConfig
 var LuaLayers = config.LuaLayers
 var ZelHome = config.ZelHome
 var ResolvePath = config.ResolvePath
 var DisplayPath = config.DisplayPath
 var DBPath = config.DBPath
-
-var InitProject = config.InitProject

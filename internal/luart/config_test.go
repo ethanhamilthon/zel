@@ -22,91 +22,92 @@ func layerFile(t *testing.T, dir, body string) string {
 }
 
 const docExample = `
-local zel = require("zel")
-zel.defaults{model = "sonnet-5.5", effort = "medium"}
-zel.instructions [[Read code first.]]
-zel.prompt(function(ctx) return "layer=" .. ctx.layer .. " " .. sh("echo dyn").out end)
-zel.fn{
-  name = "zel.check", summary = "run checks",
-  params = {{"pkg", "string?", "go package pattern", default = "./..."}, {"n", "integer"}},
-  returns = "{ok:boolean}",
-  examples = {'zel.check("./x", 1)'},
-  run = function(pkg, n) state.set("last", pkg, "project"); return {ok = n > 0, pkg = pkg} end,
+local check = {
+  desc = "run checks\nargs: pkg? (default ./...), n\nreturns {ok, pkg}",
+  fn = function(a) write("last", a.pkg or "./..."); return {ok = a.n > 0, pkg = a.pkg or "./..."} end,
 }
-zel.fn{name = "boom", summary = "fails", run = function() error("kaput") end}
-zel.fn{name = "secret", summary = "hidden", hidden = true, run = function() return 1 end}
-zel.fn{name = "web.search", summary = "search", params = {{"q", "string"}}, run = function(q) return {q = q, h = zel.check(nil, 1)} end}
+return {
+  {instructions = {"Read code first.", function() return "dyn " .. sh("echo x").out end}},
+  {tools = {
+    ["zel.check"] = check,
+    boom = {desc = "fails", fn = function() error("kaput") end},
+    ["web.search"] = {desc = "search", fn = function(a) return {q = a.q, h = zel.check{n = 1}} end},
+  }},
+  true, -- what require() gives for a module that returns nothing
+}
 `
 
-func TestPluginFnAndPrompt(t *testing.T) {
+func TestToolsAndPrompt(t *testing.T) {
 	env := newEnv(t)
 	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, docExample)}})
 	defer cfg.Close()
 	if len(env.notices) != 0 {
 		t.Fatal(env.notices)
 	}
-	if d := cfg.Defaults(); d.Model != "sonnet-5.5" {
-		t.Fatalf("%+v", d)
-	}
-	r := run(t, env, cfg, `return zel.check(nil, 2)`)
+	r := run(t, env, cfg, `return zel.check{n = 2}`)
 	if r.Output != `{"ok":true,"pkg":"./..."}` {
 		t.Fatalf("%q", r.Output)
 	}
-	if v, _, _ := env.state.Get("project", "last"); v != `"./..."` {
-		t.Fatalf("state %q", v)
+	if data, _ := os.ReadFile(filepath.Join(env.cwd, "last")); string(data) != "./..." {
+		t.Fatalf("the tool runs with the host API: %q", data)
 	}
 	for code, want := range map[string]string{
-		`return zel.check("x")`:                       "zel.check: EINVAL: arg #2 n: expected integer, got nil",
-		`return zel.check(5, 1)`:                      "arg #1 pkg: expected string, got number",
-		`return boom()`:                               "boom: EFAIL: ",
-		`local ok, e = pcall(boom); return e`:         "kaput",
-		`return web.search("q").h.pkg`:                "./...",
-		`return web.get ~= nil and web.search ~= nil`: "true",
-		`return secret()`:                             "1",
+		`return zel.check("x")`:               "zel.check: EINVAL: takes one table of arguments: zel.check{...}, got string",
+		`return zel.check({n = 1}, 2)`:        "zel.check: EINVAL: takes one table of arguments",
+		`return boom()`:                       "boom: EFAIL: ",
+		`local ok, e = pcall(boom); return e`: "kaput",
+		`return web.search{q = "q"}.h.pkg`:    "./...",
 	} {
 		if out := run(t, env, cfg, code).Output; !strings.Contains(out, want) {
 			t.Errorf("%s: got %q, want %q", code, out, want)
 		}
 	}
 	prompt := cfg.SystemPrompt(context.Background())
-	for _, want := range []string{"Read code first.\n\nlayer=project dyn", "# Lua\n", "## built-in", "## project (", "zel.check(pkg?: string=\"./...\", n: integer) -> {ok:boolean}  -- run checks",
-		"--   pkg: go package pattern", "--   e.g. zel.check(\"./x\", 1)", "web.search(q: string)  -- search"} {
+	for _, want := range []string{"Read code first.\n\ndyn x", "# Lua\n", "## built-in", "## tools (", "zel.check{...}  -- run checks\n--   args: pkg? (default ./...), n\n--   returns {ok, pkg}", "web.search{...}  -- search", "boom{...}  -- fails"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, prompt)
 		}
-	}
-	if strings.Contains(prompt, "secret(") {
-		t.Error("hidden fn rendered")
 	}
 }
 
 func TestLayerMergeAndErrors(t *testing.T) {
 	env := newEnv(t)
-	g := layerFile(t, filepath.Join(env.cwd, "g"), `
-local zel = require("zel")
-zel.defaults{model="a", effort="low"}
-zel.instructions "global"
-zel.fn{name="f", summary="global f", run=function() return "g" end}
-zel.on("session_end", function() end)`)
-	p := layerFile(t, filepath.Join(env.cwd, "p"), `
-local zel = require("zel")
-zel.defaults{model="b"}
-zel.instructions "project"
-zel.fn{name="f", summary="project f", run=function() return "p" end}
-zel.fn{name="web.get", summary="x", run=function() end}`)
-	bad := layerFile(t, filepath.Join(env.cwd, "bad"), `error("syntax is fine, runtime is not")`)
-	bad2 := layerFile(t, filepath.Join(env.cwd, "bad2"), `local zel = require("zel"); zel.on("nope", function() end)`)
-	cfg := LoadConfig(env, []Source{{"global", g}, {"project", p}, {"bad", bad}, {"bad2", bad2}})
-	defer cfg.Close()
-	if len(env.notices) != 3 { // web.get override, bad, bad2
-		t.Fatalf("notices: %q", env.notices)
+	g := layerFile(t, filepath.Join(env.cwd, "g"), `return {
+  instructions = "global",
+  tools = {f = {desc = "global f", fn = function() return "g" end}},
+  hooks = {session_end = function() end},
+}`)
+	p := layerFile(t, filepath.Join(env.cwd, "p"), `return {
+  instructions = "project",
+  tools = {f = {desc = "project f", fn = function() return "p" end}, read = {desc = "x", fn = function() end}},
+}`)
+	cases := map[string]string{
+		"runtime":  `error("syntax is fine, runtime is not")`,
+		"hook":     `return {hooks = {nope = function() end}}`,
+		"subagent": `return {hooks = {subagent_end = function() end}}`,
+		"key":      `return {instruction = "typo"}`,
+		"defaults": `return {defaults = {model = "m"}}`,
+		"zel":      `local zel = require("zel")`,
+		"desc":     `return {tools = {t = {fn = function() end}}}`,
+		"fn":       `return {tools = {t = {desc = "x"}}}`,
+		"number":   `return 5`,
 	}
-	if d := cfg.Defaults(); d.Model != "a" || d.Effort != "low" {
-		t.Fatalf("%+v", d)
+	sources := []Source{{"global", g}, {"project", p}}
+	for name, body := range cases {
+		sources = append(sources, Source{name, layerFile(t, filepath.Join(env.cwd, name), body)})
+	}
+	cfg := LoadConfig(env, sources)
+	defer cfg.Close()
+	if len(cfg.LoadErrs) != len(cases)+1 { // + the project layer: read is built in
+		t.Fatalf("load errors: %q", cfg.LoadErrs)
+	}
+	for _, want := range []string{"read is built in", `unknown hook "nope"`, `unknown hook "subagent_end"`, `unknown key "instruction"`, "defaults was removed", `require("zel") was removed`, "desc is required", "fn is required", "must return a table"} {
+		if !strings.Contains(strings.Join(cfg.LoadErrs, "\n"), want) {
+			t.Errorf("no load error says %q: %q", want, cfg.LoadErrs)
+		}
 	}
 	if out := run(t, env, cfg, `return f()`).Output; out != "g" {
-		// project layer failed (web.get is builtin) and is skipped as a whole
-		t.Fatalf("f = %q", out)
+		t.Fatalf("the failed project layer must be skipped as a whole: f = %q", out)
 	}
 	prompt := cfg.SystemPrompt(context.Background())
 	if !strings.HasPrefix(prompt, "global\n\n# Lua") || strings.Contains(prompt, "project f") {
@@ -114,10 +115,10 @@ zel.fn{name="web.get", summary="x", run=function() end}`)
 	}
 }
 
-func TestProjectOverridesGlobalFn(t *testing.T) {
+func TestProjectOverridesGlobalTool(t *testing.T) {
 	env := newEnv(t)
-	g := layerFile(t, filepath.Join(env.cwd, "g"), `require("zel").fn{name="f", summary="global f", run=function() return "g" end}`)
-	p := layerFile(t, filepath.Join(env.cwd, "p"), `require("zel").fn{name="f", summary="project f", run=function() return "p" end}`)
+	g := layerFile(t, filepath.Join(env.cwd, "g"), `return {tools = {f = {desc = "global f", fn = function() return "g" end}}}`)
+	p := layerFile(t, filepath.Join(env.cwd, "p"), `return {tools = {f = {desc = "project f", fn = function() return "p" end}}}`)
 	cfg := LoadConfig(env, []Source{{"global", g}, {"project", p}})
 	defer cfg.Close()
 	if out := run(t, env, cfg, `return f()`).Output; out != "p" {
@@ -134,43 +135,47 @@ func TestProjectOverridesGlobalFn(t *testing.T) {
 func TestHooks(t *testing.T) {
 	env := newEnv(t)
 	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.on("session_start", function() state.set("started", true); return "welcome" end)
-zel.on("session_end", function(ev) state.set("ended", ev.reason) end)
-zel.on("message", function(ev) return ev.text:upper() end)
-zel.on("turn_end", function(ev) if ev.answer == "again" then return {notify = "go on"} end end)
-zel.on("message", function() error("hook bug") end)
-`)}})
+local seen = {}
+return {
+  {hooks = {
+    session_start = function() return "welcome" end,
+    session_end = function(reason) write("ended", reason) end,
+    message = function(text, notice) if notice then write("notice", text) return "ignored" end return text:upper() end,
+    turn_end = function(answer, running)
+      if #running > 0 then return running[1].name .. " " .. running[1].id .. " " .. running[1].ms end
+      if answer == "again" then return "go on" end
+    end,
+  }},
+  {hooks = {message = function(text) return text .. "!" end}},
+  {hooks = {message = function() error("hook bug") end}},
+}`)}})
 	defer cfg.Close()
 	ctx := context.Background()
 	if got := cfg.SessionStart(ctx); got != "welcome" {
 		t.Fatalf("session_start: %q", got)
 	}
-	if v, _, _ := env.state.Get("session", "started"); v != "true" {
-		t.Fatalf("session_start: %q", v)
-	}
-	if got := cfg.Message(ctx, "hi"); got != "HI" {
-		t.Fatalf("message: %q", got)
+	if got := cfg.Message(ctx, "hi"); got != "HI!" {
+		t.Fatalf("message hooks chain: %q", got)
 	}
 	if len(env.logs) == 0 || !strings.Contains(env.logs[len(env.logs)-1], "hook bug") {
 		t.Fatalf("hook errors are logged: %v", env.logs)
 	}
-	if got := cfg.TurnEnd(ctx, "again"); got != "go on" {
+	cfg.Notice(ctx, "t1 finished")
+	if data, _ := os.ReadFile(filepath.Join(env.cwd, "notice")); string(data) != "t1 finished" {
+		t.Fatalf("notice: %q", data)
+	}
+	if got := cfg.TurnEnd(ctx, "again", nil); got != "go on" {
 		t.Fatalf("turn_end: %q", got)
 	}
-	if got := cfg.TurnEnd(ctx, "done"); got != "" {
+	if got := cfg.TurnEnd(ctx, "done", nil); got != "" {
 		t.Fatalf("turn_end: %q", got)
+	}
+	if got := cfg.TurnEnd(ctx, "done", []RunningTask{{ID: "t2", Name: "build", Ms: 1500}}); got != "build t2 1500" {
+		t.Fatalf("turn_end with a running task: %q", got)
 	}
 	cfg.SessionEnd(ctx, "quit")
-	if v, _, _ := env.state.Get("session", "ended"); v != `"quit"` {
-		t.Fatalf("session_end: %q", v)
-	}
-	for _, old := range []string{"before_call", "after_call", "bg_done"} {
-		bad := LoadConfig(env, []Source{{"old", layerFile(t, t.TempDir(), `require("zel").on("`+old+`", function() end)`)}})
-		if len(bad.LoadErrs) != 1 {
-			t.Errorf("%s still accepted", old)
-		}
-		bad.Close()
+	if data, _ := os.ReadFile(filepath.Join(env.cwd, "ended")); string(data) != "quit" {
+		t.Fatalf("session_end: %q", data)
 	}
 }
 
@@ -178,19 +183,18 @@ func TestInstructionsFileAndRequire(t *testing.T) {
 	env := newEnv(t)
 	os.WriteFile(filepath.Join(env.cwd, "AGENTS.md"), []byte("from file\n"), 0o644)
 	os.MkdirAll(filepath.Join(env.cwd, ".zel", "lua"), 0o755)
-	os.WriteFile(filepath.Join(env.cwd, ".zel", "lua", "helper.lua"), []byte("return {hi = function() return 'hi from helper' end}"), 0o644)
-	path := layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.instructions{file = "AGENTS.md"}
-zel.instructions{file = "MISSING.md"}
-zel.fn{name = "helped", summary = "uses helper", run = function() return require("helper").hi() end}`)
+	os.WriteFile(filepath.Join(env.cwd, ".zel", "lua", "helper.lua"), []byte("return {tools = {helped = {desc = 'uses helper', fn = function() return 'hi from helper' end}}}"), 0o644)
+	path := layerFile(t, env.cwd, `return {{instructions = read("AGENTS.md")}, require("helper")}`)
 	cfg := LoadConfig(env, []Source{{"project", path}})
 	defer cfg.Close()
-	if len(env.notices) != 1 || !strings.Contains(env.notices[0], "MISSING.md") {
+	if len(env.notices) != 0 {
 		t.Fatalf("%v", env.notices)
 	}
 	if !strings.HasPrefix(cfg.SystemPrompt(context.Background()), "from file\n\n# Lua") {
 		t.Fatal(cfg.SystemPrompt(context.Background()))
+	}
+	if out := run(t, env, cfg, `return helped()`).Output; out != "hi from helper" {
+		t.Fatalf("%q", out)
 	}
 }
 
@@ -229,10 +233,11 @@ func TestPromptTokenRules(t *testing.T) {
 
 func TestPromptCompletionsExpandOncePerName(t *testing.T) {
 	env := newEnv(t)
-	g := layerFile(t, filepath.Join(env.cwd, "g"), `
-require("zel").complete("plan", function() return "GLOBAL PLAN" end)
-require("zel").complete("review", function() n = (n or 0) + 1; return "review " .. n end)`)
-	p := layerFile(t, filepath.Join(env.cwd, "p"), `require("zel").complete("plan", function() return "PROJECT PLAN" end)`)
+	g := layerFile(t, filepath.Join(env.cwd, "g"), `return {completions = {
+  plan = function() return "GLOBAL PLAN" end,
+  review = function() n = (n or 0) + 1; return "review " .. n end,
+}}`)
+	p := layerFile(t, filepath.Join(env.cwd, "p"), `return {completions = {plan = function() return "PROJECT PLAN" end}}`)
 	cfg := LoadConfig(env, []Source{{"global", g}, {"project", p}})
 	defer cfg.Close()
 	if len(env.logs) == 0 || !strings.Contains(env.logs[0], "overrides") {
@@ -249,12 +254,13 @@ require("zel").complete("review", function() n = (n or 0) + 1; return "review " 
 
 func TestPromptCompletionErrorsKeepTheText(t *testing.T) {
 	env := newEnv(t)
-	p := layerFile(t, env.cwd, `
-require("zel").complete("boom", function() error("bad state") end)
-require("zel").complete("nothing", function() return nil end)
-require("zel").complete("blank", function() return "  " end)
-require("zel").complete("ok", function() return "fine" end)`)
-	bad := layerFile(t, filepath.Join(env.cwd, "bad"), `require("zel").complete("has space", function() return "x" end)`)
+	p := layerFile(t, env.cwd, `return {completions = {
+  boom = function() error("bad state") end,
+  nothing = function() return nil end,
+  blank = function() return "  " end,
+  ok = function() return "fine" end,
+}}`)
+	bad := layerFile(t, filepath.Join(env.cwd, "bad"), `return {completions = {["has space"] = function() return "x" end}}`)
 	cfg := LoadConfig(env, []Source{{"project", p}, {"bad", bad}})
 	if len(cfg.LoadErrs) != 1 || !strings.Contains(cfg.LoadErrs[0], "letters, digits") || cfg.HasPrompt("has space") {
 		t.Fatalf("invalid name must skip its layer: %v", cfg.LoadErrs)
@@ -278,17 +284,17 @@ require("zel").complete("ok", function() return "fine" end)`)
 // snapshot ends the hook that holds the lock, and a closed snapshot runs nothing.
 func TestConfigLockWaitIsBoundedAndCloseEndsRunningHooks(t *testing.T) {
 	env := newEnv(t)
-	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.on("session_start", function() state.set("holding", true); sleep(30) end)
-zel.on("turn_end", function() return "never" end)`)}})
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `return {hooks = {
+  session_start = function() write("holding", "1"); while true do end end,
+  turn_end = function() return "never" end,
+}}`)}})
 	holding := make(chan struct{})
 	go func() {
 		defer close(holding)
 		cfg.SessionStart(context.Background())
 	}()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		if v, _, _ := env.state.Get("session", "holding"); v == "true" {
+		if _, err := os.Stat(filepath.Join(env.cwd, "holding")); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -298,7 +304,7 @@ zel.on("turn_end", function() return "never" end)`)}})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if got := cfg.TurnEnd(ctx, "x"); got != "" {
+	if got := cfg.TurnEnd(ctx, "x", nil); got != "" {
 		t.Fatalf("a hook that never got the lock must not reply: %q", got)
 	}
 	if took := time.Since(start); took > 5*time.Second {
@@ -315,7 +321,7 @@ zel.on("turn_end", function() return "never" end)`)}})
 		t.Fatalf("close took %s", took)
 	}
 	cfg.Close() // closing twice is harmless
-	if got := cfg.TurnEnd(context.Background(), "y"); got != "" {
+	if got := cfg.TurnEnd(context.Background(), "y", nil); got != "" {
 		t.Fatalf("a closed snapshot ran a hook: %q", got)
 	}
 }
@@ -326,13 +332,11 @@ zel.on("turn_end", function() return "never" end)`)}})
 func TestStuckHookDoesNotHoldCallerOrClose(t *testing.T) {
 	env := newEnv(t)
 	fifo := mkfifo(t, filepath.Join(env.cwd, "stuck"))
-	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.on("turn_end", function() return {notify = io.open("`+fifo+`", "r"):read("a")} end)`)}})
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `return {hooks = {turn_end = function() return io.open("`+fifo+`", "r"):read("a") end}}`)}})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if got := cfg.TurnEnd(ctx, "x"); got != "" {
+	if got := cfg.TurnEnd(ctx, "x", nil); got != "" {
 		t.Fatalf("a stuck hook must not reply: %q", got)
 	}
 	if took := time.Since(start); took > 5*time.Second {
@@ -344,7 +348,7 @@ zel.on("turn_end", function() return {notify = io.open("`+fifo+`", "r"):read("a"
 		t.Fatalf("close waited %s for a stuck hook", took)
 	}
 	cfg.Close()
-	if got := cfg.TurnEnd(context.Background(), "y"); got != "" {
+	if got := cfg.TurnEnd(context.Background(), "y", nil); got != "" {
 		t.Fatalf("a closed snapshot ran a hook: %q", got)
 	}
 	go releasePipe(fifo)
@@ -356,11 +360,11 @@ zel.on("turn_end", function() return {notify = io.open("`+fifo+`", "r"):read("a"
 // call afterward neither double-closes nor disturbs a later completion's activity.
 func TestAbandonedConfigCallClearsForegroundActivity(t *testing.T) {
 	env := newGatedHostEnv(t)
-	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `
-local zel = require("zel")
-zel.complete("stuck", function() session.rename("stuck"); return "x" end)
-zel.complete("hold", function() view("later.png"); return "ok" end)
-zel.complete("fast", function() return "done" end)`)}})
+	cfg := LoadConfig(env, []Source{{"project", layerFile(t, env.cwd, `return {completions = {
+  stuck = function() session.rename("stuck"); return "x" end,
+  hold = function() view("later.png"); return "ok" end,
+  fast = function() return "done" end,
+}}`)}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

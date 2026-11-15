@@ -2,7 +2,6 @@ package luart
 
 import (
 	"strings"
-	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -25,23 +24,25 @@ func (v *vm) installHost() {
 	}
 	L.SetGlobal("print", v.hostFn("print", v.print))
 	L.SetGlobal("sh", v.hostFn("sh", v.sh))
-	L.SetGlobal("sleep", v.hostFn("sleep", v.sleep))
 	L.SetGlobal("view", v.hostFn("view", v.view))
 	L.SetGlobal("slice", v.hostFn("slice", slice))
-	v.table("fs", map[string]lua.LGFunction{
-		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "list": v.fsList, "glob": v.fsGlob,
-		"grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp, "patch": v.fsPatch,
-	})
-	v.table("web", map[string]lua.LGFunction{"request": v.webRequest, "get": v.webGet, "post": v.webPost})
-	v.table("json", map[string]lua.LGFunction{"encode": v.jsonEncode, "decode": v.jsonDecode})
-	v.installJobs("tasks", func() Jobs { return v.env.Tasks() }, v.tasksSpawn, nil)
-	if v.agentsAllowed() {
-		v.installJobs("agents", func() Jobs { return v.env.Agents() }, v.agentsSpawn, v.agentsRun)
-	} else {
-		v.disabled("agents", append([]string{"run"}, jobFns...), "subagents cannot start subagents; use tasks.spawn")
+	for name, fn := range map[string]lua.LGFunction{
+		"read": v.fsRead, "write": v.fsWrite, "edit": v.fsEdit, "patch": v.fsPatch, "list": v.fsList,
+		"glob": v.fsGlob, "grep": v.fsGrep, "exists": v.fsExists, "tmp": v.fsTmp,
+	} {
+		L.SetGlobal(name, v.hostFn(name, fn))
 	}
-	v.table("state", map[string]lua.LGFunction{"get": v.stateGet, "set": v.stateSet, "list": v.stateList})
-	v.table("log", map[string]lua.LGFunction{"info": v.logFn("info"), "warn": v.logFn("warn"), "notice": v.logFn("notice")})
+	L.SetGlobal("log", v.hostFn("log", v.log))
+	L.SetGlobal("models", v.hostFn("models", v.models))
+	v.installTasks()
+	if v.agentsAllowed() {
+		L.SetGlobal("agent", v.hostFn("agent", v.agentRun))
+	} else {
+		L.SetGlobal("agent", L.NewFunction(func(L *lua.LState) int {
+			raise(L, "agent", EDENIED, "subagents cannot start subagents; do the work yourself")
+			return 0
+		}))
+	}
 	v.installSession()
 }
 
@@ -62,19 +63,6 @@ func (v *vm) table(name string, fns map[string]lua.LGFunction) {
 	v.L.SetGlobal(name, t)
 }
 
-// disabled installs a namespace whose functions all fail with reason.
-func (v *vm) disabled(name string, fns []string, reason string) {
-	t := v.L.NewTable()
-	for _, fn := range fns {
-		full := name + "." + fn
-		t.RawSetString(fn, v.L.NewFunction(func(L *lua.LState) int {
-			raise(L, full, EDENIED, "%s", reason)
-			return 0
-		}))
-	}
-	v.L.SetGlobal(name, t)
-}
-
 // installSession (re)builds the session table from the current session info.
 func (v *vm) installSession() {
 	L := v.L
@@ -84,7 +72,6 @@ func (v *vm) installSession() {
 		t.RawSetString(k, lua.LString(val))
 	}
 	t.RawSetString("depth", lua.LNumber(info.Depth))
-	t.RawSetString("models", v.hostFn("session.models", v.sessionModels))
 	t.RawSetString("rename", v.hostFn("session.rename", func(L *lua.LState) int {
 		name := L.CheckString(1)
 		if strings.TrimSpace(name) == "" {
@@ -98,12 +85,12 @@ func (v *vm) installSession() {
 	L.SetGlobal("session", t)
 }
 
-// sessionModels returns the models as a list of {provider, model, context_window}
+// models returns the models as a list of {provider, model, context_window}
 // and the failures of providers as {provider = message}.
-func (v *vm) sessionModels(L *lua.LState) int {
+func (v *vm) models(L *lua.LState) int {
 	models, failures := v.env.Models(v.ctx)
 	if v.ctx.Err() != nil {
-		v.ctxErr("session.models")
+		v.ctxErr("models")
 	}
 	list := L.NewTable()
 	for _, m := range models {
@@ -149,19 +136,6 @@ func optBool(t *lua.LTable, key string) bool {
 	return ok && bool(b)
 }
 
-func (v *vm) sleep(L *lua.LState) int {
-	sec := float64(L.CheckNumber(1))
-	if sec < 0 {
-		raise(L, "sleep", EINVAL, "seconds must be >= 0")
-	}
-	select {
-	case <-time.After(time.Duration(sec * float64(time.Second))):
-	case <-v.ctx.Done():
-		v.ctxErr("sleep")
-	}
-	return 0
-}
-
 func (v *vm) view(L *lua.LState) int {
 	if L.GetTop() == 0 {
 		raise(L, "view", EINVAL, "no path")
@@ -175,41 +149,14 @@ func (v *vm) view(L *lua.LState) int {
 	return 0
 }
 
-func (v *vm) logFn(level string) lua.LGFunction {
-	return func(L *lua.LState) int {
-		msg := luaString(L, L.Get(1))
-		if level == "notice" {
-			v.env.Notice(msg)
-		} else {
-			v.env.Log(level, msg)
-		}
-		return 0
+// log writes msg to Tracing; the model does not see it.
+func (v *vm) log(L *lua.LState) int {
+	var parts []string
+	for i := 1; i <= L.GetTop(); i++ {
+		parts = append(parts, luaString(L, L.Get(i)))
 	}
-}
-
-func (v *vm) jsonEncode(L *lua.LState) int {
-	val := L.CheckAny(1)
-	indent := ""
-	if s, ok := optString(opts(L, 2), "indent"); ok {
-		indent = s
-	} else if n, ok := optNumber(opts(L, 2), "indent"); ok {
-		indent = strings.Repeat(" ", int(n))
-	}
-	text, err := encodeJSON(val, indent)
-	if err != nil {
-		raise(L, "json.encode", EINVAL, "%v", err)
-	}
-	L.Push(lua.LString(text))
-	return 1
-}
-
-func (v *vm) jsonDecode(L *lua.LState) int {
-	val, err := decodeJSON(L, L.CheckString(1))
-	if err != nil {
-		raise(L, "json.decode", EINVAL, "%v", err)
-	}
-	L.Push(val)
-	return 1
+	v.env.Log("info", strings.Join(parts, " "))
+	return 0
 }
 
 // slice returns count lines of s starting at line from (1-based). A negative

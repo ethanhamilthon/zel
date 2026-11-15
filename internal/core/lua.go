@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"zel/internal/luart"
 )
@@ -21,14 +22,10 @@ var luaMD string
 var LuaToolDescription = strings.TrimSpace(luaMD)
 
 // luaHolder keeps the config VM of init.lua layers. It is shared by pointer so a
-// session switch and Reload see the same value. A snapshot that a running subagent
-// still owes lifecycle hooks is pinned: when it is replaced it stays open until the
-// last pin is released, so the subagent's end hook reaches the snapshot that ran
-// its start hook.
+// session switch and Reload see the same value.
 type luaHolder struct {
 	mu     sync.RWMutex
 	cfg    *luart.Config
-	pins   map[*luart.Config]int
 	root   string
 	notice func(string)
 	models modelListing
@@ -63,47 +60,14 @@ func (h *luaHolder) setNotice(fn func(string)) {
 	h.mu.Unlock()
 }
 
-// set makes cfg the current snapshot. The one it replaces closes now, unless
-// pinned; the last unpin closes it then.
+// set makes cfg the current snapshot and closes the one it replaces.
 func (h *luaHolder) set(cfg *luart.Config) {
 	h.mu.Lock()
 	old := h.cfg
 	h.cfg = cfg
-	closeNow := old != nil && h.pins[old] == 0
 	h.mu.Unlock()
-	if closeNow {
+	if old != nil {
 		old.Close()
-	}
-}
-
-// pin takes a reference on the current snapshot (nil when none is loaded).
-func (h *luaHolder) pin() *luart.Config {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.cfg != nil {
-		if h.pins == nil {
-			h.pins = map[*luart.Config]int{}
-		}
-		h.pins[h.cfg]++
-	}
-	return h.cfg
-}
-
-// unpin releases a reference taken by pin. A snapshot that was replaced in the
-// meantime closes with its last reference.
-func (h *luaHolder) unpin(cfg *luart.Config) {
-	if cfg == nil {
-		return
-	}
-	h.mu.Lock()
-	h.pins[cfg]--
-	closeNow := h.pins[cfg] <= 0 && cfg != h.cfg
-	if h.pins[cfg] <= 0 {
-		delete(h.pins, cfg)
-	}
-	h.mu.Unlock()
-	if closeNow {
-		cfg.Close()
 	}
 }
 
@@ -134,17 +98,7 @@ func (s *session) reloadLua() {
 	s.lua.set(next)
 }
 
-// LuaDefaults returns the merged zel.defaults.
-func (a *Runtime) LuaDefaults() luart.Defaults { return a.session().LuaDefaults() }
-
-func (s *session) LuaDefaults() luart.Defaults {
-	if cfg := s.lua.get(); cfg != nil {
-		return cfg.Defaults()
-	}
-	return luart.Defaults{}
-}
-
-// SetNoticeHandler routes notices raised from Lua (log.notice, load errors) to the UI.
+// SetNoticeHandler routes notices raised from Lua (load errors, failing instructions) to the UI.
 func (a *Runtime) SetNoticeHandler(fn func(string)) { a.session().lua.setNotice(fn) }
 
 func (s *session) notify(msg string) {
@@ -214,9 +168,7 @@ func (e luaEnv) ShellEnv() map[string]string {
 	return e.s.shellEnv()
 }
 
-func (e luaEnv) State() luart.StateStore { return kvState{e.s} }
-
-// View attaches an image to the next model request, like `zel view`.
+// View attaches an image to the next model request.
 func (e luaEnv) View(path string) error {
 	s := e.s
 	if s.ended.Load() {
@@ -300,26 +252,6 @@ func (e luaEnv) Log(level, msg string) { e.s.LogEvent("lua-"+level, msg) }
 
 func (e luaEnv) Rename(name string) error { return e.s.Rename(name) }
 
-// kvState stores Lua state in the database: "session" per session, "project" per git root.
-type kvState struct{ s *session }
-
-func (k kvState) scope(scope string) string {
-	if scope == "project" {
-		return "project:" + k.s.projectRoot()
-	}
-	return "session:" + k.s.id
-}
-
-func (k kvState) Get(scope, key string) (string, bool, error) {
-	return k.s.db.KVGet(k.scope(scope), key)
-}
-func (k kvState) Set(scope, key, value string) error { return k.s.db.KVSet(k.scope(scope), key, value) }
-func (k kvState) Delete(scope, key string) error     { return k.s.db.KVDelete(k.scope(scope), key) }
-func (k kvState) List(scope, prefix string) ([]string, error) {
-	return k.s.db.KVList(k.scope(scope), prefix)
-}
-func (k kvState) Size(scope string) (int, error) { return k.s.db.KVSize(k.scope(scope)) }
-
 // sessionStart runs the session_start hooks once per started or resumed
 // session; text they return is queued as a notification.
 func (s *session) sessionStart() {
@@ -330,8 +262,8 @@ func (s *session) sessionStart() {
 	}
 }
 
-// sessionEnd leaves the session: its jobs are cancelled, their end hooks run, and then
-// the session_end hooks run with what is left of the shutdown budget (see tasks.close).
+// sessionEnd leaves the session: its jobs are cancelled and then the session_end
+// hooks run with what is left of the shutdown budget (see tasks.close).
 func (s *session) sessionEnd(reason string) {
 	t := s.tasks
 	if t == nil {
@@ -368,5 +300,14 @@ func (s *session) turnEnd(ctx context.Context) string {
 	if cfg == nil || !cfg.HasHook("turn_end") {
 		return ""
 	}
-	return cfg.TurnEnd(ctx, s.FinalText())
+	return cfg.TurnEnd(ctx, s.FinalText(), s.runningTasks())
+}
+
+// runningTasks lists the background tasks that still run, oldest first.
+func (s *session) runningTasks() []luart.RunningTask {
+	var out []luart.RunningTask
+	for _, t := range s.ActiveTasks() {
+		out = append(out, luart.RunningTask{ID: t.ID, Name: t.Name, Ms: time.Since(t.Started).Milliseconds()})
+	}
+	return out
 }

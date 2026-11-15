@@ -230,34 +230,6 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 	return result
 }
 
-// ReadSession reads a persisted snapshot without acquiring session ownership. It works while another process is running the session.
-func ReadSession(cwd, id string) ([]Record, error) {
-	if !validSessionID(id) {
-		return nil, fmt.Errorf("invalid session ID: %s", id)
-	}
-	home, err := ZelHome(cwd)
-	if err != nil {
-		return nil, err
-	}
-	db, err := openDB(filepath.Join(home, "zel.db"))
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	_, err = db.SessionProject(id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("session not found: %s", id)
-		}
-		return nil, err
-	}
-	s := &session{db: db, id: id, acts: &activities{}}
-	if err := s.readSession(); err != nil {
-		return nil, err
-	}
-	return s.Records(), nil
-}
-
 func missingOriginalImages(item json.RawMessage) []Record {
 	var v struct{ Content []struct{ Text string } }
 	if json.Unmarshal(item, &v) != nil {
