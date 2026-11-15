@@ -1,316 +1,149 @@
-# zel → Lua: API (final draft)
+# Lua API
 
-0.5 — breaking release: the bash tool and ZEL.md are removed.
+Zel gives the model one tool, `lua`: its input is Lua code. Shell commands,
+files, background tasks and subagents are plain functions in it. The same
+functions are available in `init.lua`, where you add instructions, tools, hooks
+and prompt completions.
 
-Decided: Lua only (shell — only `sh()`), a persistent main VM per session (globals live between calls) + explicit `state`, everything blocks except
-`tasks.spawn`/`agents.spawn`, subagents (`agents.*`) are core to 0.5, own functions are registered in `init.lua` and get into the system prompt by
-themselves, full trust (no sandbox, trust prompts or policies). Runtime: gopher-lua (pure Go, `SetContext` for timeouts), the whole stdlib is open (`os`, `io` too), `package.path` += `~/.zel/lua/?.lua;.zel/lua/?.lua`.
+## Calls
 
-## 1. Tool and call model
-The model has exactly one tool, `lua`; the payload is raw Lua code (transport and options — below).
-- The VM lives between calls (0.5.2): globals, functions and the `require` cache stay. The VM is reset on `new`, `resume`, reload
-  and after a call timeout; the next output starts once with `[lua: fresh VM, <reason>: ...]`. `state.*` survives a reset.
-- Four VM roles, isolated from each other: config VM (`init.lua`, hooks, plugin function bodies), main VM (model calls),
-  task VM (fresh for each `tasks.spawn(fn)`, its own goroutine), subagent VM (its own main VM; `agents.*` is forbidden there → `EDENIED`).
-- Output = `print()` + `return` (tables → compact JSON), not truncated (0.5.2; only a 1 MiB safety cap). Filter in Lua:
-  `local a = fs.read("bigfile.md"); print(slice(a, 100, 10))`. `sh().out` inside Lua is complete (8 MiB cap).
-- The call timeout is fixed: 30 s, not configurable (0.5.2; 10 s in 0.5.1, earlier 120 s and `--! timeout=N`). One deadline covers the whole script and nested blocking calls: `sh{timeout}` and `tasks.wait`/`agents.wait` are cut to what is left. Long work goes to `tasks.spawn`/`agents.spawn`, checked in later calls; at the deadline infinite loops die, background jobs live on.
-- Only tasks and subagents run in the background; they outlive the end of a call. A result nobody collected arrives as a
-  notification `<notification>t1 finished</notification>` — only a short text; the model fetches details itself (`tasks.result(id)`).
-  The agent wakes up only for a user message or a notification; several in a row arrive as one message.
-- The user writes during a call → the message is queued and reaches the model after the call ends. The call is not interrupted:
-  there are no background tasks here, the agent literally waits for the result. Esc → cancel (`ECANCELED`); a spawned background job keeps running.
-- The CLI `zel -p` stays for humans and is not in the prompt (`zel tasks` was removed in 0.5.2).
+- Every call has a fixed 30 s limit. Longer work goes to `tasks.spawn` and is
+  checked in later calls.
+- The session has one VM: globals and functions of one call are there in the
+  next. It is reset when the session changes, init.lua reloads or a call times
+  out, and the next output starts with `[lua: fresh VM ...]`. Keep what must
+  outlive it in files.
+- Output is what the code `print()`s plus the returned value (tables as JSON),
+  never truncated; only a 1 MiB safety cap protects memory. Filter in Lua:
+  `print(slice(read("big.md"), 100, 10))`.
+- Errors raise `"fn: CODE: msg"` and can be caught with `pcall`. Codes: `EINVAL
+  ENOENT ENOMATCH EAMBIG ELIMIT EFAIL EDENIED ETIMEOUT ECANCELED`. `sh` and
+  `agent` return `ok = false` for an ordinary failure instead.
+- Everything blocks except `tasks.spawn`. The agent wakes up only for user
+  messages and short notifications such as `<notification>t1 finished</notification>`.
+- The whole Lua standard library is open (`io`, `os` too). `require` looks in
+  `~/.zel/lua/?.lua` and `.zel/lua/?.lua`.
 
-### Tool input format (universal)
-- One canon: a call is Lua code text. There are no options; a first line `--!` is an ordinary Lua comment and does not change the deadline.
-- The provider adapter picks the transport by capability: a free-form custom tool (raw text, no escaping) where available (Responses),
-  otherwise a JSON function `{code: string}`. Both normalize into one `Call{code, opts}` before the runtime.
-- A new provider is only a transport adapter; the prompt, hooks (`args = {code}`), logs and sessions do not depend on the format.
+## Functions
 
-### Error model
-- A normal failure is a value: `sh`, `web.*`, `agents.run` return `ok=false` (+`code`/`status`/`error`).
-- Everything else (bad arguments, missing file, limits, `check=true`, call timeout) is a Lua `error()` with a string like
-  `"<fn>: <CODE>: <msg>"`, caught by `pcall`. Codes: `EINVAL ENOENT ENOMATCH EAMBIG ELIMIT EFAIL EDENIED ETIMEOUT ECANCELED`.
-  Example: `local ok, err = pcall(fs.read, "x")` → `false, "fs.read: ENOENT: x"`; `err:find(": ENOENT:")`.
-- An unhandled error → in the tool output: what was printed before it + `error: <msg>` + a short traceback, flag is_error.
-
-## 2. Host API (full list)
 ```lua
-sh(cmd, o?) -> {ok, code, out, timed_out, ms}  -- bash -c, its own process group; out = stdout+stderr; timeout → 124
-  -- o: timeout (s), cwd, env {K=V}, stdin, check (error EFAIL when code~=0)
--- files (paths relative to session.cwd)
-fs.read(path) -> string                -- ENOENT; files > 16 MiB → ELIMIT
-slice(s, from, count?) -> string       -- lines from..from+count-1 (1-based); from<0 — counted from the end
-fs.write(path, s, o?) -> nil           -- o: append; parent folders are created
-fs.edit(path, old, new, o?) -> n       -- o: all; ENOMATCH (0 matches), EAMBIG (>1 without all)
-fs.patch(path, {{old, new}, ...}) -> n -- several exact edits atomically: all or none; {old=, new=, all=} also works
-fs.list(dir) -> {name, dir, size}[]
-fs.glob(pattern) -> string[]           -- "internal/**/*.go"
-fs.grep(re, o?) -> {file, line, text}[] -- o: path, glob, fixed, max (default 200); rg, otherwise Go regexp
--- fs.read, fs.write, fs.edit, fs.patch, fs.list and fs.grep refuse named pipes, devices and sockets with EINVAL: they could wait forever for a peer
-fs.exists(path) -> boolean, "file"|"dir"|nil
-fs.tmp(name?) -> string                -- a unique path in the session tmp
--- network
-web.request{url, method?, headers?, body?, json?, timeout?} -> {ok, status, headers, body, error?}
-web.get(url, o?) / web.post(url, o?)   -- sugar; ok = 2xx; network error → ok=false, status=0
-json.encode(v, o?) -> string; json.decode(s) -> value   -- o: indent; decode: EINVAL
--- background: tasks and agents are two independent namespaces; there is no shared Handle, a job is a string ID ("t1", "a1")
-tasks.spawn(fn, o?) -> id              -- a Lua function in the background in its own VM, no 30 s limit; o: name, timeout (s)
-  -- capture by copy: number/string/boolean upvalues, tables (deep) and functions (recursive) are copied into the new VM;
-  -- userdata/coroutines → EINVAL at spawn. Changes inside are not visible outside; there are no main-VM globals.
-  -- print() of a task goes to its log (tasks.tail), return — to result.value. Cancelled on quit/new/reload.
--- subagents — a full child Runtime in the same process (own session, own context), without `zel -p`
-agents.spawn{prompt, model?, effort?, provider?, cwd?, timeout?} -> id
-agents.run{...} -> AgentResult         -- spawn + wait
--- the same in tasks.* and agents.* (an ID from the other namespace → ENOENT)
-X.list() -> rows                       -- tasks: {id, name, state}; agents: {id, model, state, prompt}
-X.get(id) -> row|nil
-X.status(id) -> "running"|"done"|"failed"|"stopped"|"timeout"
-X.wait(id, timeout?) -> result | nil, "timeout"  -- a wait timeout does NOT kill the background job; the call deadline (30 s) → ETIMEOUT
-X.wait_all(ids, timeout?) -> results[] -- by index; nil for those that did not finish in time; one shared deadline
-X.result(id) -> result|nil             -- without blocking
-X.tail(id, n?) -> string               -- last n lines of the log (for an agent — steps and the final answer)
-X.stop(id) -> nil                      -- cancels the context (task and agent)
--- TaskResult  = {id, ok, value, error?, out, timed_out, ms}   value = the function's return, out = the last 64 KiB printed
--- AgentResult = {id, ok, answer, session, error?, ms}
--- A result is delivered exactly once: either wait/run takes it, or a notification <notification>t1 finished</notification> arrives.
--- state between calls
-state.get(key, scope?) -> value|nil
-state.set(key, value, scope?) -> nil   -- value=nil deletes
-state.list(prefix?, scope?) -> string[]  -- keys, sorted
--- other
-view(path, ...) -> nil                 -- pictures go into the next request
-session.{id, cwd, root, parent, depth, model, effort}; session.rename(name)
-session.models() -> models, failures  -- models: {provider, model, context_window}[] (the model menu's list; context_window 0 when unknown); failures: {provider = error}; listed once per session, failures cached with it; listed again after a provider change
-log.info/warn(msg) -- Tracing only; log.notice(msg) -- a UI notification, not sent to the model; sleep(sec)
+sh(cmd, o?) -> {ok, code, out, timed_out, ms}
+  -- bash -c in its own process group; out = stdout + stderr (8 MiB kept)
+  -- o: timeout (s), cwd, env {K = V}, stdin, check (raise EFAIL when code ~= 0)
+  -- also for HTTP (curl), JSON (jq) and waiting (sleep)
+
+read(path) -> string                    -- files over 16 MiB: ELIMIT
+slice(s, from, count?) -> string        -- lines from..from+count-1; from < 0 counts from the end
+write(path, s, o?)                      -- o: append; parent folders are created
+edit(path, old, new, o?) -> n           -- exact match; ENOMATCH, EAMBIG unless o.all
+patch(path, {{old, new}, ...}) -> n     -- several exact edits, all or nothing; an edit may set all = true
+list(dir) -> {name, dir, size}[]
+glob(pattern) -> string[]               -- "internal/**/*.go"
+grep(re, o?) -> {file, line, text}[]    -- o: path, glob, fixed, max (default 200)
+exists(path) -> bool, "file"|"dir"|nil
+tmp(name?) -> path                      -- a unique path in the session's tmp folder
+
+tasks.spawn(name, fn, o?) -> id         -- fn runs in its own VM in the background, no time limit
+  -- o: timeout (s). name shows in the chat while the task runs
+  -- fn gets copies of what it captures (locals, tables, functions); globals of this VM are not there
+  -- tasks stop when the session changes or init.lua reloads
+tasks.list() -> {id, name, state}[]
+tasks.get(id) -> {id, name, state, result?}       -- nil for an unknown id
+tasks.wait(id, timeout?) -> result | nil, "timeout"
+tasks.wait({id, ...}, timeout?) -> results[]      -- nil where a task did not finish
+tasks.tail(id, n?) -> string            -- last lines it printed
+tasks.stop(id)
+  -- result: {ok, value, error, out, ms, timed_out}; value is what fn returned
+
+agent{prompt, model?, effort?, provider?, cwd?, timeout?} -> {ok, answer, session, error}
+  -- a subagent; blocks until it answers. In a call it must answer within the 30 s,
+  -- so longer work runs in a task: tasks.spawn("review", function() return agent{prompt = "..."} end)
+  -- subagents cannot start subagents (EDENIED)
+
+view(path, ...)                         -- attach images to the next model request
+log(...)                                -- a line in Tracing; the model does not see it
+models() -> models, failures            -- {provider, model, context_window}[], {provider = error}
+session.{id, cwd, root, parent, depth, model, effort}
+session.rename(name)
 ```
 
-### state
-- scope `"session"` (default): lives with the session, survives compaction, resume and a zel restart.
-- scope `"project"`: key = `session.root` (git root, otherwise cwd), shared by all sessions and subagents of the project.
-  A subagent does not inherit session state — pass it via the prompt or project scope.
-- Values are JSON-compatible (no functions/cycles). Limits: key ≤ 256 B, value ≤ 64 KiB, scope ≤ 1 MiB → otherwise `ELIMIT`.
-- Stored in `zel.db`; a write is atomic per key; the last writer wins.
+`sh()` gets `ZEL_SESSION_ID` and `ZEL_DEPTH` in its environment.
 
-## 3. Plugin API (`init.lua`)
-`init.lua` runs once per session in a long-lived config VM: that is where hooks and plugin function bodies live. Agent code calls them
-through a bridge; arguments and results are copied as JSON values. The whole host API is available in init.lua.
+## init.lua
+
+Two files are read, in this order: `~/.zel/init.lua` (or `$ZEL_HOME/init.lua`)
+and the nearest `.zel/init.lua` from the working directory upward. A file
+returns a table, or a list of tables nested as deep as you like:
+
 ```lua
-local zel = require("zel")
-zel.instructions(text | {file = "AGENTS.md"})   -- static prompt text
-zel.prompt(function(ctx) return "..." end)       -- dynamic part, computed at session start and on Reload
-zel.defaults{provider=, model=, effort=}  -- CLI flags above
-zel.fn{name, summary, params?, returns?, examples?, hidden?, run}  -- a function for the agent
-zel.on(event, function(ev, ctx) end)             -- a hook
-zel.complete(name, fn)                           -- #name completion: fn's text replaces the token when a message is sent
-```
-
-### Re-reading: snapshot + Reload
-- Init.lua layers are read once at session start (and on resume) → a snapshot: instructions, prompt, defaults, fn, hooks.
-  Editing the file does not affect a live session.
-- Reload (menu Ctrl+K → Reload) — a new config VM, layers read again, the prompt is rebuilt. During a turn it applies after the turn ends. A load error → the old snapshot stays + `log.notice`.
-
-### zel.fn
-```lua
-zel.fn{
-  name     = "web.search",            -- "ns.name" or "name"; built-in names cannot be overridden
-  summary  = "DuckDuckGo search via ddgs",
-  params   = {{"q", "string"}, {"n", "integer?", "max results", default = 5}},  -- positional, in order
-  returns  = "{title,url,body}[]",
-  examples = {'web.search("gopher-lua context", 3)'},
-  run      = function(q, n) ... end,  -- arguments are already checked, default filled in
+return {
+  require("instructions"),   -- ~/.zel/lua/instructions.lua returns a table too
+  require("web"),
+  {
+    instructions = {"Read code first.", function() return "git: " .. sh("git status --short").out end},
+    tools = {
+      server_sh = {
+        desc = "run bash on mainserver via ssh. args: cmd, timeout? (default 8). returns like sh()",
+        fn = function(a)
+          return sh("ssh -o BatchMode=yes mainserver 'bash -s'", {stdin = a.cmd, timeout = a.timeout or 8})
+        end,
+      },
+    },
+    hooks = {
+      turn_end = function(answer, running)
+        if #running == 0 and sh("git status --porcelain").out ~= "" then return "commit your changes" end
+      end,
+    },
+    completions = {plan = function() return read("PLAN.md") end},
+  },
 }
 ```
-Types: `string integer number boolean table any`, `T[]`, `{k:T}`, `"a"|"b"`, `?` = optional. The host checks arguments
-before the call (`web.search: EINVAL: arg #1 q: expected string, got nil`), not the result. An `error()` from `run` goes to the agent
-(without a code — prefix `<name>: EFAIL:`). `hidden = true` — it exists but is not rendered into the prompt.
 
-### Prompt completions (`zel.complete`)
-- `zel.complete("plan", function() return "..." end)` registers `#plan`. Names are 1 to 64 letters, digits, `-` or `_`.
-- In the composer, typing `#` lists the registered names (filter with more letters, Tab or Enter completes the token).
-- A token is `#name` at the start of the text or after white space; a bare `#` is not a token.
-- On send (also `zel -p`), each registered name runs once with a 10 s limit; every token with that name gets the same text, in one pass.
-- Cancelling a send (Ctrl+D while it expands in the TUI, or interrupting `zel -p`) sends nothing: the draft stays in the composer and the reason shows in the chat. A result that arrives after the cancel is dropped.
-  Unknown names stay as typed. The agent receives the expanded text; the chat shows it too.
-- A failing function keeps the draft unsent and the reason shows in red in the chat. A later layer with the same name overrides it with a warning.
-- Functions run at send time, not while typing, so their text can be dynamic. A reload replaces the registry with the new snapshot.
+- `instructions`: text, a function that returns text, or a list of them. They
+  go before the Lua section of the system prompt; functions run when the
+  session starts or reloads.
+- `tools`: `name = {desc, fn}`. The name is `name` or `ns.name` and cannot
+  replace a built-in function. The agent calls it with one table of arguments,
+  `server_sh{cmd = "docker ps"}`, and `fn` gets that table. `desc` goes into the
+  system prompt as is: say what the tool does, its arguments and its result.
+- `hooks` and `completions`: below.
 
-### Prompt generation
-Form: a compact signature + `--` doc lines (2–3 times cheaper than LuaLS `---@param`, the model reads it as Lua):
-`name(p: T, p2?: T=default) -> R  -- summary`, then `--   p: desc` (only if present) and `--   e.g. …` for an example.
-Groups: `## built-in` (fixed text from the binary), then `## <layer> (path)`. Replaces `bash.md`, rebuilt with the prompt.
+Unknown keys are an error. A file that fails to load is skipped with a notice;
+the other file still loads. Instructions of both files are joined, a tool or
+completion of the project file replaces the global one of the same name (with a
+warning), and all hooks run, global ones first.
 
-## 4. Hooks
-| event | ev | return |
+A session reads the files once, when it starts or resumes, and keeps that
+snapshot. Menu → Reload reads them again; during a turn it waits until the turn
+ends, and a broken file keeps the previous snapshot.
+
+Tools, hooks and completions run in one config VM, one at a time, with the
+same functions as the agent.
+
+## Hooks
+
+| hook | gets | returns |
 |---|---|---|
-| `session_start` | `{}` | nil or a string / `{notify = "text"}` → notification (wakes the agent) |
-| `session_end` | `{reason}` (`quit`/`new`/`resume`) | nothing; runs last when leaving, with what is left of the 5 s shutdown budget (below) |
-| `message` | `{text, notice?}` | nil or a new user text string; `notice = true` marks a notification, whose text cannot be rewritten |
-| `turn_end` | `{answer}` | nil or a string / `{notify = "text"}` → notification, the turn continues (at most 3 times in a row) |
-| `subagent_start` | `{id, prompt, model, effort, provider, cwd, depth}` | nothing; runs in the background when the subagent begins |
-| `subagent_end` | `{id, status, ok, answer, error?, session, model, effort, ms}` | nothing; one delivery attempt per started subagent: `done`/`failed`/`stopped`/`timeout` (see the shutdown rules below) |
+| `session_start()` | | text: a notification for the agent |
+| `message(text, notice)` | a user message, or a notification when `notice` is true | new text for a user message; ignored for a notification |
+| `turn_end(answer, running)` | the final answer and the tasks still running: `{id, name, ms}[]` | text: a notification, and the turn goes on (at most 3 times in a row) |
+| `session_end(reason)` | `"quit"`, `"new"` or `"resume"` | |
 
-The table is the complete list of hooks. Since 0.5.2 `before_call`, `after_call` and `bg_done` are removed (`zel.on` with them is a layer load error).
-Text from `session_start` and `turn_end` reaches the agent as `<notification>text</notification>`. `message` hooks rewrite the user's text, and each one sees the text the previous one returned. The subagent hooks return nothing to the agent.
-`ctx = {session, layer}`. An error in a hook → a warning in Tracing; the hook counts as nil.
+Several `message` hooks chain: each gets the text the previous one returned. A
+hook that fails is logged in Tracing and skipped. Each hook has 60 s. When a
+session is left, running tasks are stopped first and `session_end` runs with
+what is left of a 5 s budget.
 
-### Subagent hooks, reload and shutdown
-- A subagent keeps the snapshot that ran its `subagent_start` hook: its `subagent_end` runs there, even after Reload. That snapshot closes when its last subagent has ended, so a Reload never sends an end hook to a snapshot that did not see its start.
-- Lifecycle job and hook shutdown when leaving a session (`quit`, `new`, `resume`) shares one 5 s budget (`luart.SessionEndTimeout`), running in this order: running subagents are cancelled first (their `subagent_start` hooks still pending are cancelled too), their `subagent_end` hooks run next, and `session_end` runs last with what is left. A subagent's own session (it loads the same init.lua) closes after its `subagent_end` and within the same budget. This budget bounds only lifecycle job/hook shutdown—not database or config preparation/saving before shutdown, nor `session_start` after switching—so contention can make `NewSession`, `Resume`, or save-on-quit take longer than 5 s.
-- Each started subagent gets one delivery attempt of its `subagent_end`. Normal operation and cooperative shutdown run it once. If the budget ends first, the attempt is skipped or cut short, and the warning `hook subagent_end (...) stopped early` is written to Tracing. No hook is guaranteed to complete past the budget.
-- A hook or plugin function that is blocked in a host operation that never returns, such as reading a named pipe, does not hold shutdown past the budget either: the call returns at its deadline and its Lua state is freed when the blocked operation returns. Plain Lua library calls such as `io.open` or `dofile` are not interrupted by timeouts; they still return when their Lua finishes.
-- A job that ignores cancellation is abandoned when the budget ends; its result is not queued.
+## Prompt completions
 
-## 5. Layers and merging
-Order: `~/.zel/init.lua` → nearest `.zel/init.lua` going up from cwd → `--config FILE` (`.lua` only).
-- `instructions`/`prompt`: concatenated in order.
-- `defaults`: a later one overrides; CLI flags override everything.
-- `fn`: same name — the project one overrides the global one (warning in Tracing); built-in names are never overridden.
-- hooks: all run, global ones first; `message` text chains through them, each one seeing the text the previous one returned.
-- layer load error: the layer is skipped, `log.notice` in the UI, the session starts.
+`completions = {plan = function() return "..." end}` registers `#plan`. Typing
+`#` in the composer lists the names; when you send a message with `#plan`, the
+function runs and its text replaces the token. Names are 1 to 64 letters,
+digits, `-` or `_`. A completion has 10 s; one that fails, or returns nothing,
+keeps your draft and shows the reason. Ctrl+D cancels an expansion that is
+still running. Unknown `#names` stay as typed.
 
-## 6. Examples
+## Examples
 
-### 6.1 Global `~/.zel/init.lua` — instructions + defaults
-```lua
-local zel = require("zel")
-zel.defaults{model = "sonnet-5.5", effort = "medium"}
-zel.instructions [[
-Read code first. Work read-only unless the request needs edits. Verify before the final answer.
-Reply like an SMS: short, lowercase, user's language, no trailing dot.
-Subagents: cheap work → haiku-5.5, real code → sonnet-5.5, review/hard → opus-5.5.
-]]
-zel.prompt(function() return "env: " .. sh("uname -srm").out .. "today: " .. os.date("%Y-%m-%d") end)
-zel.on("session_start", function() sh("mkdir -p ~/.zel/cache") end)
-```
-
-### 6.2 Global plugin — documented `web.search` / `web.fetch`
-The core has none of them (there is only raw `web.request/get/post`): search and fetch are a plugin in `~/.zel/init.lua`, like this one.
-```lua
-local zel = require("zel")
-zel.fn{
-  name = "web.search", summary = "DuckDuckGo search via ddgs",
-  params = {{"q", "string"}, {"n", "integer?", default = 5}},
-  returns = "{title,url,body}[]",
-  examples = {'for _, h in ipairs(web.search("gopher-lua context", 3)) do print(h.url) end'},
-  run = function(q, n)
-    local out = fs.tmp("ddgs.json")
-    sh(("ddgs text -q %q -m %d -nc -o %s"):format(q, n, out), {check = true, timeout = 30})
-    local hits = {}
-    for i, h in ipairs(json.decode(fs.read(out))) do hits[i] = {title = h.title, url = h.href, body = h.body} end
-    return hits
-  end,
-}
-zel.fn{
-  name = "web.fetch", summary = "page as markdown (trafilatura, fallback crwl)",
-  params = {{"url", "string"}, {"max", "integer?", "cut to N bytes", default = 20000}},
-  returns = "string",
-  run = function(url, max)
-    local r = sh(("trafilatura -u %q --markdown --no-comments --links"):format(url), {timeout = 40})
-    if not r.ok or r.out == "" then r = sh(("crwl crawl %q -o markdown"):format(url), {check = true}) end
-    return r.out:sub(1, max)
-  end,
-}
-```
-The generated system prompt section (in full, with the built-in part):
-```text
-# Lua
-One tool: lua (raw Lua). Each call has a fixed 30 s timeout that cannot be changed: run longer work with tasks.spawn/agents.spawn and check it in later calls.
-The VM persists between calls: globals and functions stay until the session changes, init.lua reloads or a call times out; the next output then starts with "[lua: fresh VM ...]". state.* outlives the VM.
-Output = print() + return (JSON), never truncated: filter in Lua and print only what you need, e.g. local a = fs.read("bigfile.md"); print(slice(a, 100, 10)).
-Errors raise "fn: CODE: msg" (pcall); sh/web/agents.run return ok=false instead. Everything blocks.
-You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (tasks.result(id)).
-## built-in
-sh(cmd, o?) -> {ok,code,out,timed_out,ms}  -- o: timeout,cwd,env,stdin,check
-fs.read(path) -> string; slice(s, from, count?) -> string  -- lines from..from+count-1; from<0 counts from the end
-fs.write(path, s, o?)  -- o: append
-fs.edit(path, old, new, o?) -> n  -- exact match; o: all
-fs.patch(path, {{old, new}, ...}) -> n  -- several exact edits, all or nothing; an edit may set all=true
-fs.list(dir) -> {name,dir,size}[]; fs.glob(pat) -> string[]; fs.exists(path) -> bool,kind; fs.tmp(name?) -> path
-fs.grep(re, o?) -> {file,line,text}[]  -- o: path,glob,fixed,max
-web.get(url, o?) / web.post(url, o?) / web.request{url,method,headers,body,json,timeout} -> {ok,status,headers,body,error}
-json.encode(v, o?) / json.decode(s)
-tasks.spawn(fn, o?) -> id  -- fn runs in its own VM in the background, no time limit; o: name,timeout
---   fn gets copies of what it captures (locals, tables, functions); changes stay inside and globals of this VM are not there
---   result: {ok,value,error,out,ms,timed_out}; value = fn's return value, out = what it printed
---   stopped when the session changes (new/resume) or init.lua reloads
-agents.spawn{prompt,model,effort,provider,cwd,timeout} -> id; agents.run{...} -> {ok,answer,session,error}
-tasks.* and agents.* both have: get(id) list() status(id) wait(id, timeout?) wait_all(ids, timeout?) result(id) tail(id, n?) stop(id)
-state.get(k, scope?) / state.set(k, v, scope?) / state.list(prefix?, scope?)  -- scope: "session"|"project"; JSON values
-view(path, ...); session.{id,cwd,root,parent,depth,model,effort}; session.rename(name); log.info/warn/notice(msg); sleep(s)
-session.models() -> models, failures  -- models: {provider,model,context_window}[] (the model menu's list); failures: {provider: error}; listed once per session, failures cached with it; listed again after a provider change
-## global (~/.zel/init.lua)
-web.search(q: string, n?: integer=5) -> {title,url,body}[]  -- DuckDuckGo search via ddgs
---   e.g. for _, h in ipairs(web.search("gopher-lua context", 3)) do print(h.url) end
-web.fetch(url: string, max?: integer=20000) -> string  -- page as markdown (trafilatura, fallback crwl)
---   max: cut to N bytes
-```
-The whole API takes about 550 tokens; each plugin function is 1–3 lines.
-
-### 6.3 Project `repos/zel/.zel/init.lua` — instructions, a project function, hooks, state
-```lua
--- Copy to ./.zel/init.lua of a Go project: instructions, a project function, hooks, state.
-local zel = require("zel")
-zel.instructions{file = "AGENTS.md"}
-zel.prompt(function() return "git status:\n" .. sh("git status --short").out end)
-
--- A Lua call lives 30 s, so the slow checks run as one background task.
-zel.fn{
-  name = "zel.check", summary = "start gofmt + vet + race tests in the background, returns the task id",
-  params = {{"pkg", "string?", "go package pattern", default = "./..."}},
-  returns = "string (task id: read it with tasks.wait(id, 20) or wait for its notification)",
-  examples = {'local id = zel.check("./internal/agent/...")'},
-  run = function(pkg)
-    pkg = pkg or "./..."
-    local id = tasks.spawn(function()
-      local r = sh('test -z "$(gofmt -l .)" && go vet ' .. pkg .. ' && go test -race -count=1 ' .. pkg)
-      print(r.out)
-      return r.ok
-    end, {name = "check", timeout = 600})
-    state.set("last_check", {id = id, at = os.time()}, "project")
-    return id
-  end,
-}
-
-zel.on("turn_end", function()
-  if sh("git status --porcelain").out ~= "" then
-    return "uncommitted changes: run zel.check() and commit per AGENTS.md"
-  end
-end)
-```
-It adds to the prompt:
-```text
-## project (repos/zel/.zel/init.lua)
-zel.check(pkg?: string="./...") -> string (task id: read it with tasks.wait(id, 20) or wait for its notification)  -- start gofmt + vet + race tests in the background, returns the task id
---   pkg: go package pattern
---   e.g. local id = zel.check("./internal/agent/...")
-```
-
-## 7. Implementation notes (deviations and details of 0.5.0)
-- Cancelling: the TUI has no Esc-cancel for a running turn; **Ctrl+D** (stop the active turn) cancels the running
-  call (`ECANCELED`). Ctrl+D also cancels a prompt completion that is still expanding. Background tasks and agents keep running, as designed.
-- `turn_end` may continue a turn at most 3 times (returned text → notification), so a hook that always answers cannot loop forever.
-- A queued user message is also passed through `message` hooks when it is accepted into the history.
-- `agents.spawn` runs a child agent inside the application (its own session; no `zel -p` process, no report file, no
-  socket). Subagents cannot start subagents (0.5.2; `agents.*` raises `EDENIED` there, `tasks.*` works). The child is visible in the task panel like any task, and closing the parent
-  cancels it. `sh()` still gets `ZEL_SESSION_ID` and `ZEL_DEPTH`.
-- Compatibility (0.5.1): handles and the global `wait_all` are gone (use `tasks.wait(id)` / `agents.wait_all(ids)`);
-  `--! timeout=N`, the timeout setting and `zel.defaults{timeout=}` are removed; `zel view` and `zel tasks run|stop`
-  are removed (use `view()` and `tasks.*`).
-- Compatibility (0.5.2): `tasks.spawn(cmd)`, `tasks.run` and the `zel tasks` CLI are removed (wrap shell work in
-  `tasks.spawn(function() return sh(cmd) end)`); `fs.read` lost `{from, lines}` (use `slice`); the output-limit
-  setting and `zel.defaults{output_limit=}` are removed; hooks are `session_start`, `session_end`, `message`, `turn_end`.
-- 0.5.3: `session.models()` is new. A turn that fails or is stopped (Ctrl+D) closes in the chat with its wall-clock time, steps and
-  the error text or `stopped by user`; that closing message is kept in the saved history but never sent to the model.
-- Reload with a broken layer keeps the previous snapshot completely (not layer by layer) and raises a notice;
-  the first load at session start skips only the broken layer.
-- Tracing kind of a call is `lua` (search `:lua text`). The lua output is not truncated (1 MiB safety cap) and the 30 s call timeout is fixed (0.5.2).
-- `ZEL.md` is neither read nor migrated; the repository itself uses `.zel/init.lua` + `AGENTS.md`.
-- Ready-made examples (global config, web plugin, project config) are in `docs/examples/` and covered by tests.
-- 0.5.4: `zel.on("subagent_start"/"subagent_end")` and `zel.complete` are new (see sections 3 and 4).
-  Activity labels show a shell command's program name only, plus its plain path arguments for a few read-only programs
-  (`cd`, `ls`, `cat`, `head`, `tail`, `wc`, `pwd`); a URL shows its scheme and host. Configured API keys are removed from
-  every label. Instant host functions (`print`, `slice`, `json.encode`/`json.decode`, `log.info`/`log.warn`) have no
-  label, because each label change publishes an update and a loop would flood the UI; every other host function has one.
-  The main agent's built-in prompt names the hooks; subagents get no lifecycle line and no `agents.*`.
+See [examples](examples/): a global file, a web search module and a project
+file for a Go repository.

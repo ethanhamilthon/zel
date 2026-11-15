@@ -2,21 +2,21 @@
 
 `main` is the composition root. It wires the runtime constructor and interactive
 frontend into CLI dispatch, installs signal handling, and reports the exit status.
-No provider or database is opened for standalone helpers such as `zel init`.
+No provider or database is opened for `zel version`, `zel help` or `zel update`.
 
 ## Packages
 
 | Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
 | `entities` | Shared input, attachments, tool calls, records, usage, model choices and domain events | None |
-| `config` | Defaults, validation, preference decoding, init.lua layer discovery, paths and project initialization | None |
+| `config` | Defaults, validation, preference decoding, init.lua layer discovery and paths | None |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | SQLite opening, migrations, preferences, session/item transactions and task records | `entities` |
 | `shell` | Command execution, process groups, cancellation, bounded output and image capture | `entities` |
-| `luart` | The Lua runtime (gopher-lua): the session's main VM, task VMs, host API (`sh`, `fs`, `web`, `json`, `state`, `tasks`/`agents`), the init.lua config VM with `zel.*`, hooks and system-prompt rendering. Talks to the application only through its `Env` interface | `shell` |
+| `luart` | The Lua runtime (gopher-lua): the session's main VM, task VMs, host API (`sh`, the file functions, `tasks`, `agent`, `session`, ...), the init.lua config VM with tools, hooks and completions, and system-prompt rendering. Talks to the application only through its `Env` interface | `shell` |
 | `agent` | One model/tool loop, steering checkpoints, turn-end hook and cancellation boundaries | `entities` |
-| `core` | Runtime assembly, sessions, controller, queues, jobs (tasks and subagents), key-value state, persistence and application events; implements `luart.Env` | Backend packages, `luart` |
-| `cli` | Argument parsing, helper commands, output and headless execution | `core`, `entities` |
+| `core` | Runtime assembly, sessions, controller, queues, jobs (tasks and subagents), persistence and application events; implements `luart.Env` | Backend packages, `luart` |
+| `cli` | Argument parsing, `update`, output and headless execution | `core`, `entities` |
 | `tui` | Display state, composer, menus, input events and rendering | `core`, `entities` |
 
 The frontends never import backend packages directly. `core` exposes settings and
@@ -66,17 +66,18 @@ main `luart` VM (`luart.Runner`), which keeps globals between calls and is
 reset on new/resume/reload or after a timeout; init.lua runs in a separate
 config VM, every `tasks.spawn(fn)` in a fresh task VM that gets a deep copy of
 the function and its upvalues (`luart/copy.go`); the host API reaches the application through `luart.Env`
-(shell environment, key-value state in `store`, the `tasks` and `agents`
-namespaces, images, model listing, notices). Every call has a fixed 30-second deadline
+(shell environment, tasks, subagents, images, model listing, notices). Every call has a fixed 30-second deadline
 (`luart.callTimeout`) that nothing can extend. Tasks and agents share the job
-bookkeeping in `core` (IDs, logs, result delivery) but are separate namespaces:
-a task is a Lua function on its own goroutine, an agent is a full child `Runtime` with its own
-session that runs in the same process. The parent owns its context,
+bookkeeping in `core` (IDs, logs, result delivery): a task is a Lua function on
+its own goroutine, and `agent{}` starts a full child `Runtime` with its own
+session in the same process and waits for it; a background agent is an
+`agent{}` inside a task. Running tasks are listed for the chat rows
+(`ActiveTasks`), running agents for the subagent rows. The parent owns its context,
 cancellation, progress and result; running agents live in an in-memory tree
 (`agentTree`) shared by the whole agent tree (subagents cannot start agents of
 their own), and closing the parent cancels
-its children, waits for them with their end hooks, and then runs `session_end`, all within the 5 s session budget. There is no Unix socket and no report file. init.lua layers are run once per session in
-a long-lived config VM (snapshot); hooks and plugin functions live there. The agent wakes up
+its children, waits for them, and then runs `session_end`, all within the 5 s session budget. There is no Unix socket and no report file. init.lua layers are run once per session in
+a long-lived config VM (snapshot); tools, hooks and completions live there. The agent wakes up
 only for typed input or a notification: finished jobs nobody waited for, text
 from session_start and turn_end hooks, and `view()` images are queued as `<notification>...</notification>`
 (consecutive ones are delivered as one message). See
