@@ -18,7 +18,7 @@ func TestChoiceReplacesComposerAndTakesKeys(t *testing.T) {
 	m.choice = &core.Choice{ID: 1, Title: "Какой цвет выбрать", Options: []string{"Синий", "Красный", "Зелёный"}}
 	m.refresh(true)
 	plain := ansi.Strip(m.timeline())
-	for _, want := range []string{"Какой цвет выбрать", "❯ 1 Синий", "2 Красный", "3 Зелёный", "esc cancel"} {
+	for _, want := range []string{"Какой цвет выбрать", "Синий ❯", "Красный", "Зелёный"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q:\n%s", want, plain)
 		}
@@ -29,7 +29,7 @@ func TestChoiceReplacesComposerAndTakesKeys(t *testing.T) {
 
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
-	if !strings.Contains(ansi.Strip(m.timeline()), "❯ 3 Зелёный") {
+	if !strings.Contains(ansi.Strip(m.timeline()), "Зелёный ❯") {
 		t.Fatalf("down does not move:\n%s", ansi.Strip(m.timeline()))
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown}) // wraps around
@@ -81,21 +81,25 @@ func TestChoiceListScrollsInASmallTerminal(t *testing.T) {
 	m.choice = &core.Choice{ID: 1, Title: "q", Options: options}
 	m.choiceSel = 9
 	block := ansi.Strip(m.choiceBlock())
-	if !strings.Contains(block, "❯ 10 oooooooooo") || !strings.Contains(block, "10 of 12") || strings.Contains(block, "1 o\n") {
+	if !strings.Contains(block, "oooooooooo ❯") || !strings.Contains(block, "10 of 12") || strings.Contains(block, "\no\n") {
 		t.Fatalf("window around the selection:\n%s", block)
 	}
 }
 
-// Questions wait in a queue; the hint counts them only when more than one waits.
-func TestChoiceShowsQueueCounter(t *testing.T) {
+func TestChoiceHasNoNumbersOrFooterAndFitsNarrowScreens(t *testing.T) {
 	m := bareModel(t, "/project")
-	m.width, m.height = 60, 20
-	m.choice = &core.Choice{ID: 1, Title: "q", Options: []string{"a", "b"}, Waiting: 1}
-	if block := ansi.Strip(m.choiceBlock()); strings.Contains(block, "1/") {
-		t.Fatalf("a single question shows a counter:\n%s", block)
+	m.height = 20
+	m.choice = &core.Choice{ID: 1, Title: "q", Options: []string{"First", "Second", "Third"}, Waiting: 3}
+	m.width = 60
+	if block := ansi.Strip(m.choiceBlock()); block != "q\nFirst ❯\nSecond\nThird" {
+		t.Fatalf("unexpected choice layout:\n%s", block)
 	}
-	m.choice.Waiting = 3
-	if block := ansi.Strip(m.choiceBlock()); !strings.Contains(block, "1/3 · ↑↓ choose") {
-		t.Fatalf("no queue counter:\n%s", block)
+	for width := 1; width <= 15; width++ {
+		m.width = width
+		for _, row := range strings.Split(m.choiceBlock(), "\n") {
+			if ansi.StringWidth(row) > width {
+				t.Fatalf("choice exceeds width %d: %q", width, row)
+			}
+		}
 	}
 }

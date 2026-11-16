@@ -63,23 +63,23 @@ func (m model) choiceBlock() string {
 	dim, accent := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(accentColor)
 	rows := []string{title.Render(ansi.Truncate(sanitizeLabel(m.choice.Title), width, "…"))}
 	count := len(m.choice.Options)
-	visible := min(count, max(1, m.height-6))
+	visible := min(count, max(1, m.height-5))
 	start := min(max(0, m.choiceSel-visible+1), count-visible)
 	for i := start; i < start+visible; i++ {
-		label := fmt.Sprintf("%d %s", i+1, sanitizeLabel(m.choice.Options[i]))
+		label := ansi.Truncate(sanitizeLabel(m.choice.Options[i]), max(0, width-2), "…")
 		if i == m.choiceSel {
-			rows = append(rows, accent.Render("❯ ")+title.Render(ansi.Truncate(label, max(1, width-2), "…")))
+			if width >= 2 {
+				rows = append(rows, title.Render(label)+accent.Render(" ❯"))
+			} else {
+				rows = append(rows, accent.Render("❯"))
+			}
 		} else {
-			rows = append(rows, "  "+dim.Render(ansi.Truncate(label, max(1, width-2), "…")))
+			rows = append(rows, dim.Render(label))
 		}
 	}
 	if count > visible {
 		rows = append(rows, dim.Render(fmt.Sprintf("  %d of %d", m.choiceSel+1, count)))
 	}
-	hint := "↑↓ choose · enter confirm · esc cancel"
-	if m.choice.Waiting > 1 {
-		hint = fmt.Sprintf("1/%d · ", m.choice.Waiting) + hint
-	}
-	rows = append(rows, dim.Render(ansi.Truncate(hint, width, "…")))
+
 	return strings.Join(rows, "\n")
 }
