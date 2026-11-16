@@ -2449,10 +2449,26 @@ func BenchmarkTimelineRefresh(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprint(n, "entries"), func(b *testing.B) {
 			m := perfModel(b, n)
+			for m.renderPending {
+				m.refresh(false)
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				m.refresh(false)
+			}
+		})
+	}
+}
+
+func BenchmarkStreamingMarkdown(b *testing.B) {
+	for _, kb := range []int{1, 16, 60} {
+		b.Run(fmt.Sprint(kb, "KiB"), func(b *testing.B) {
+			text := strings.Repeat("A **paragraph** with `code`.\n\n", kb*1024/29)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = renderEntryMode(entry{Kind: "assistant", Preview: true, Text: text + fmt.Sprint(i)}, 100, -1, true)
 			}
 		})
 	}

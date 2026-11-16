@@ -238,7 +238,7 @@ func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEven
 	body := request.payload(custom)
 	for attempt := 0; ; attempt++ {
 		delivered, completed := false, false
-		inputs := map[int64]string{}
+		inputs := map[int64]bool{}
 		err := c.streamOnce(ctx, body, func(event StreamEvent) error {
 			if custom {
 				var emit []StreamEvent

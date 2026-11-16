@@ -12,39 +12,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"zel/internal/agent"
 	"zel/internal/config"
 	"zel/internal/entities"
 	"zel/internal/ipc"
-	"zel/internal/provider"
+
 	"zel/internal/store"
 )
-
-var codeField = regexp.MustCompile(`"command"\s*:\s*"`)
-
-func partialCode(arguments string) string {
-	loc := codeField.FindStringIndex(arguments)
-	if loc == nil {
-		return ""
-	}
-	quoted := arguments[loc[1]-1:]
-	var text string
-	if json.NewDecoder(strings.NewReader(quoted)).Decode(&text) == nil {
-		return text
-	}
-	for end := len(quoted); end > 0 && end >= len(quoted)-12; end-- {
-		candidate := quoted[:end]
-		if !utf8.ValidString(candidate) {
-			continue
-		}
-		if json.Unmarshal([]byte(candidate+`"`), &text) == nil {
-			return text
-		}
-	}
-	return ""
-}
 
 type Options struct {
 	Mode                    string               // tui or headless; see session.mode
@@ -410,103 +385,6 @@ func (s *session) runTool(ctx context.Context, callID, name, arguments string, e
 
 func (s *session) itemID(index int64) string {
 	return fmt.Sprintf("%s-%d", s.lastRequest.RequestID, index)
-}
-
-func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []json.RawMessage, err error) {
-	defer func() { err = s.safeError(err) }()
-	settings, client := s.snapshot()
-	if hint := settings.SetupHint(); hint != "" {
-		return nil, errors.New(hint)
-	}
-	prompt, err := s.instructions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	s.histMu.RLock()
-	for i, item := range s.History {
-		if !json.Valid(item) {
-			s.histMu.RUnlock()
-			return nil, fmt.Errorf("invalid history item %d", i)
-		}
-	}
-	s.histMu.RUnlock()
-	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
-		Tools: []provider.Tool{{Name: "bash", Description: BashToolDescription, Parameters: bashParameters(), Freeform: "command"}}}
-	started := time.Now()
-	s.histMu.Lock()
-	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}
-	s.requestedLen = len(s.History)
-	s.histMu.Unlock()
-	s.slots.sent()
-	emit = s.noteSteps(emit)
-	var completed []json.RawMessage
-	arguments := map[int64]string{}
-	names := map[int64]string{}
-	err = client.Stream(ctx, request, func(event provider.StreamEvent) error {
-		switch event.Type {
-		case "retry":
-			emit(TurnEvent{Kind: "notice", Text: Redact(settings, event.Message)})
-		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
-			if event.Type == "response.function_call_arguments.delta" {
-				arguments[event.OutputIndex] += event.Delta
-			} else {
-				arguments[event.OutputIndex] = event.Arguments
-			}
-			if names[event.OutputIndex] == "bash" {
-				emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
-			}
-		case "response.output_item.added", "response.output_item.done":
-			var item struct{ Type, Name, Arguments string }
-			_ = json.Unmarshal(event.Item, &item)
-			// Some providers deliver complete arguments without argument deltas.
-			if item.Type == "function_call" {
-				names[event.OutputIndex] = item.Name
-				if item.Arguments != "" {
-					arguments[event.OutputIndex] = item.Arguments
-				}
-				if item.Name == "bash" {
-					emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
-					return nil
-				}
-			}
-			if event.Type == "response.output_item.added" {
-				for _, record := range RecordsForItem(event.Item) {
-					emit(TurnEvent{Kind: record.Kind, Text: record.Text, ID: s.itemID(event.OutputIndex), Final: true, Provisional: true})
-				}
-			}
-		case "response.output_text.delta":
-			emit(TurnEvent{Kind: "delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
-		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-			emit(TurnEvent{Kind: "reasoning_delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
-		case "response.refusal.delta":
-			emit(TurnEvent{Kind: "refusal_delta", Text: event.Delta, ID: s.itemID(event.OutputIndex), Provisional: true})
-		case "response.completed":
-			s.histMu.Lock()
-			s.lastRequest.Duration = time.Since(started)
-			if u := event.Response.Usage; u != nil {
-				n := u.InputTokens
-				s.lastRequest.ContextInput = &n
-				cached := int64(-1)
-				if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens != nil {
-					cached = *u.InputTokensDetails.CachedTokens
-				}
-				s.lastRequest.Usage = &Usage{Input: n, Output: u.OutputTokens, Cached: cached}
-			}
-			s.histMu.Unlock()
-			completed = append([]json.RawMessage{}, event.Response.Output...)
-			return provider.ErrStreamDone
-		case "response.failed", "response.incomplete", "error":
-			return provider.StreamFailure(event)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if completed == nil {
-		return nil, provider.ErrIncompleteStream
-	}
-	return completed, nil
 }
 
 const (

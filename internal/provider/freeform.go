@@ -88,7 +88,7 @@ func customToFunction(item json.RawMessage, fields map[string]string) json.RawMe
 // normalizeCustom maps the stream events of custom tool calls to the function
 // call events the rest of zel handles. It returns extra events to deliver
 // before the (possibly rewritten) event; an empty Type drops the event.
-func normalizeCustom(event StreamEvent, fields map[string]string, inputs map[int64]string) ([]StreamEvent, StreamEvent) {
+func normalizeCustom(event StreamEvent, fields map[string]string, inputs map[int64]bool) ([]StreamEvent, StreamEvent) {
 	switch event.Type {
 	case "response.output_item.added", "response.output_item.done":
 		event.Item = customToFunction(event.Item, fields)
@@ -99,7 +99,7 @@ func normalizeCustom(event StreamEvent, fields map[string]string, inputs map[int
 		if _, started := inputs[event.OutputIndex]; !started {
 			fragment = `{"` + fieldFor(fields) + `":"` + fragment
 		}
-		inputs[event.OutputIndex] += event.Delta
+		inputs[event.OutputIndex] = true
 		return nil, StreamEvent{Type: "response.function_call_arguments.delta", OutputIndex: event.OutputIndex, Delta: fragment}
 	case "response.custom_tool_call_input.done":
 		args, _ := json.Marshal(map[string]any{fieldFor(fields): event.Input})

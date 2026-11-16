@@ -423,19 +423,33 @@ func TestSteeringMovesRunningCallToTaskAndSkipsRest(t *testing.T) {
 	}
 }
 
-func TestPartialCodeShowsCompletePrefix(t *testing.T) {
-	cases := map[string]string{
-		`{"command":"echo hi`:         "echo hi",
-		`{"command":"printf \"a\`:     `printf "a`,
-		`{"command":"x", "timeout":1`: "x",
-		`{"command" : "y`:             "y",
-		`{"command":"`:                "",
-		`{"code":"print(1)"`:          "",
-	}
-	for arguments, want := range cases {
-		if got := partialCode(arguments); got != want {
-			t.Errorf("partialCode(%q) = %q, want %q", arguments, got, want)
+func TestOnlyCompleteCommandsArePublished(t *testing.T) {
+	fp := &fakeProvider{reply: func(n int, _ string) string {
+		if n > 1 {
+			return textReply("ok")
 		}
+		return sse(
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","name":"bash","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"command\":\"echo"}`,
+			`{"type":"response.function_call_arguments.delta","output_index":0,"delta":" final\"}"}`,
+			`{"type":"response.completed","response":{"output":[{"type":"function_call","name":"bash","call_id":"c1","arguments":"{\"command\":\"echo final\"}"}]}}`)
+	}}
+	a := newTestAgent(t, fp, Options{})
+	events, err := turn(t, a, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, e := range events {
+		if e.Kind == "code" {
+			count++
+			if e.Provisional || e.Text != "echo final" {
+				t.Fatalf("partial command: %+v", e)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("command events: %d", count)
 	}
 }
 

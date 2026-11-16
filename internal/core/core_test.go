@@ -19,6 +19,22 @@ import (
 )
 
 // withLocal writes ./zel.toml of the session folder before the runtime starts.
+// Generated fixtures keep performance checks independent of private sessions.
+func BenchmarkImageContext(b *testing.B) {
+	s := &session{}
+	for i := 0; i < 16; i++ {
+		s.History = append(s.History, raw(map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "input_text", "text": "describe image"},
+			map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + strings.Repeat("A", 1<<20)},
+		}}))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = s.ContextTokens()
+	}
+}
+
 func withLocal(text string) func(home, dir string) {
 	return func(home, dir string) {
 		if err := os.WriteFile(filepath.Join(dir, "zel.toml"), []byte(text), 0600); err != nil {

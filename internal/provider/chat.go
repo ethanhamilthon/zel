@@ -140,7 +140,10 @@ const (
 
 func (c *Client) streamChat(ctx context.Context, body map[string]any, fn func(StreamEvent) error) error {
 	var text, reasoning strings.Builder
-	type call struct{ id, name, args string }
+	type call struct {
+		id, name string
+		args     strings.Builder
+	}
 	calls := map[int]*call{}
 	var usage json.RawMessage
 	emit := func(v map[string]any) error {
@@ -169,19 +172,19 @@ func (c *Client) streamChat(ctx context.Context, body map[string]any, fn func(St
 			d := choice.Delta
 			if r := d.ReasoningContent + d.Reasoning; r != "" {
 				reasoning.WriteString(r)
-				if err := emit(map[string]any{"type": "response.reasoning_text.delta", "output_index": chatReasoningIndex, "delta": r}); err != nil {
+				if err := fn(StreamEvent{Type: "response.reasoning_text.delta", OutputIndex: chatReasoningIndex, Delta: r}); err != nil {
 					return err
 				}
 			}
 			if t := d.Content; t != "" {
 				text.WriteString(t)
-				if err := emit(map[string]any{"type": "response.output_text.delta", "output_index": chatTextIndex, "delta": t}); err != nil {
+				if err := fn(StreamEvent{Type: "response.output_text.delta", OutputIndex: chatTextIndex, Delta: t}); err != nil {
 					return err
 				}
 			}
 			if t := d.Refusal; t != "" {
 				text.WriteString(t)
-				if err := emit(map[string]any{"type": "response.refusal.delta", "output_index": chatTextIndex, "delta": t}); err != nil {
+				if err := fn(StreamEvent{Type: "response.refusal.delta", OutputIndex: chatTextIndex, Delta: t}); err != nil {
 					return err
 				}
 			}
@@ -198,13 +201,13 @@ func (c *Client) streamChat(ctx context.Context, body map[string]any, fn func(St
 				if tc.Function.Name != "" && cl.name == "" {
 					cl.name = tc.Function.Name
 					item := map[string]any{"type": "function_call", "name": cl.name}
-					if err := emit(map[string]any{"type": "response.output_item.added", "output_index": index, "item": item}); err != nil {
+					if err := fn(StreamEvent{Type: "response.output_item.added", OutputIndex: int64(index), Item: raw(item)}); err != nil {
 						return err
 					}
 				}
 				if a := tc.Function.Arguments; a != "" {
-					cl.args += a
-					if err := emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": index, "delta": a}); err != nil {
+					cl.args.WriteString(a)
+					if err := fn(StreamEvent{Type: "response.function_call_arguments.delta", OutputIndex: int64(index), Delta: a}); err != nil {
 						return err
 					}
 				}
@@ -236,7 +239,7 @@ func (c *Client) streamChat(ctx context.Context, body map[string]any, fn func(St
 		if id == "" {
 			id = fmt.Sprintf("call_%d", i)
 		}
-		output = append(output, map[string]any{"type": "function_call", "call_id": id, "name": cl.name, "arguments": cl.args})
+		output = append(output, map[string]any{"type": "function_call", "call_id": id, "name": cl.name, "arguments": cl.args.String()})
 	}
 	if output == nil && usage == nil {
 		return ErrIncompleteStream
