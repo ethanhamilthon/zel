@@ -1,17 +1,15 @@
 # Zel — Minimalist AI Coding Agent
 
-A focused terminal coding agent with one tool: Lua. The model writes Lua; shell
-commands, files, background tasks and subagents are plain functions in it.
-You extend the agent in Lua too, with `~/.zel/init.lua` and `./.zel/init.lua`;
-providers and preferences live in the UI.
+A focused terminal coding agent with one tool: bash. The model writes bash;
+background tasks, questions to you, images, edits and subagents are `zel`
+commands it runs. You configure Zel with `zel.toml`: providers, settings,
+instructions, hooks and prompt completions. Your own tools are scripts.
 
-> **0.6.0 is a breaking release.** The Lua API is one flat set of functions
-> (`read`, `write`, `edit`, ... instead of `fs.*`; `new_agent{}` instead of
-> `agents.*`; `tasks.spawn(name, fn)`), and `web`, `json`, `sleep` and `state`
-> are gone: use `sh` and files. init.lua returns a table instead of calling
-> `require("zel")`, `defaults` and the subagent hooks are gone, and the CLI keeps
-> only `zel`, `zel -p`, `update`, `version` and `help`. See
-> [docs/lua-api.md](docs/lua-api.md). There is no migration.
+> **0.7.0 is a breaking release.** The Lua tool and init.lua are gone: the
+> agent's tool is `bash`, the config is `~/.zel/zel.toml` (and `./zel.toml`,
+> `--config FILE`), and history is JSONL files instead of SQLite. Sessions,
+> providers and preferences of 0.6 are not migrated. See
+> [docs/bash-api.md](docs/bash-api.md).
 
 ## Install
 
@@ -20,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/ins
 ```
 
 Installs the latest release for macOS or Linux (arm64/amd64) into
-`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.6.3`).
+`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.7.0`).
 `zel update` later replaces the binary with the latest GitHub release.
 
 ## Build from source
@@ -34,97 +32,109 @@ make test        # formatting, vet, race tests
 
 Add `~/.local/bin` to `PATH`. Go 1.27.3+ and Make are required.
 
-Zel keeps its data in `~/.zel` (override with `ZEL_HOME`).
+Zel keeps its data in `~/.zel` (override with `ZEL_HOME`):
+
+```
+~/.zel/zel.toml              the global config
+~/.zel/bin/                  your scripts, on the agent's PATH
+~/.zel/sessions/<project>/<session>/
+    session.jsonl            the history, append-only
+    meta.json                title and model, for the session list
+    tasks.jsonl, tasks/      background tasks and their output
+    attachments/, trace.log  images, notices and hook runs
+~/.zel/run/                  sockets of the running sessions
+```
 
 ## Onboarding and settings
 
-The first launch opens a four-step provider form: Name, Base URL, API key, API
-type (`responses` or `chat`). Tab / Shift+Tab switch steps and Enter saves the
-last step; an empty API key is allowed for local servers. Then choose a model
-and reasoning effort (default `medium`).
+The first launch opens a provider form: API type (`responses` or `chat`),
+Base URL, API key, Name; it writes `~/.zel/zel.toml`. Then choose a model and
+reasoning effort (default `medium`).
 
 Ctrl+K opens the menu (typing `/` into an empty composer does too; Settings →
 Slash opens menu turns that off). Providers adds, edits or deletes providers;
-Settings controls the Lua output budget, auto compaction, reasoning summaries
-and the accent color. Providers, keys, preferences and sessions live in the
-private SQLite database `~/.zel/zel.db`. API keys are stored locally, not
-encrypted; a key may reference an environment variable with `{{$VARIABLE}}`.
+Settings controls auto compaction, reasoning summaries, the accent color and
+the bash timeout. The menus write into the zel.toml layer the value comes from:
+picking a model switches this session and updates the `model` line of the file
+that set it. API keys are stored as you type them; `${{ echo $VAR }}` reads one
+from the environment, `${{ security find-generic-password -s NAME -w }}` from
+the Keychain.
 
-## The lua tool
+## The bash tool
 
-The model has exactly one tool, `lua`; its input is Lua code. Each call has a
-fixed 30-second timeout. The session has one VM, so globals stay between calls
-until the session changes, init.lua reloads or a call times out. Output is
-whatever the code prints plus the returned value, never truncated: the model
-filters in Lua.
+The model has exactly one tool, `bash`; its input is a bash script. Every call
+is a fresh `bash -c` in the session folder with a 30-second limit
+(`settings.bash_timeout`); output is stdout and stderr together, never
+truncated (a 1 MiB safety cap keeps head and tail). Longer work runs as a task.
 
-```lua
-sh(cmd, o?)                       -- shell, also for curl, jq, sleep
-read write edit patch list glob grep exists tmp slice
-tasks.spawn(name, fn, o?)         -- background work; tasks.list/get/wait/tail/stop
-new_agent{prompt, model?, ...}    -- a subagent; send_agent(id, text) writes to it again
-choice(name, options)             -- you pick an option in the UI instead of typing
-view log models session
-docs(topic?)                      -- the agent reads how zel works, by topic
+```sh
+zel task run --name build -- make test     # background task: prints t1
+zel task list | get t1 | tail t1 | wait t1 --timeout 20 | stop t1
+zel choice "Which color" "Blue" "Red"      # you pick in the UI; the answer comes as a notification
+zel edit main.go <<'EOF'                   # exact replacements, all or none
+<<<<<<< old
+func main() {
+=======
+func main() { // start
+>>>>>>> new
+EOF
+zel -p "review the diff"                   # a subagent: its answer on stdout
+zel view shot.png                          # attach an image to the next request
+zel session | zel models | zel docs [topic]
 ```
 
-Everything blocks except `tasks.spawn`. The agent wakes up only for your
-messages and short notifications such as `<notification>t1 finished</notification>`.
-Messages you type during a call wait until the call ends. Full reference:
-[docs/lua-api.md](docs/lua-api.md).
+The agent wakes up only for your messages and short notifications such as
+`<notification>t1 finished</notification>`. Messages you type during a call
+wait until the call ends. Full reference: [docs/bash-api.md](docs/bash-api.md)
+(the agent reads it with `zel docs`).
 
-There is no sandbox, permission prompt or trust dialog: Lua runs with your user
-permissions and network access, so only use `init.lua` files you trust.
+There is no sandbox, permission prompt or trust dialog: bash runs with your
+user permissions and network access, so only use config files you trust.
 
-## Configuration: init.lua
+## Configuration: zel.toml
 
-Zel reads `~/.zel/init.lua`, then the nearest `.zel/init.lua` from the working
-directory upward. A file returns a table, or a list of them:
+Zel reads `~/.zel/zel.toml`, then `./zel.toml` of the working folder, then each
+`--config FILE`; later layers win by key, instructions and hooks add up.
 
-```lua
-return {
-  require("web"),   -- ~/.zel/lua/web.lua returns a table too
-  {
-    instructions = {"Read code first.", function() return read("AGENTS.md") end},
-    tools = {
-      check = {
-        desc = "gofmt + vet + tests. args: pkg? (default ./...). returns failures",
-        fn = function(a) return sh("go vet " .. (a.pkg or "./...")).out end,
-      },
-    },
-    hooks = {
-      turn_end = function(answer, running)
-        if #running == 0 and sh("git status --porcelain").out ~= "" then
-          return "uncommitted changes, commit them"
-        end
-      end,
-    },
-    completions = {plan = function() return read("PLAN.md") end},
-  },
-}
+```toml
+provider = "openai"
+model    = "gpt-5"
+instructions = [
+  "Read code first.",
+  "${{ cat AGENTS.md }}",
+  { text = "You are a subagent: answer short.", main = false, headless = true },
+]
+
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key  = "${{ echo $OPENAI_API_KEY }}"
+
+[hooks]
+turn_end    = ['test -z "$(git status --porcelain)" || echo "uncommitted changes, commit them"']
+bash_before = [{ match = 'git push (-f|--force)', run = "echo 'no force push' >&2; exit 2" }]
+idle        = [{ run = "say done", async = true }]
+
+[completions]
+plan = "${{ cat PLAN.md }}"
 ```
 
-- **instructions** go into the system prompt: text, functions that return
-  text, or a list of them; `{..., only = "main"}` or `{..., only = "sub"}`
-  limits entries to the main agent or to subagents.
-- **tools** are functions for the agent. The agent calls `check{pkg = "./x"}`;
-  `desc` is shown in the system prompt as is.
-- **hooks**: `session_created()` (once per new session), `message(text, notice)`,
-  `turn_end(answer, running)` and `session_closed(reason)`. Returned text from
-  `turn_end` reaches the agent as a notification; `message` can rewrite what you
-  typed.
-- **completions** register `#plan`: type `#` to list them, and the returned
-  text replaces the token when you send the message.
+- **`${{ script }}`** in any string is replaced by the output of `bash -c
+  script` (10 s); completions expand it when you send the message.
+- **instructions** go into the system prompt; plain strings are for the main
+  session, `{text, main, headless}` choose where an entry applies.
+- **hooks** run a command on an event with its data as JSON on stdin: 14
+  events from `session_created` to `bash_before`, `turn_end` and `idle`. Exit 2
+  blocks a message, notification or bash call; `match`, `timeout` and `async`
+  tune an entry. See `zel docs hooks`.
+- **completions** register `#plan`: type `#` to list them, and the text
+  replaces the token when you send the message (main session only).
+- **tools** are scripts: put them in `~/.zel/bin` or `./.zel/bin` (both lead
+  the agent's PATH) and describe them in `instructions`.
 
-A session reads the files once, at start or resume. Menu → Reload reads them
-again; a broken file keeps the previous snapshot. Examples are in
+Changes apply by themselves: Zel watches the layer files and reloads after the
+current turn; a broken file keeps the previous config and shows the error.
+`zel config` prints the merged result. Examples are in
 [docs/examples](docs/examples/).
-
-### Output limits
-
-Lua call output is not truncated; only a 1 MiB safety cap (head and tail kept,
-with a marker) protects memory and the context. `sh().out` keeps up to 8 MiB,
-`read` refuses files over 16 MiB.
 
 ### Auto compaction
 
@@ -139,16 +149,16 @@ still shows everything, and the chat shows a "context compacted" divider.
 ## Chat and Tracing
 
 Chat shows user messages, agent messages and the working indicator. The
-indicator shows `thinking...` until the agent does something, then its last
-action (for example `reading ~/.zel/init.lua`) until the next one; labels never
-show a command's arguments or a secret. Each running background task has a row:
-a blinking dot, the task's name and how long it runs (a background subagent is a
-task too). A row goes away when its task ends.
+indicator shows `thinking...` until the agent does something, then the first
+line of its bash call (`$ go test ./...`) until the next one; configured API
+keys are hidden. Each running background task and each running `zel -p` child
+has a row with how long it runs.
 
-Tools, thoughts, errors and notices belong in Tracing. Tracing search accepts a
-leading type, optionally followed by text: `:user`, `:assistant fix tests`,
-`:lua go test`, `:error`. A turn that fails or is stopped with Ctrl+D ends in
-the chat with a red line of time and steps, then the reason.
+Bash calls, thoughts, errors, notices and hook runs belong in Tracing. Tracing
+search accepts a leading type, optionally followed by text: `:user`,
+`:assistant fix tests`, `:bash go test`, `:error`. A turn that fails or is
+stopped with Ctrl+D ends in the chat with a red line of time and steps, then
+the reason.
 
 Typing `@` in the composer completes file paths; `#` lists prompt completions.
 
@@ -160,7 +170,6 @@ Typing `@` in the composer completes file paths; `#` lists prompt completions.
 - Ctrl+N: New session
 - Ctrl+I: Info
 - Ctrl+T: Tracing (Enter opens an entry; Left/Right switch entries)
-- Ctrl+Y: Copy the last answer as plain text
 - Ctrl+D: Stop the active turn or a prompt completion still expanding
 - Ctrl+Q: Save and quit
 - Esc: back
@@ -175,12 +184,15 @@ message stays editable in the composer; editing withdraws it.
 
 ```sh
 zel -p "Review this project" --provider NAME --model MODEL --effort high
+echo "long prompt" | zel -p --json
+zel -p --resume SESSION "and now fix it"
 ```
 
-The first stdout line is the session ID, written before any model request; the
-final answer follows when the task finishes. Errors go to stderr. Success exits
-0, errors nonzero, cancellation 130. The flags apply to this run only. Resume
-the session later from the TUI.
+`zel: session ID` goes to stderr before any model request; the final answer
+goes to stdout (`--json` prints `{ok, answer, session, error}`). Success exits
+0, errors nonzero, cancellation 130. Run from the agent's bash, `zel -p` is a
+subagent: it uses the parent's model and config, shows as a row in the
+parent's chat and nests at most 3 deep.
 
 ## Contributing
 

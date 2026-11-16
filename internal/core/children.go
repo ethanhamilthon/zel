@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"zel/internal/ipc"
@@ -57,7 +58,13 @@ func (a *Runtime) ActiveSubagents() []SubagentRun { return a.session().ActiveSub
 func (s *session) ActiveSubagents() []SubagentRun {
 	s.childMu.Lock()
 	list := make([]SubagentRun, 0, len(s.children))
-	for _, run := range s.children {
+	for id, run := range s.children {
+		// A child killed with its bash call or task never says child.end.
+		if pid := s.childPIDs[id]; pid > 0 && syscall.Kill(pid, 0) == syscall.ESRCH {
+			delete(s.children, id)
+			delete(s.childPIDs, id)
+			continue
+		}
 		list = append(list, run)
 	}
 	s.childMu.Unlock()
@@ -123,12 +130,12 @@ func (s *session) leaveParent() {
 	}
 }
 
-func (s *session) childStarted(run SubagentRun) {
+func (s *session) childStarted(run SubagentRun, pid int) {
 	s.childMu.Lock()
 	if s.children == nil {
-		s.children = map[string]SubagentRun{}
+		s.children, s.childPIDs = map[string]SubagentRun{}, map[string]int{}
 	}
-	s.children[run.ID] = run
+	s.children[run.ID], s.childPIDs[run.ID] = run, pid
 	s.childMu.Unlock()
 	s.idleSent.Store(false)
 	s.changes.notify()
@@ -137,6 +144,7 @@ func (s *session) childStarted(run SubagentRun) {
 func (s *session) childEnded(id string) {
 	s.childMu.Lock()
 	delete(s.children, id)
+	delete(s.childPIDs, id)
 	s.childMu.Unlock()
 	s.changes.notify()
 	s.checkIdle()

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,13 +16,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"zel/internal/config"
 	"zel/internal/shell"
 )
 
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `print("hi")`)
+			return bashReply("c1", `echo hi`)
 		}
 		return textReply("done")
 	}}
@@ -35,7 +35,7 @@ func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	for _, r := range a.Records() {
 		kinds = append(kinds, r.Kind+":"+strings.TrimSpace(r.Text))
 	}
-	if got := strings.Join(kinds, "|"); got != `user:go|code:print("hi")|output:hi|assistant:done` {
+	if got := strings.Join(kinds, "|"); got != `user:go|code:echo hi|output:hi|assistant:done` {
 		t.Fatalf("records = %s", got)
 	}
 	if final := a.FinalText(); final != "done" {
@@ -60,7 +60,7 @@ func TestFailedTurnClosesWithItsError(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		switch n {
 		case 1:
-			return luaReply("c1", `print("hi")`)
+			return bashReply("c1", `echo hi`)
 		case 2:
 			return sse(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
 		}
@@ -120,10 +120,10 @@ func TestStoppedTurnClosesWithStopNote(t *testing.T) {
 	}
 }
 
-func TestLuaErrorDoesNotCloseTurn(t *testing.T) {
+func TestFailedCommandDoesNotCloseTurn(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `error("boom")`)
+			return bashReply("c1", "echo boom >&2; exit 3")
 		}
 		return textReply("ok")
 	}}
@@ -131,13 +131,13 @@ func TestLuaErrorDoesNotCloseTurn(t *testing.T) {
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
 	}
-	// The failed call is tool output the model sees; the turn goes on to its answer.
+	// The failed command is tool output the model sees; the turn goes on to its answer.
 	var kinds []string
 	for _, r := range a.Records() {
-		kinds = append(kinds, r.Kind)
+		kinds = append(kinds, r.Kind+":"+r.Text)
 	}
-	if got := strings.Join(kinds, "|"); got != "user|code|error|assistant" {
-		t.Fatalf("records = %s", got)
+	if got := strings.Join(kinds, "|"); got != "user:go|code:echo boom >&2; exit 3|output:boom\n[exit 3]|assistant:ok" {
+		t.Fatalf("records = %q", got)
 	}
 }
 
@@ -145,8 +145,8 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
 		return sse(
 			`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`,
-			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"lua","call_id":"c1","arguments":""}}`,
-			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"code\":\"print(1)\"}"}`,
+			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"bash","call_id":"c1","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"command\":\"echo 1\"}"}`,
 			`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
@@ -154,7 +154,7 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	// Two streamed steps, one reasoning block and one lua call preview, count once each.
+	// Two streamed steps, one reasoning block and one bash call preview, count once each.
 	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 2 {
 		t.Fatalf("live closing = %+v", live)
 	}
@@ -236,9 +236,7 @@ func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
 	home := t.TempDir()
-	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_MODE", "")
-	t.Setenv("ZEL_SESSION_ID", "")
+	isolate(t, home)
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL, APIKey: "sk-secret-123"}
@@ -265,11 +263,11 @@ func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgent(t, fp, Options{})
 	a.session().History = append(a.session().History, raw(map[string]any{"role": "user", "content": "start"}),
-		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": `{"command":"touch marker"}`}))
+		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": `{"command":"touch marker"}`}))
 	if _, err := turn(t, a, "continue"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(a.Shell.Dir, "marker")); err == nil {
+	if _, err := os.Stat(filepath.Join(a.session().dir, "marker")); err == nil {
 		t.Fatal("interrupted command was rerun")
 	}
 	joined := ""
@@ -341,7 +339,7 @@ func TestRetryDoesNotDuplicateStreamedOutput(t *testing.T) {
 func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `print("hi")`)
+			return bashReply("c1", `echo hi`)
 		}
 		return textReply("done")
 	}}
@@ -374,13 +372,13 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
 			args := func(code string) string {
-				data, _ := json.Marshal(map[string]any{"code": code})
+				data, _ := json.Marshal(map[string]any{"command": code})
 				return string(data)
 			}
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
-				`{"type":"function_call","call_id":"c1","name":"lua","arguments":%q},`+
-				`{"type":"function_call","call_id":"c2","name":"lua","arguments":%q}]}}`,
-				args("write('started', '')\nsh('sleep 1')\nprint('late')"), args("write('second', '')")))
+				`{"type":"function_call","call_id":"c1","name":"bash","arguments":%q},`+
+				`{"type":"function_call","call_id":"c2","name":"bash","arguments":%q}]}}`,
+				args("touch started\nsleep 1\necho late"), args("touch second")))
 		}
 		return textReply("ok")
 	}}
@@ -389,7 +387,7 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 	start := time.Now()
 	go func() { done <- a.Run(context.Background(), "go", func(TurnEvent) {}) }()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(a.Shell.Dir, "started")); err == nil {
+		if _, err := os.Stat(filepath.Join(a.session().dir, "started")); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -410,18 +408,19 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 	if strings.Index(requests[1], "late") > strings.Index(requests[1], "STOP-AND-LISTEN") {
 		t.Fatal("the queued message arrived before the call output")
 	}
-	if _, err := os.Stat(filepath.Join(a.Shell.Dir, "second")); err != nil {
+	if _, err := os.Stat(filepath.Join(a.session().dir, "second")); err != nil {
 		t.Fatal("the second call of the response did not run")
 	}
 }
 
 func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 	cases := map[string]string{
-		`{"code":"echo hi`:         "echo hi",
-		`{"code":"printf \"a\`:     `printf "a`,
-		`{"code":"x", "timeout":1`: "x",
-		`{"code":"`:                "",
-		`{"other":1`:               "",
+		`{"command":"echo hi`:         "echo hi",
+		`{"command":"printf \"a\`:     `printf "a`,
+		`{"command":"x", "timeout":1`: "x",
+		`{"command" : "y`:             "y",
+		`{"command":"`:                "",
+		`{"code":"print(1)"`:          "",
 	}
 	for arguments, want := range cases {
 		if got := partialCode(arguments); got != want {
@@ -432,19 +431,24 @@ func TestPartialCodeShowsCompletePrefix(t *testing.T) {
 
 func TestTaskStopAndSessionClose(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := startTask(a, "while true do end"); err != nil {
+	if err := a.Save(); err != nil { // a saved session keeps its task records
+		t.Fatal(err)
+	}
+	if _, err := startTask(a, "sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	if a.RunningTasks() != 1 {
 		t.Fatal("task not running")
 	}
-	if err := (luaEnv{a.session()}).Tasks().Stop("t1"); err != nil {
+	j, err := a.session().tasks.find("t1")
+	if err != nil {
 		t.Fatal(err)
 	}
+	j.Stop()
 	if got := awaitInput(t, a); got[0].Text != "<notification>t1 stopped</notification>" {
 		t.Fatalf("result %+v", got)
 	}
-	if _, err := startTask(a, "sh('sleep 30')"); err != nil {
+	if _, err := startTask(a, "sleep 30"); err != nil {
 		t.Fatal(err)
 	}
 	old, start := a.SessionID(), time.Now()
@@ -454,7 +458,7 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	if time.Since(start) > 5*time.Second || a.RunningTasks() != 0 || len(a.Queue().Take()) != 0 {
 		t.Fatal("session change did not stop the task quietly")
 	}
-	if list, err := a.db.Tasks(old); err != nil || len(list) != 2 || list[1].Status != "stopped" {
+	if list, err := a.db.Tasks(a.project, old); err != nil || len(list) != 2 || list[0].Status != "stopped" || list[1].Status != "stopped" {
 		t.Fatalf("tasks %+v %v", list, err)
 	}
 }
@@ -524,9 +528,10 @@ func textReply(text string) string {
 	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}]}}`, text))
 }
 
-func luaReply(callID, code string) string {
-	args, _ := json.Marshal(map[string]any{"code": code})
-	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"lua","arguments":%q}]}}`, callID, args))
+// bashReply is a response with one bash call.
+func bashReply(callID, command string) string {
+	args, _ := json.Marshal(map[string]any{"command": command})
+	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"bash","arguments":%q}]}}`, callID, args))
 }
 
 func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
@@ -536,9 +541,7 @@ func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
 func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(home, dir string)) *Runtime {
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
-	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_MODE", "")
-	t.Setenv("ZEL_SESSION_ID", "")
+	isolate(t, home)
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
 	s := DefaultSettings()
@@ -554,8 +557,20 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Tests reload by hand; a hot reload in the background would race with them.
+	a.OnConfigChanged(func() {})
 	t.Cleanup(a.Close)
 	return a
+}
+
+// isolate points ZEL_HOME at home and clears what a zel session around the
+// test would export, so a test never becomes the child of a real session.
+func isolate(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("ZEL_HOME", home)
+	for _, name := range []string{"ZEL_MODE", "ZEL_SESSION_ID", "ZEL_SOCKET", "ZEL_TOKEN", "ZEL_DEPTH", "ZEL_CONFIG", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT"} {
+		t.Setenv(name, "")
+	}
 }
 
 func turn(t *testing.T, a *Runtime, text string) ([]TurnEvent, error) {
@@ -582,20 +597,16 @@ func tinyPNG() []byte {
 
 func storedItems(t *testing.T, a *Runtime) []string {
 	t.Helper()
-	rows, err := a.db.Query(`SELECT data FROM items WHERE session = ? ORDER BY seq`, a.SessionID())
+	s := a.session()
+	_, items, err := s.db.Load(s.project, s.id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var item string
-		if err := rows.Scan(&item); err != nil {
-			t.Fatal(err)
-		}
-		items = append(items, item)
+	var out []string
+	for _, item := range items {
+		out = append(out, string(item.Data))
 	}
-	return items
+	return out
 }
 
 func pngURL() string {
@@ -674,7 +685,7 @@ func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
 	for i := 0; i < maxQueued; i++ {
 		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
 	}
-	if _, err := startTask(a, "return 1"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
+	if _, err := startTask(a, "true"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
 		t.Fatalf("admission: %v", err)
 	}
 	for i := 0; i < maxQueued; i++ {
@@ -689,18 +700,24 @@ func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
 
 func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := a.db.Exec(`CREATE TRIGGER fail_task_finish BEFORE UPDATE ON tasks BEGIN SELECT RAISE(FAIL, 'completion blocked'); END;`); err != nil {
+	if _, err := startTask(a, "sleep 0.2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := startTask(a, "return 1"); err != nil {
+	// A directory in place of tasks.jsonl makes recording the end fail.
+	s := a.session()
+	file := filepath.Join(s.sessionDir(), "tasks.jsonl")
+	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	a.session().tasks.wg.Wait()
+	if err := os.Mkdir(file, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.tasks.wg.Wait()
 	inputs := a.Queue().Take()
 	if len(inputs) != 1 || inputs[0].Text != "<notification>t1 finished</notification>" {
 		t.Fatalf("completion: %+v", inputs)
 	}
-	if data, _ := os.ReadFile(EventsLog(a.Home(), a.SessionID())); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "completion blocked") {
+	if data, _ := os.ReadFile(s.eventsLog()); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "tasks.jsonl") {
 		t.Fatalf("persistence failure not reported: %s", data)
 	}
 }
@@ -722,7 +739,7 @@ func TestSavedImageOriginalsRetainedAndMissingReported(t *testing.T) {
 	if err := a.Save(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := New(a.Shell.Dir, Options{})
+	b, err := New(a.session().dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +811,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	h := newHarness(t, &fakeModel{gate: gate})
 	h.send("first")
 	h.inFlight(1)
-	if _, err := startTask(h.a, "print('notice A')"); err != nil {
+	if _, err := startTask(h.a, "echo notice A"); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); h.a.RunningTasks() > 0; time.Sleep(time.Millisecond) {
@@ -868,40 +885,25 @@ func TestBusyRejectionsAndQuitDuringTurn(t *testing.T) {
 	}
 }
 
-func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
+func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h := newHarness(t, &fakeModel{})
-	local := filepath.Join(h.dir, ".zel", "init.lua")
-	writeRaw := func(content string) {
-		_ = os.MkdirAll(filepath.Dir(local), 0700)
-		if err := os.WriteFile(local, []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write := func(text string) {
-		writeRaw("return {instructions = '" + text + "'}")
-	}
+	global := filepath.Join(h.a.Home(), "zel.toml")
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
 			return !h.ctl.Status().Busy && len(doneEvents(events)) == n
 		})
 	}
-	write("v1")
 	h.send("a")
 	turns(1)
-	if r := h.model.requests()[0]; strings.Contains(r, "v1") {
-		t.Fatalf("an init.lua changed after startup was used without /reload: %s", r)
-	}
-	h.ctl.Reload()
 	h.model.mu.Lock()
 	h.model.gate = make(chan struct{})
 	h.model.mu.Unlock()
 	h.send("b")
-	h.await("request b", func([]Event) bool { return len(h.model.requests()) == 2 })
-	write("v2")
-	home, _ := ZelHome(h.dir)
-	settings := h.ctl.Settings()
-	settings.CompactionThreshold = 4242
-	if err := WriteConfig(home, settings); err != nil {
+	h.inFlight(2)
+	if err := config.SetKey(global, "instructions", "INSTRUCTIONS-V2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetKey(global, "settings.compaction", 4242); err != nil {
 		t.Fatal(err)
 	}
 	h.ctl.Reload()
@@ -909,25 +911,24 @@ func TestReloadRebuildsPromptAfterTurn(t *testing.T) {
 		t.Fatal("reload interrupted the running turn")
 	}
 	if got := h.ctl.Settings().CompactionThreshold; got == 4242 {
-		t.Fatalf("config change applied mid-turn: got %d", got)
+		t.Fatal("config change applied mid-turn")
 	}
-	info, err := h.ctl.Info()
-	if err != nil {
-		t.Fatalf("info failed during running turn: %v", err)
-	}
-	if info.Session == "" {
-		t.Fatal("info session empty")
+	if info, err := h.ctl.Info(); err != nil || info.Session == "" {
+		t.Fatalf("info during a turn: %+v %v", info, err)
 	}
 	close(h.model.gate)
 	turns(2)
+	if got := h.ctl.Settings().CompactionThreshold; got != 4242 {
+		t.Fatalf("deferred reload not applied: %d", got)
+	}
 	h.send("c")
 	turns(3)
 	reqs := h.model.requests()
-	if !strings.Contains(reqs[1], "v1") || !strings.Contains(reqs[2], "v2") {
-		t.Fatalf("prompt not rebuilt after reload:\nb: %s\nc: %s", reqs[1], reqs[2])
+	if strings.Contains(reqs[1], "INSTRUCTIONS-V2") || !strings.Contains(reqs[2], "INSTRUCTIONS-V2") {
+		t.Fatalf("prompt not rebuilt after the turn:\nb: %s\nc: %s", reqs[1], reqs[2])
 	}
-	if events := h.log(); !slices.ContainsFunc(events, func(e Event) bool { return strings.Contains(e.Text, "after the current turn") }) {
-		t.Fatalf("no deferred reload notice: %s", describe(events))
+	if events := h.log(); !slices.ContainsFunc(events, func(e Event) bool { return e.Text == "zel.toml reloaded" }) {
+		t.Fatalf("no reload notice: %s", describe(events))
 	}
 }
 
@@ -1026,9 +1027,7 @@ func newHarness(t *testing.T, model *fakeModel) *harness {
 func newHarnessWith(t *testing.T, model *fakeModel, pre func(*Runtime)) *harness {
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
-	t.Setenv("ZEL_HOME", home)
-	t.Setenv("ZEL_MODE", "")
-	t.Setenv("ZEL_SESSION_ID", "")
+	isolate(t, home)
 	server := httptest.NewServer(model)
 	t.Cleanup(server.Close)
 	s := DefaultSettings()
@@ -1171,7 +1170,7 @@ func TestCompactionZones(t *testing.T) {
 		return callOutput(id, "first line of "+id+"\n"+strings.Repeat("x", 4000))
 	}
 	call := func(id string) json.RawMessage {
-		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "lua", "arguments": `{"code":"print(1)"}`})
+		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "bash", "arguments": `{"command":"echo 1"}`})
 	}
 	reply := func(text string) json.RawMessage {
 		return raw(map[string]any{"type": "message", "role": "assistant", "id": "msg_" + text, "content": []any{map[string]any{"type": "output_text", "text": text}}})
@@ -1219,17 +1218,12 @@ func TestCompactionZones(t *testing.T) {
 func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 2 {
-			return luaReply("c1", `for i = 1, 300 do print(i) end`)
+			return bashReply("c1", "seq 1 300")
 		}
 		return textReply("ok")
 	}}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		s, err := LoadConfig(home)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.CompactionThreshold = 100
-		if err := WriteConfig(home, s); err != nil {
+		if err := config.SetKey(filepath.Join(home, "zel.toml"), "settings.compaction", 100); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1247,34 +1241,39 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	}
 	s := a.session()
 	want := s.compacted
-	s.compacted = compaction{}
-	if err := s.readSession(); err != nil || s.compacted != want || want.Drop == 0 {
-		t.Fatalf("resumed bounds %+v, want %+v (%v)", s.compacted, want, err)
+	_, items, err := s.db.Load(s.project, s.id)
+	resumed := &session{}
+	resumed.readItems(items)
+	if err != nil || resumed.compacted != want || want.Drop == 0 {
+		t.Fatalf("resumed bounds %+v, want %+v (%v)", resumed.compacted, want, err)
 	}
 }
 
 // storedRecords reads the session's records back from the database, with a
 // connection of its own.
+// storedRecords reads the session's records back from its session file, with a
+// store of its own.
 func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	t.Helper()
-	db, err := openDB(a.DBPath())
+	db, err := openDB(a.Home())
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
-	s := &session{db: db, id: a.SessionID(), acts: &activities{}}
-	if err := s.readSession(); err != nil {
+	_, items, err := db.Load(a.Project(), a.SessionID())
+	if err != nil {
 		return nil, err
 	}
+	s := &session{acts: &activities{}}
+	s.readItems(items)
 	return s.Records(), nil
 }
 
 // startTask runs code as a background task of the current session, as tasks.spawn does.
-func startTask(a *Runtime, code string) (string, error) {
-	r := a.runLua(context.Background(), "return tasks.spawn('test', function() "+code+" end)")
-	if r.IsError {
-		return "", errors.New(r.Output)
+// startTask runs command as a background task of the current session, as zel task run does.
+func startTask(a *Runtime, command string) (string, error) {
+	j, err := a.session().tasks.spawn(command, startOpts{name: "test"})
+	if err != nil {
+		return "", err
 	}
-	lines := strings.Split(strings.TrimSpace(r.Output), "\n")
-	return lines[len(lines)-1], nil
+	return j.id, nil
 }

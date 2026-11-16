@@ -1,7 +1,7 @@
-# init.lua examples
+# zel.toml examples
 
-- `global-init.lua` - global `~/.zel/init.lua`: instructions, a dynamic prompt piece and a session hook
-- `web-plugin.lua` - a module with the `web.search` (ddgs) and `web.fetch` (trafilatura, fallback crwl) tools
-- `project-init.lua` - project `.zel/init.lua`: instructions from AGENTS.md, the `zel.check` tool and a `turn_end` hook
+- `global-zel.toml` - `~/.zel/zel.toml`: providers, settings, instructions, hooks and a completion
+- `project-zel.toml` - `./zel.toml` of a Go repository: AGENTS.md as instructions, a `turn_end` hook and a guard for `git push --force`
+- `bin/web-search` - a script tool for `~/.zel/bin`: web search via the Tavily API
 
-They are loaded by the tests in `internal/core/lua_test.go`, so they stay valid.
+The tests in `internal/config` load the toml files, so they stay valid.

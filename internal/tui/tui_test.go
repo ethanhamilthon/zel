@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -18,7 +19,6 @@ import (
 	"testing"
 	"time"
 	"unsafe"
-	"zel/internal/core"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,6 +26,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
+
+	"zel/internal/core"
+	"zel/internal/ipc"
 )
 
 func TestShiftEnterTerminalSequences(t *testing.T) {
@@ -1040,7 +1043,7 @@ func TestCenteredMenuAndShortcutEscape(t *testing.T) {
 	m := bareModel(t, "/project")
 	m.width, m.height = 100, 50
 	m.openMenu()
-	want := (m.height - 4 - maxListItems - 1) / 2
+	want := (m.height - 4 - len(mainRows)) / 2
 	if m.menuTop() != want {
 		t.Fatalf("top %d, want %d", m.menuTop(), want)
 	}
@@ -1284,16 +1287,38 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	if m.menu.page != menuForm || m.menu.form.err == "" {
 		t.Fatal("invalid compaction threshold accepted")
 	}
-	m.menu = &menuState{page: menuProvider, provider: "p", selected: 1}
+	m.menu = &menuState{page: menuSettings, selected: 4}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuForm || m.menu.form.input.Value() != "30" {
+		t.Fatalf("Bash timeout form: page %v", m.menu.page)
+	}
+	m.menu.form.input.SetValue("90")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuSettings || m.ctl.Settings().BashTimeout != 90 || m.menuRows()[4] != (menuRow{"Bash timeout", "90 s"}) {
+		t.Fatalf("bash timeout not applied: %d %v", m.ctl.Settings().BashTimeout, m.menuRows())
+	}
+	if saved := core.LoadConfig(f.a.Home(), f.project); saved.BashTimeout != 90 || saved.CompactionThreshold != 4096 {
+		t.Fatalf("settings not saved in zel.toml: %+v", saved)
+	}
+	for _, bad := range []string{"0", "soon"} {
+		m.openSettingForm(4)
+		m.menu.form.input.SetValue(bad)
+		m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if m.menu.page != menuForm || m.menu.form.err == "" || m.ctl.Settings().BashTimeout != 90 {
+			t.Fatalf("bash timeout %q accepted", bad)
+		}
+	}
+	setConfig(t, m.ctl, func(s *core.Settings) { s.Providers["spare"] = core.Provider{BaseURL: "http://127.0.0.1:1/v1"} })
+	m.menu = &menuState{page: menuProvider, provider: "spare", selected: 1}
 	next, _ := m.menuActivate()
 	m = next.(model)
-	if m.menu.page != menuConfirm || len(m.ctl.Settings().Providers) != 1 {
+	if m.menu.page != menuConfirm || len(m.ctl.Settings().Providers) != 2 {
 		t.Fatal("provider deleted before confirmation")
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(m.ctl.Settings().Providers) != 0 || m.ctl.Settings().Provider != "" {
-		t.Fatal("selected provider not deleted safely")
+	if s := m.ctl.Settings(); len(s.Providers) != 1 || s.Provider != "p" || m.menu == nil || m.menu.page != menuProviders {
+		t.Fatalf("provider not deleted: %+v", s)
 	}
 }
 
@@ -1410,17 +1435,17 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 	want := []menuRow{
 		{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
 		{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
-		{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
+		{"Info", "Tokens, Session, Ctrl+I"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Output, compaction, accent"}, {"Copy", "Agent answer to input, Ctrl+Y"},
+		{"Settings", "Bash timeout, compaction, accent"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)
 	}
 	m.width, m.height = 80, 30
 	lines := m.pageLines("", m.menuWidth())
-	if len(lines) != 11 || !strings.HasPrefix(ansi.Strip(lines[10]), "  + 2 more items") {
-		t.Fatalf("main menu overflow hint = %q", lines)
+	if len(lines) != len(want) || strings.Contains(ansi.Strip(strings.Join(lines, "\n")), "more items") {
+		t.Fatalf("main menu fits without an overflow hint: %q", lines)
 	}
 }
 
@@ -1858,7 +1883,7 @@ func TestTracingEntryMarkdownHeaderColorsAndScrolling(t *testing.T) {
 			t.Fatalf("duplicate type-only line remains: %q", lines[i])
 		}
 	}
-	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "lua": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
+	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "bash": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
 		if got := string(traceColor(kind)); got != want {
 			t.Errorf("%s color = %s, want %s", kind, got, want)
 		}
@@ -1981,16 +2006,15 @@ func TestEventQueueBoundsMemoryAndPreservesFinalOrder(t *testing.T) {
 }
 
 // taskModel is a chat whose session starts with one background task running:
-// its init.lua spawns it from session_created.
+// a session_created hook in zel.toml leaves the session socket, and the test
+// starts the task through it the way zel task run does.
 func taskModel(t *testing.T) model {
 	t.Helper()
 	t.Setenv("ZEL_HOME", t.TempDir())
 	project := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(project, ".zel"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	initLua := `return {hooks = {session_created = function() tasks.spawn("hold", function() sh("sleep 30") end) end}}`
-	if err := os.WriteFile(filepath.Join(project, ".zel", "init.lua"), []byte(initLua), 0o600); err != nil {
+	envFile := filepath.Join(t.TempDir(), "socket")
+	toml := "[hooks]\nsession_created = 'printf \"%s\\n%s\" \"$ZEL_SOCKET\" \"$ZEL_TOKEN\" > " + envFile + "'\n"
+	if err := os.WriteFile(filepath.Join(project, "zel.toml"), []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(project, core.Options{})
@@ -2000,6 +2024,19 @@ func taskModel(t *testing.T) model {
 	t.Cleanup(a.Close)
 	m := newModel(a, project)
 	t.Cleanup(m.ctl.Close)
+	var socket, token string
+	for deadline := time.Now().Add(5 * time.Second); socket == ""; time.Sleep(5 * time.Millisecond) {
+		if data, _ := os.ReadFile(envFile); strings.Count(string(data), "\n") == 1 {
+			socket, token, _ = strings.Cut(string(data), "\n")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session_created hook never ran")
+		}
+	}
+	r, err := ipc.Call(context.Background(), socket, ipc.Request{Token: token, Op: "task.run", Args: []byte(`{"name":"hold","cmd":"sleep 30"}`)})
+	if err != nil || !r.OK {
+		t.Fatalf("task.run = %+v, %v", r, err)
+	}
 	for deadline := time.Now().Add(5 * time.Second); m.ctl.Status().Tasks != 1; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the session_created task never started")
@@ -2177,45 +2214,6 @@ func TestScrollUpMovesThroughComposerBeforeChat(t *testing.T) {
 				t.Fatal("cursor never reached the top of the composer")
 			})
 		}
-	}
-}
-
-func TestCopyLastAnswer(t *testing.T) {
-	const answer = "First paragraph\n\nSecond paragraph with **markdown** and a long line."
-	for _, route := range []string{"shortcut", "menu", "form"} {
-		m := bareModel(t, t.TempDir())
-		m.entries = []entry{
-			{Kind: "assistant", Text: "older answer"},
-			{Kind: "assistant", Text: answer},
-			{Kind: "tool", Text: "not an answer"},
-			{Kind: "user", Text: "next question"},
-			{Kind: "assistant", Text: "  "},
-		}
-		m.input.SetValue("replace this draft")
-		var updated tea.Model
-		var cmd tea.Cmd
-		if route == "menu" {
-			m.openMenu()
-			m.menu.query = "Copy"
-			updated, cmd = m.menuActivate()
-		} else {
-			if route == "form" {
-				m.openMenu()
-				m.openProviderForm("", false)
-			}
-			updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
-		}
-		if cmd != nil {
-			t.Fatalf("%s unexpectedly requested clipboard access", route)
-		}
-		if got := updated.(model).input.Value(); got != answer {
-			t.Fatalf("%s inserted %q, want latest assistant response", route, got)
-		}
-	}
-	m := bareModel(t, t.TempDir())
-	m.input.SetValue("keep draft")
-	if updated, cmd := m.copyAnswer(); cmd != nil || updated.(model).input.Value() != "keep draft" {
-		t.Fatal("empty conversation changed the composer")
 	}
 }
 
@@ -2664,24 +2662,24 @@ func TestTimelineSegmentsMatchReference(t *testing.T) {
 	}
 }
 
-func TestHighlightLuaWrapsAndKeepsText(t *testing.T) {
-	lines, ok := highlightLua("local x = \"abcdefgh\" -- note\n\tprint(x)\n", 10)
+func TestHighlightBashWrapsAndKeepsText(t *testing.T) {
+	lines, ok := highlightBash("echo \"abcdefgh\" # note\n\tcat x\n", 10)
 	if !ok {
-		t.Fatal("lua lexer missing")
+		t.Fatal("bash lexer missing")
 	}
 	var plain []string
 	for _, l := range lines {
 		plain = append(plain, ansi.Strip(l))
 	}
-	want := []string{"local x = ", "\"abcdefgh\"", " -- note", "    print(", "x)"}
+	want := []string{"echo \"abcd", "efgh\" # no", "te", "    cat x"}
 	if strings.Join(plain, "|") != strings.Join(want, "|") {
 		t.Fatalf("%q", plain)
 	}
 }
 
 func TestWorkingIndicatorShowsActivity(t *testing.T) {
-	status := core.Status{Busy: true, Started: time.Now().Add(-69*time.Second - 300*time.Millisecond), Activity: "reading ~/.zel/init.lua"}
-	if got := workingText(status, 4); got != "1m9s · 4 steps · reading ~/.zel/init.lua" {
+	status := core.Status{Busy: true, Started: time.Now().Add(-69*time.Second - 300*time.Millisecond), Activity: "go test ./..."}
+	if got := workingText(status, 4); got != "1m9s · 4 steps · go test ./..." {
 		t.Fatalf("working text = %q", got)
 	}
 	if got := ansi.Truncate(workingText(status, 4), 20, "…"); !strings.HasPrefix(got, "1m9s · 4 steps") {
@@ -2691,7 +2689,7 @@ func TestWorkingIndicatorShowsActivity(t *testing.T) {
 	if got := workingText(status, 4); got != "1m9s · 4 steps · thinking..." {
 		t.Fatalf("indicator without an action = %q", got)
 	}
-	status.Activity, status.Cancelling = "reading ~/.zel/init.lua", true
+	status.Activity, status.Cancelling = "go test ./...", true
 	if got := workingText(status, 4); got != "1m9s · cancelling" {
 		t.Fatalf("cancelling indicator = %q", got)
 	}
@@ -2702,20 +2700,9 @@ func TestWorkingIndicatorShowsActivity(t *testing.T) {
 // expanded text. A failing completion keeps the draft.
 func TestPromptCompletionComposerFlow(t *testing.T) {
 	f := newFixture(t, true)
-	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	initLua := `
-return {completions = {
-  plan = function() return "PLAN BODY" end,
-  polish = function() return "POLISH BODY" end,
-  boom = function() error("broken") end,
-}}`
-	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.m.ctl.Reload()
-	f.m = settle(f.m)
+	f.completions(t, `plan = "PLAN BODY"
+polish = "POLISH BODY"
+boom = "${{ exit 3 }}"`)
 
 	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
 	m := typed(f.m, "#")
@@ -2776,15 +2763,7 @@ func hasEntry(m model, kind, text string) bool {
 // composer, the reason shows, and a result that arrives afterwards is dropped.
 func TestPromptExpansionCancelKeepsDraft(t *testing.T) {
 	f := newFixture(t, true)
-	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	initLua := `return {completions = {slow = function() sh("sleep 30") return "SLOW BODY" end}}`
-	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.m.ctl.Reload()
-	f.m = settle(f.m)
+	f.completions(t, `slow = "${{ sleep 30 }}SLOW BODY"`)
 
 	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
 	m := typed(f.m, "#slow now")
@@ -2832,20 +2811,9 @@ func TestPromptExpansionCancelKeepsDraft(t *testing.T) {
 // text replaces only its token, leaving the rest of the composer as it was.
 func TestPromptCompletionWrapsAndReplacesMidText(t *testing.T) {
 	f := newFixture(t, true)
-	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	initLua := `
-return {completions = {
-  plan = function() return "PLAN BODY" end,
-  polish = function() return "POLISH BODY" end,
-  boom = function() return "BOOM" end,
-}}`
-	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(initLua), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.m.ctl.Reload()
-	f.m = settle(f.m)
+	f.completions(t, `plan = "PLAN BODY"
+polish = "POLISH BODY"
+boom = "BOOM"`)
 
 	typed := func(m model, s string) model { return key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
 	m := typed(f.m, "#")
@@ -2885,14 +2853,7 @@ return {completions = {
 // reason shows in the chat.
 func TestPromptExpansionSessionChangeKeepsDraft(t *testing.T) {
 	f := newFixture(t, true)
-	if err := os.MkdirAll(filepath.Join(f.project, ".zel"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.project, ".zel", "init.lua"), []byte(`return {completions = {plan = function() return "PLAN BODY" end}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.m.ctl.Reload()
-	f.m = settle(f.m)
+	f.completions(t, `plan = "PLAN BODY"`)
 	m := key(f.m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#plan")})
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
@@ -2959,6 +2920,21 @@ type fixture struct {
 	hold    atomic.Pointer[chan struct{}]
 	reached chan struct{}
 	project string
+}
+
+// completions appends a [completions] table to ~/.zel/zel.toml and reloads.
+func (f *fixture) completions(t *testing.T, table string) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(f.a.Home(), "zel.toml"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString("\n[completions]\n" + table + "\n")
+	if err := errors.Join(err, file.Close()); err != nil {
+		t.Fatal(err)
+	}
+	f.m.ctl.Reload()
+	f.m = settle(f.m)
 }
 
 func newFixture(t *testing.T, providers bool) *fixture {
@@ -3145,21 +3121,22 @@ func key(m model, k tea.KeyMsg) model {
 
 func agentEvent(e core.TurnEvent) core.Event { return core.Event{Kind: "agent", Agent: &e} }
 
-func freshAgent(t testing.TB) *core.Runtime {
+func freshAgent(t testing.TB) (*core.Runtime, string) {
 	t.Helper()
 	t.Setenv("ZEL_HOME", t.TempDir())
-	a, err := core.New(t.TempDir(), core.Options{})
+	dir := t.TempDir()
+	a, err := core.New(dir, core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
-	return a
+	return a, dir
 }
 
 func freshModel(t testing.TB) (model, *core.Runtime) {
 	t.Helper()
-	a := freshAgent(t)
-	m := newModel(a, a.Shell.Dir)
+	a, dir := freshAgent(t)
+	m := newModel(a, dir)
 	t.Cleanup(m.ctl.Close)
 	return m, a
 }
@@ -3176,22 +3153,14 @@ func renderEntry(e entry, width, limit int) string { return renderEntryMode(e, w
 
 func (m *model) timeline() string { return strings.Join(m.timelineRows(0), "\n") }
 
-// setConfig updates database preferences and reloads it.
+// setConfig changes the settings the way the menus do: into zel.toml, then reload.
 func setConfig(t *testing.T, ctl *core.Controller, change func(*core.Settings)) {
 	t.Helper()
-	home, err := core.ZelHome("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := core.LoadConfig(home)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := ctl.Settings()
 	change(&s)
-	if err := core.WriteConfig(home, s); err != nil {
+	if err := ctl.UpdateSettings(s); err != nil {
 		t.Fatal(err)
 	}
-	ctl.Reload()
 }
 
 func (m *model) applyAgent(e core.TurnEvent) {

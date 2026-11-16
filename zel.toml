@@ -1,0 +1,2 @@
+# zel's own project config: the agent instructions live in AGENTS.md
+instructions = [{ text = "${{ cat AGENTS.md }}", headless = true }]

@@ -57,7 +57,7 @@ type Options struct {
 
 // Runtime is the stable application handle held by callers and the controller
 // across NewSession/Resume. Each opened session owns an independent *session so
-// surviving background work (hooks, tasks, abandoned Lua calls) keeps its own
+// surviving background work (hooks, tasks, abandoned bash calls) keeps its own
 // session identity and environment without racing with session replacement.
 type Runtime struct {
 	opts      Options
@@ -96,7 +96,8 @@ type session struct {
 	parent        *parentLink // set when this is a zel -p started from another session
 	childMu       sync.Mutex
 	children      map[string]SubagentRun // zel -p children that run now, by session ID
-	hookWG        sync.WaitGroup         // async hooks
+	childPIDs     map[string]int
+	hookWG        sync.WaitGroup // async hooks
 	turning       atomic.Bool
 	idleSent      atomic.Bool
 	histMu        sync.RWMutex
@@ -363,7 +364,7 @@ func (s *session) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
 	}
 }
 
-// countSteps counts the lua calls and thinking blocks of items: the steps a turn summary shows.
+// countSteps counts the bash calls and thinking blocks of items: the steps a turn summary shows.
 func countSteps(items []json.RawMessage) (steps int) {
 	for _, item := range items {
 		for _, r := range RecordsForItem(item) {

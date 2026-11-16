@@ -85,3 +85,17 @@ func TestChoiceListScrollsInASmallTerminal(t *testing.T) {
 		t.Fatalf("window around the selection:\n%s", block)
 	}
 }
+
+// Questions wait in a queue; the hint counts them only when more than one waits.
+func TestChoiceShowsQueueCounter(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width, m.height = 60, 20
+	m.choice = &core.Choice{ID: 1, Title: "q", Options: []string{"a", "b"}, Waiting: 1}
+	if block := ansi.Strip(m.choiceBlock()); strings.Contains(block, "1/") {
+		t.Fatalf("a single question shows a counter:\n%s", block)
+	}
+	m.choice.Waiting = 3
+	if block := ansi.Strip(m.choiceBlock()); !strings.Contains(block, "1/3 · ↑↓ choose") {
+		t.Fatalf("no queue counter:\n%s", block)
+	}
+}

@@ -261,7 +261,8 @@ func loadConfig(ctx context.Context, extra []string) (*config.Config, error) {
 			if err := cmd.Start(); err != nil {
 				return "", err
 			}
-			return buf.String(), shell.Reap(cmd)
+			err := shell.Reap(cmd)
+			return buf.String(), err
 		}
 	}
 	return config.Load(ctx, layers, run), nil

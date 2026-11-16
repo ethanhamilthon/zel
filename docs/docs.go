@@ -1,5 +1,5 @@
-// Package docs embeds the Lua API reference, so the agent can read how zel works
-// with docs() and the text always matches the binary.
+// Package docs embeds the reference, so the agent can read how zel works with
+// zel docs and the text always matches the binary.
 package docs
 
 import (
@@ -8,28 +8,28 @@ import (
 	"strings"
 )
 
-//go:embed lua-api.md examples/*.lua examples/README.md
+//go:embed bash-api.md examples/*.toml examples/bin/* examples/README.md
 var files embed.FS
 
 // Topic is one piece of the reference.
 type Topic struct{ Name, Summary string }
 
-// sections maps a heading of lua-api.md to its topic. A heading without a topic
-// is a bug, so the tests fail when lua-api.md gets a section that is not listed.
+// sections maps a heading of bash-api.md to its topic. A heading without a topic
+// is a bug, so the tests fail when bash-api.md gets a section that is not listed.
 var sections = map[string]Topic{
-	"Calls":              {"calls", "limits of a lua call, the VM, output, errors"},
-	"Functions":          {"functions", "every host function: sh, files, tasks, new_agent, send_agent, choice, session"},
-	"init.lua":           {"init", "init.lua format: instructions, tools, layers, reload"},
-	"Hooks":              {"hooks", "session_created, message, turn_end, session_closed"},
+	"The bash tool":      {"bash", "how a bash call runs: limits, output, environment"},
+	"Commands":           {"commands", "zel task, choice, view, session, edit, -p (subagents), exit codes"},
+	"zel.toml":           {"config", "zel.toml layers, keys, ${{ }}, hot reload, menus writing back"},
+	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},
 }
 
-var examples = Topic{"examples", "complete init.lua files: global, project, web tools"}
+var examples = Topic{"examples", "complete zel.toml files and a script tool"}
 
 // order is the order of the topics in the index.
-var order = []string{"Calls", "Functions", "init.lua", "Hooks", "Prompt completions"}
+var order = []string{"The bash tool", "Commands", "zel.toml", "Hooks", "Prompt completions"}
 
-// parse splits lua-api.md into its "## " sections; the text before the first one
+// parse splits bash-api.md into its "## " sections; the text before the first one
 // is the intro and has no topic.
 func parse(src string) map[string]string {
 	out := map[string]string{}
@@ -67,9 +67,9 @@ func Topics() []Topic {
 // Index is what docs() returns without a topic.
 func Index() string {
 	var b strings.Builder
-	b.WriteString("zel docs. Call docs(topic) for one of:\n")
+	b.WriteString("zel docs. Run zel docs TOPIC for one of:\n")
 	for _, t := range Topics() {
-		fmt.Fprintf(&b, "  docs(%q) -- %s\n", t.Name, t.Summary)
+		fmt.Fprintf(&b, "  zel docs %s  -- %s\n", t.Name, t.Summary)
 	}
 	return b.String()
 }
@@ -79,7 +79,7 @@ func Get(name string) (string, bool) {
 	if name == examples.Name {
 		return exampleText(), true
 	}
-	src, err := files.ReadFile("lua-api.md")
+	src, err := files.ReadFile("bash-api.md")
 	if err != nil {
 		return "", false
 	}
@@ -92,9 +92,9 @@ func Get(name string) (string, bool) {
 	return "", false
 }
 
-// Sections returns the headings of lua-api.md, for the tests.
+// Sections returns the headings of bash-api.md, for the tests.
 func Sections() []string {
-	src, _ := files.ReadFile("lua-api.md")
+	src, _ := files.ReadFile("bash-api.md")
 	var list []string
 	for h := range parse(string(src)) {
 		list = append(list, h)
@@ -106,13 +106,9 @@ func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")
 	b.WriteString(strings.TrimSpace(string(readme)))
-	entries, _ := files.ReadDir("examples")
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".lua") {
-			continue
-		}
-		data, _ := files.ReadFile("examples/" + e.Name())
-		fmt.Fprintf(&b, "\n\n-- %s\n%s", e.Name(), strings.TrimSpace(string(data)))
+	for _, name := range []string{"global-zel.toml", "project-zel.toml", "bin/web-search"} {
+		data, _ := files.ReadFile("examples/" + name)
+		fmt.Fprintf(&b, "\n\n# --- %s\n%s", name, strings.TrimSpace(string(data)))
 	}
 	return b.String()
 }

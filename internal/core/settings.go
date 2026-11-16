@@ -82,7 +82,15 @@ func (s *session) notify(msg string) {
 func (s *session) configLayers(stored []string) []config.Layer {
 	extra := s.opts.Configs
 	if len(extra) == 0 && len(stored) > 0 {
-		return layersFromPaths(s.home, stored)
+		// A resumed session keeps its --config files; the default layers are found again.
+		for _, p := range stored {
+			if p != filepath.Join(s.home, "zel.toml") && p != filepath.Join(s.dir, "zel.toml") {
+				extra = append(extra, p)
+			}
+		}
+		if s.parent == nil || len(extra) > 0 {
+			return config.Layers(s.home, s.dir, extra)
+		}
 	}
 	if len(extra) == 0 && s.parent != nil && len(s.parent.config) > 0 {
 		return layersFromPaths(s.home, s.parent.config)
@@ -356,6 +364,12 @@ func (s *session) saveDefault(sel selection) error {
 	cfg := s.conf.get()
 	for _, kv := range [][2]string{{"provider", sel.Provider}, {"model", sel.Model}, {"effort", sel.Effort}} {
 		if kv[1] == "" {
+			// A deleted provider takes its selection along.
+			if cfg != nil && cfg.Sources[kv[0]] != "" {
+				if err := config.DeleteKey(cfg.Sources[kv[0]], kv[0]); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		if cfg != nil {

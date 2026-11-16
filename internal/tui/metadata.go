@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -62,6 +63,7 @@ func infoRows(info core.Info) []menuRow {
 		{label: title},
 		{"ID:", info.Session},
 		{"Dir:", core.DisplayPath(info.Project)},
+		{"Config:", configLabel(info.Configs)},
 		{"Model:", info.Provider + " · " + info.Model + " · " + info.Effort},
 		{"Context:", formatContext(info.Context)},
 		{"Spend:", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
@@ -80,4 +82,16 @@ func infoBody(rows []menuRow, w int) []string {
 		lines = append(lines, key.Render(k)+val.Render(ansi.Truncate(r.detail, max(1, w-len(k)), "…")))
 	}
 	return lines
+}
+
+// configLabel lists the zel.toml layers of the session, in merge order.
+func configLabel(files []string) string {
+	if len(files) == 0 {
+		return "none"
+	}
+	short := make([]string, len(files))
+	for i, f := range files {
+		short[i] = core.DisplayPath(f)
+	}
+	return strings.Join(short, " · ")
 }

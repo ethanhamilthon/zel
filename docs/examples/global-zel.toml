@@ -1,0 +1,38 @@
+# ~/.zel/zel.toml
+provider = "openai"
+model    = "gpt-5"
+effort   = "medium"
+
+instructions = [
+  """
+  Talk like a friend: short phrases, no filler.
+  Use `zel choice` instead of asking questions in text; then end your turn.
+  """,
+  """
+  ## Scripts (in PATH)
+  - web-search <query> [-n 5] [--answer]   web search via Tavily
+  """,
+  { text = "You are a subagent: answer short, do not ask questions.", main = false, headless = true },
+]
+
+[settings]
+compaction   = 400000
+accent       = "#c3e88d"
+bash_timeout = 30
+
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api      = "responses"
+api_key  = "${{ echo $OPENAI_API_KEY }}"
+
+[providers.local]
+base_url = "http://localhost:11434/v1"
+api      = "chat"
+api_key  = ""
+
+[hooks]
+# a desktop notification when the agent is done and nothing runs any more
+idle = [{ run = "osascript -e 'display notification \"zel is done\"' || true", async = true }]
+
+[completions]
+review = "Review the uncommitted changes:\n${{ git diff --stat }}"

@@ -362,3 +362,14 @@ func TestPortableHomePaths(t *testing.T) {
 		t.Fatalf("ZelHome with a home-relative override = %q, %v", got, err)
 	}
 }
+
+// The documented examples must load without errors.
+func TestDocExamplesLoad(t *testing.T) {
+	for _, name := range []string{"global-zel.toml", "project-zel.toml"} {
+		path := filepath.Join("..", "..", "docs", "examples", name)
+		cfg := Load(context.Background(), []Layer{{Name: "config", Path: path}}, nil)
+		if len(cfg.Errors) > 0 || len(cfg.Layers) != 1 {
+			t.Errorf("%s: %v", name, cfg.Errors)
+		}
+	}
+}

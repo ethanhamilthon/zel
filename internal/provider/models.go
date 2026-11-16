@@ -40,6 +40,6 @@ func AllModels(ctx context.Context, providers map[string]*Client) (choices []ent
 }
 
 // SelectSession changes the model of this session and makes it the default for new
-// sessions by persisting the selection in SQLite (see SaveDefault).
+// sessions by persisting the selection in zel.toml (see saveDefault in core).
 // Saved sessions keep their own model. Call between turns. Failed validation or
 // persistence of the session restores the old selection.

@@ -1,37 +1,52 @@
 zel - minimal AI coding agent
 
 USAGE
-  zel                     open the TUI
-  zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL]
-                          run one task without the TUI: prints the session ID,
-                          then the final answer (exit 0, nonzero on error, 130
-                          when cancelled); flags apply to this run only
+  zel [--config FILE]...  open the TUI
+  zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL] [--resume ID]
+         [--cwd DIR] [--timeout SECONDS] [--json] [--config FILE]...
+                          run without the TUI: "zel: session ID" goes to stderr,
+                          the final answer to stdout (exit 0, nonzero on error,
+                          130 when cancelled). PROMPT may come on stdin. Run from
+                          the agent's bash, zel -p is a subagent of that session.
+  zel config [--config FILE]...   the merged config and where each key comes from
+  zel models [--json]     the models of the configured providers
+  zel docs [TOPIC]        the reference (bash tool, commands, zel.toml, hooks)
+  zel edit FILE [--all]   exact text edits read from stdin (see zel docs commands)
   zel update              replace this binary with the latest release
-  zel version
-  zel help
+  zel version | zel help
+
+INSIDE A SESSION (the agent's bash, tasks, hooks)
+  zel task run|list|get|tail|wait|stop   background tasks
+  zel choice "Question" "A" "B"          ask the user; the answer comes as a notification
+  zel view IMG...                        attach images to the next model request
+  zel session [--json] | zel session rename NAME
 
 CONFIG
-  Providers, models and preferences live in the UI (Ctrl+K) and in ~/.zel/zel.db.
-  Extensions: ~/.zel/init.lua, then the nearest .zel/init.lua up from here.
-  A file returns {instructions, tools, hooks, completions} or a list of them:
+  ~/.zel/zel.toml, then ./zel.toml, then each --config FILE. Changes apply by
+  themselves (hot reload). Any string may contain ${{ bash }}.
 
-    return {
-      instructions = "Read code first.",
-      tools = {hello = {desc = "greets. args: who", fn = function(a) return "hi " .. a.who end}},
-      hooks = {turn_end = function(answer, running) end},
-      completions = {plan = function() return read("PLAN.md") end},
-    }
+    provider = "openai"
+    model = "gpt-5"
+    instructions = ["Read code first.", "${{ cat AGENTS.md }}"]
 
-  Hooks: session_created(), message(text, notice), turn_end(answer, running),
-  session_closed(reason). Menu > Reload rereads the files. See docs/lua-api.md.
+    [providers.openai]
+    base_url = "https://api.openai.com/v1"
+    api_key = "${{ echo $OPENAI_API_KEY }}"
+
+    [hooks]
+    turn_end = ["~/.zel/bin/check-git"]
+
+    [completions]
+    plan = "${{ cat PLAN.md }}"
+
+  Scripts in ~/.zel/bin and ./.zel/bin are on the agent's PATH.
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
-  Ctrl+T tracing  Ctrl+Y copy answer  Ctrl+D stop the turn  Ctrl+Q quit
+  Ctrl+T tracing  Ctrl+D stop the turn  Ctrl+Q quit
   @ completes paths, # completes prompt completions
 
 ENVIRONMENT
   ZEL_HOME   data directory (default ~/.zel)
-  sh() gets ZEL_SESSION_ID and ZEL_MODE
 
-Lua and shell run with your permissions and network access; there is no sandbox.
+bash runs with your permissions and network access; there is no sandbox.

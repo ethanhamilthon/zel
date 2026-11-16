@@ -1,0 +1,9 @@
+# ./zel.toml of a Go repository
+instructions = ["${{ cat AGENTS.md }}"]
+
+[hooks]
+turn_end = ['test -z "$(git status --porcelain)" || echo "uncommitted changes: run make test, then commit"']
+bash_before = [{ match = 'git push (-f|--force)', run = "echo 'force push is not allowed here' >&2; exit 2" }]
+
+[completions]
+check = "Run `make test` and fix what fails."

@@ -146,7 +146,7 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		}
 		return ok("")
 	case "child.start":
-		s.childStarted(SubagentRun{ID: a.Session, Parent: s.id, Started: time.Now(), Model: a.Model, Effort: a.Effort, Command: a.Prompt})
+		s.childStarted(SubagentRun{ID: a.Session, Parent: s.id, Started: time.Now(), Model: a.Model, Effort: a.Effort, Command: a.Prompt}, a.PID)
 		return ok("")
 	case "child.end":
 		s.childEnded(a.Session)

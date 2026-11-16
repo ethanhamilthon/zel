@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-// Every section of lua-api.md has a topic and every topic returns text, so the
-// agent can reach the whole reference through docs().
+// Every section of bash-api.md has a topic and every topic returns text, so the
+// agent can reach the whole reference through zel docs.
 func TestEverySectionIsReachable(t *testing.T) {
 	for _, h := range Sections() {
 		if h == "Examples" {
 			continue // examples has its own topic
 		}
 		if _, ok := sections[h]; !ok {
-			t.Errorf("section %q of lua-api.md has no topic", h)
+			t.Errorf("section %q of bash-api.md has no topic", h)
 		}
 	}
 	for _, topic := range Topics() {
@@ -21,7 +21,7 @@ func TestEverySectionIsReachable(t *testing.T) {
 		if !ok || strings.TrimSpace(text) == "" {
 			t.Errorf("topic %q is empty", topic.Name)
 		}
-		if !strings.Contains(Index(), `"`+topic.Name+`"`) {
+		if !strings.Contains(Index(), "zel docs "+topic.Name+" ") {
 			t.Errorf("index misses %q", topic.Name)
 		}
 	}
