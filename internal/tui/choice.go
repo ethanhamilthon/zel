@@ -69,9 +69,9 @@ func (m model) choiceBlock() string {
 		label := ansi.Truncate(sanitizeLabel(m.choice.Options[i]), max(0, width-2), "…")
 		if i == m.choiceSel {
 			if width >= 2 {
-				rows = append(rows, title.Render(label)+accent.Render(" ❯"))
+				rows = append(rows, title.Render(label)+accent.Render(" <"))
 			} else {
-				rows = append(rows, accent.Render("❯"))
+				rows = append(rows, accent.Render("<"))
 			}
 		} else {
 			rows = append(rows, dim.Render(label))
