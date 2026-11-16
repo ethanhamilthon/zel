@@ -1,324 +1,318 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
-	"github.com/lucasb-eyer/go-colorful"
 
-	"zel/internal/config"
+	"github.com/rivo/uniseg"
+	"zel/internal/core"
+	"zel/internal/entities"
 )
 
-var (
-	// The theme, set by applyTheme from [colors]; see config.ColorKeys for where each goes.
-	bgColor, accentColor, agentColor, userColor, userHighlight, grayColor, darkGray, errorColor lipgloss.Color
-	traceColors                                                                                 map[string]lipgloss.Color
-	markdownStyle                                                                               string
-)
-
-func init() { applyTheme(config.DefaultColors()) }
-
-type paintKey struct {
-	row    string
-	width  int
-	bg, fg lipgloss.TerminalColor
-	color  any
-}
-
-var painted = map[paintKey]string{}
-
-func paint(text string, width int, bg, fg lipgloss.TerminalColor) string {
-	rows := strings.Split(text, "\n")
-	style := lipgloss.NewStyle().Background(bg).Foreground(fg)
-	for i, row := range rows {
-		key := paintKey{row, width, bg, fg, lipgloss.ColorProfile()}
-		if out, ok := painted[key]; ok {
-			rows[i] = out
-			continue
-		}
-		if len(painted) >= 8192 {
-			clear(painted)
-		}
-		rows[i] = style.Render(ansi.Truncate(row, max(1, width), ""))
-		painted[key] = rows[i]
-	}
-	return strings.Join(rows, "\n")
-}
-
-// renderEntryMode draws the chat: user messages and answers only. The trace
-// of the turn (system prompt, tools, thoughts, notices) lives in the Tracing menu.
-func renderEntryMode(e entry, width, limit int, markdown bool) string {
-	if limit == 0 {
-		return ""
-	}
-	width = max(1, width)
-	text := ansi.Strip(clampText(e.Text, maxLayoutBytes))
-	switch e.Kind {
-	case "user":
-		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, userColor)
-	case "prompt_error":
-		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, errorColor)
-	case "choice":
-		return renderChoiceRecord(text, width)
-	case "compaction":
-		label := " context compacted "
-		side := max(0, width-lipgloss.Width(label)) / 2
-		return paint(strings.Repeat("─", side)+label+strings.Repeat("─", side), width, lipgloss.NoColor{}, darkGray)
-	case "turn_end":
-		// A turn that failed or was stopped: its time and steps in red, then why.
-		header := "*"
-		if e.Meta != nil {
-			header += " " + formatDuration(e.Meta.Duration) + " · " + formatSteps(e.Meta.Steps)
-		}
-		return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, errorColor) + "\n" +
-			paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, grayColor)
-	case "assistant":
-	default:
-		return ""
-	}
-	body, ok := "", false
-	if markdown && len(text) <= maxMarkdownBytes {
-		body, ok = renderMarkdown(text, width, e.Preview)
-	}
-	if !ok {
-		body = ansi.Wrap(text, width, "")
-	}
-	if body == "" {
-		body = "(no output)"
-	}
-	lines := linkedRows(body, width)
-	out := paint(strings.Join(lines, "\n"), width, lipgloss.NoColor{}, agentColor)
-	if !showTurnStats {
-		return out
-	}
-	header := "*"
-	if metadata := answerMetadata(e); metadata != "" {
-		header += " " + metadata
-	}
-	return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, accentColor) + "\n" + out
-}
-
-func answerMetadata(e entry) string {
-	if e.Kind != "assistant" || e.Preview || e.Meta == nil {
-		return ""
-	}
-	return formatDuration(e.Meta.Duration) + " · " + formatSteps(e.Meta.Steps)
-}
-
-// renderRail draws the rail used by menu and settings inputs.
-func renderRail(text string, width int) string {
-	lines := strings.Split(text, "\n")
-	rail := lipgloss.NewStyle().Foreground(accentColor).Render("▌")
-	for i, line := range lines {
-		body := paint(" "+line, max(1, width-1), lipgloss.NoColor{}, agentColor)
-		lines[i] = ansi.Truncate(rail+body, max(1, width), "")
-	}
-	return strings.Join(lines, "\n")
-}
-
-const composerCursorMarker = "\x1b]1337;ZelCursor\x07"
-
-// queuedColor fades to a darker shade and back over a 1.6-second cycle.
-func queuedColor(base lipgloss.Color, now time.Time) lipgloss.Color {
-	from, err := colorful.Hex(string(base))
-	if err != nil {
-		return base
-	}
-	phase := (1 - math.Cos(float64(now.UnixMilli()%1600)*2*math.Pi/1600)) / 2
-	return lipgloss.Color(from.BlendRgb(colorful.Color{}, 0.6*phase).Hex())
-}
-
-func (m model) inputBlock() string {
-	return m.inputBlockAt(time.Now())
-}
-
-func (m model) inputBlockAt(now time.Time) string {
-	// Rebind the textarea's style pointer on this copy, not the live composer.
-	if m.pendingSteer != 0 {
-		style := composerStyle()
-		style.Base = style.Base.Foreground(queuedColor(userColor, now))
-		style.Text = style.Text.Foreground(queuedColor(userColor, now))
-		style.CursorLine = style.CursorLine.Foreground(queuedColor(userHighlight, now))
-		m.input.FocusedStyle, m.input.BlurredStyle = style, style
-		if m.input.Focused() {
-			m.input.Focus()
-		} else {
-			m.input.Blur()
-		}
-		m.input.Cursor.Style = lipgloss.NewStyle().Transform(func(s string) string {
-			return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(queuedColor(userHighlight, now)).Render(s)
-		})
-	}
-	lines := m.tokenColor(strings.Split(m.input.View(), "\n"))
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(line, max(1, m.width), "")
-	}
-	return strings.Join(lines, "\n")
-}
-
-type screenRows []string
-
-func (r *screenRows) add(chunk string) { r.addLines(strings.Split(chunk, "\n")) }
-
-func (r *screenRows) addLines(lines []string) {
-	if len(*r) == 0 {
-		*r = append(*r, lines...)
+func (m *app) draw() {
+	width, height := m.screen.Size()
+	if width < 1 || height < 1 {
 		return
 	}
-	(*r)[len(*r)-1] += lines[0]
-	*r = append(*r, lines[1:]...)
-}
+	m.dirty = false
+	colors, _ := m.ctl.Appearance()
+	applyTheme(colors)
+	linkBase = m.cwd
+	m.screen.SetStyle(style(agentColor))
+	m.screen.Fill(' ', style(agentColor))
+	m.screen.HideCursor()
 
-// timelineRows is the whole timeline as one slice: the chat history, the working
-// and agent indicators, the composer and the completions.
-func (m *model) timelineRows(budget time.Duration) []string {
-	head, tail := m.timelineSegments(budget)
-	return append(slices.Clone(head), tail...)
-}
-
-// blankRow reports whether a row holds nothing but whitespace.
-func blankRow(row string) bool { return strings.TrimSpace(ansi.Strip(row)) == "" }
-
-// trimBlankTail drops the trailing blank rows of rows without copying them.
-func trimBlankTail(rows []string) []string {
-	for len(rows) > 0 && blankRow(rows[len(rows)-1]) {
-		rows = rows[:len(rows)-1]
+	if m.menu != nil {
+		m.drawMenu(width, height)
+		m.screen.Show()
+		return
 	}
-	return rows
-}
-
-// timelineSegments builds the timeline as a stable head, the chat history, and a
-// tail that is cheap to rebuild: the indicators, the composer and the
-// completions. The history is concatenated only when an entry, the width or the
-// theme changed, so a loader tick or a keystroke costs nothing in its length.
-func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
-	changedFrom := len(m.entries)
-	if m.cache == nil || m.history == nil || m.historyStale {
-		changedFrom = 0
-		m.historyStale = true
+	m.syncQueued()
+	m.historyRows(width)
+	status := m.ctl.Status()
+	var indicators []row
+	for _, task := range m.tasks {
+		indicators = append(indicators, plainRows("● "+cmp.Or(task.Name, task.ID)+" · "+formatDuration(time.Since(task.Started)), width, grayColor)...)
 	}
-	if len(m.cache) > len(m.entries) {
-		clear(m.cache[len(m.entries):])
-		m.cache = m.cache[:len(m.entries)]
-		changedFrom = 0
-		m.historyStale = true
-	} else if diff := len(m.entries) - len(m.cache); diff > 0 {
-		changedFrom = min(changedFrom, len(m.cache))
-		oldCount := len(m.cache)
-		m.cache = append(m.cache, make([]renderedEntry, diff)...)
-		m.cache[oldCount].startRow = max(0, len(m.history)-1)
+	if status.Busy {
+		_, ui := m.ctl.Appearance()
+		stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
+		icon := stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)]
+		indicators = append(indicators, plainRows(icon+" "+workingText(status, m.turnSteps(), ui.ShowBash), width, accentColor)...)
 	}
-	started, rendered := time.Now(), 0
-	m.renderPending = false
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		e := m.entries[i]
-		limit := 0
-		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "choice" || e.Kind == "compaction" || e.Kind == "turn_end" {
-			limit = -1
+	if m.promptCancel != nil {
+		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)
+	}
+	e := &m.input
+	inputRows := e.rows(max(1, width-2))
+	inputHeight := min(len(inputRows), max(1, height/3))
+	completionRows := min(6, min(len(m.completions.items), max(0, height/3)))
+	choiceRows := 0
+	if m.choice != nil {
+		completionRows = 0
+		if m.writing {
+			e = &m.answer
+			inputRows = e.rows(max(1, width-2))
+			inputHeight = min(len(inputRows), max(1, height-5))
+			choiceRows = 1
+		} else {
+			inputHeight = 0
+			choiceRows = min(len(m.choice.Options)+2, max(1, height/2))
 		}
-		cached := &m.cache[i]
-		if cached.width == m.width && cached.source == e && cached.maxLines == limit && !cached.draft {
+	}
+	reserve := inputHeight + completionRows + choiceRows + 2
+	indicatorHeight := min(len(indicators), max(0, height-reserve-1))
+	m.chatHeight = max(0, height-reserve-indicatorHeight)
+	maxScroll := max(0, len(m.history)-m.chatHeight)
+	m.scroll = min(m.scroll, maxScroll)
+	end := max(0, len(m.history)-m.scroll)
+	start := max(0, end-m.chatHeight)
+	m.visibleStart = start
+	for i, r := range m.history[start:end] {
+		drawRow(m.screen, i, r, width)
+	}
+	y := m.chatHeight
+	for _, r := range indicators[:indicatorHeight] {
+		drawRow(m.screen, y, r, width)
+		y++
+	}
+	y++
+	m.inputY = y
+	m.inputHeight = inputHeight
+	if m.choice != nil {
+		m.line(y, m.choice.Title, width, accentColor)
+		y++
+		if !m.writing {
+			options := append(slices.Clone(m.choice.Options), "Write your own answer…")
+			shown := max(0, choiceRows-1)
+			first := max(0, m.choiceIndex-shown+1)
+			m.choiceFirst, m.choiceVisible = first, shown
+			for i := first; i < min(len(options), first+shown); i++ {
+				prefix := "  "
+				color := grayColor
+				if i == m.choiceIndex {
+					prefix = "› "
+					color = accentColor
+				}
+				m.line(y, prefix+options[i], width, color)
+				y++
+			}
+		}
+	}
+	if inputHeight > 0 {
+		if m.choice != nil && m.writing && e.text == "" {
+			m.at(1, y, "Your answer", max(1, width-2), darkGray)
+		}
+		m.inputY = y
+		m.drawEditor(e, 1, y, max(1, width-2), inputHeight, false)
+		y += inputHeight
+	}
+	if completionRows > 0 {
+		first := max(0, m.completions.selected-completionRows+1)
+		for i := first; i < min(len(m.completions.items), first+completionRows); i++ {
+			color := grayColor
+			prefix := "  "
+			if i == m.completions.selected {
+				color = accentColor
+				prefix = "› "
+			}
+			m.line(y, prefix+m.completions.items[i].label, width, color)
+			y++
+		}
+	}
+	s := m.ctl.Settings()
+	footer := s.Provider + "/" + s.Model + " · " + s.Effort + " · " + formatContext(m.contextTokens)
+	if s.Model == "" {
+		footer = "Ctrl+K · Configure a provider and choose a model"
+	}
+	m.line(height-1, footer, width, darkGray)
+	m.drawSelection()
+	m.screen.Show()
+}
+func (m *app) line(y int, text string, width int, color lipgloss.Color) {
+	if rows := plainRows(text, width, color); len(rows) > 0 {
+		drawRow(m.screen, y, rows[0], width)
+	}
+}
+func (m *app) historyRows(width int) {
+	colors, _ := m.ctl.Appearance()
+	changed := len(m.cache) != len(m.records)
+	if len(m.cache) > len(m.records) {
+		m.cache = m.cache[:len(m.records)]
+	}
+	for len(m.cache) < len(m.records) {
+		m.cache = append(m.cache, cachedRecord{})
+	}
+	started, rendered := time.Now(), false
+	for i := len(m.records) - 1; i >= 0; i-- {
+		r := m.records[i]
+		c := &m.cache[i]
+		if c.source == r && c.width == width && c.theme == colors && !c.plain {
 			continue
 		}
-		draft := budget > 0 && e.Kind == "assistant" && rendered > 0 && time.Since(started) >= budget
-		if draft {
-			m.renderPending = true
-			if cached.draft && cached.width == m.width && cached.source == e && cached.maxLines == limit {
-				continue
-			}
-		}
-		cached.source, cached.width, cached.maxLines, cached.draft = e, m.width, limit, draft
-		cached.Text = renderEntryMode(e, m.width, limit, !draft)
-		cached.rows = strings.Split(cached.Text, "\n")
-		changedFrom = min(changedFrom, i)
-		if e.Kind == "assistant" && !draft {
-			rendered++
-		}
-	}
-	if changedFrom < len(m.cache) || m.historyStale || m.history == nil {
-		var history screenRows
-		if changedFrom > 0 && changedFrom < len(m.cache) && m.cache[changedFrom].startRow < len(m.history) {
-			history = m.history[:m.cache[changedFrom].startRow+1]
-			history[len(history)-1] = ""
-		} else {
-			changedFrom = 0
-		}
-		for i := changedFrom; i < len(m.cache); i++ {
-			cached := &m.cache[i]
-			cached.startRow = max(0, len(history)-1)
-			if cached.Text != "" {
-				history.addLines(cached.rows)
-				history.add("\n\n")
-			}
-		}
-		m.history, m.historyStale = history, false
-	}
-	history := m.history
-
-	// Every chat entry ends with an empty row; the indicators start on it.
-	working, subagents := m.workingBlock(), m.taskBlock()
-	var mid screenRows
-	if working == "" && subagents == "" {
-		head = trimBlankTail(history)
-	} else {
-		head = history
-		if len(history) > 0 {
-			head, mid = history[:len(history)-1], screenRows{history[len(history)-1]}
-		}
-		mid.add(working)
-		mid.add(subagents)
-		for len(mid) > 0 && blankRow(mid[len(mid)-1]) {
-			mid = mid[:len(mid)-1]
-		}
-		if len(mid) == 0 {
-			head = trimBlankTail(head)
-		}
-	}
-	tail = mid
-	// The composer follows after one empty row; its first chunk line merges into
-	// the last row of the screen, so only the rest of it is appended.
-	nonEmpty := len(head)+len(tail) > 0
-	m.inputTop = len(head) + len(tail)
-	inputBlock := m.inputBlock
-	if m.choice != nil {
-		inputBlock = m.choiceBlock
-	}
-	block := strings.Split(inputBlock(), "\n")
-	if nonEmpty {
-		m.inputTop++
-		tail = append(tail, "")
-	}
-	tail = append(tail, block...)
-	tail = append(tail, "", "")
-	start, rows := 0, min(8, max(1, m.height-m.input.Height()-5))
-	items, selectedIndex := m.completionList()
-	if count := len(items); count > 0 {
-		start = max(0, selectedIndex-rows+1)
-		for i := start; i < min(count, start+rows); i++ {
-			selected := i == selectedIndex
-			marker, fg := "  ", grayColor
-			if selected {
-				marker, fg = " <", agentColor
-				if m.width < ansi.StringWidth(marker) {
-					marker = "<"
+		changed = true
+		c.source, c.width, c.theme = r, width, colors
+		c.rows = nil
+		c.plain = false
+		switch r.Kind {
+		case "user":
+			c.rows = plainRows(r.Text, width, userColor)
+		case "assistant":
+			text, ok := "", false
+			if len(r.Text) <= 64<<10 {
+				if !rendered || time.Since(started) < 4*time.Millisecond {
+					text, ok = renderMarkdown(r.Text, width, r.Preview || m.ctl.Status().Busy)
+					rendered = true
+				} else {
+					c.plain = true
+					m.dirty = true
 				}
 			}
-			label := ansi.Truncate(sanitizeLabel(items[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
-			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(accentColor).Render(marker)
-			screen := screenRows(tail)
-			screen.add(row + "\n")
-			tail = screen
+			if !ok {
+				text = cleanInput(displayText(r.Text))
+			}
+			c.rows = plainRows(answerHeader(r), width, accentColor)
+			c.rows = append(c.rows, styledRows(text, width, style(agentColor))...)
+		case "choice":
+			question, answer, _ := strings.Cut(r.Text, entities.ChoiceSeparator)
+			c.rows = styledRows(lipgloss.NewStyle().Foreground(accentColor).Render(question+": ")+lipgloss.NewStyle().Foreground(userColor).Render(answer), width, style(userColor))
+		case "compaction":
+			c.rows = plainRows(r.Text, width, darkGray)
+		case "turn_end":
+			c.rows = plainRows(answerHeader(r), width, errorColor)
+			c.rows = append(c.rows, plainRows(r.Text, width, grayColor)...)
+		case "error", "prompt_error":
+			c.rows = plainRows(r.Text, width, errorColor)
 		}
-		if remaining := count - min(count, start+rows); remaining > 0 {
-			screen := screenRows(tail)
-			screen.add(lipgloss.NewStyle().Foreground(grayColor).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
-			tail = screen
+		if len(c.rows) > 0 {
+			c.rows = append(c.rows, row{})
 		}
 	}
-	return head, tail
+	if changed {
+		m.historyBase = nil
+		for _, c := range m.cache {
+			m.historyBase = append(m.historyBase, c.rows...)
+		}
+	}
+	m.history = m.historyBase
+	if m.pending != "" {
+		// The optimistic message stays until the runtime emits the accepted input.
+		m.history = append(slices.Clone(m.history), plainRows(m.pending, width, userColor)...)
+	}
 }
+func answerHeader(r core.Record) string {
+	if r.Meta == nil || r.Preview {
+		return "*"
+	}
+	return "* " + formatDuration(r.Meta.Duration) + " · " + formatSteps(r.Meta.Steps)
+}
+func (m *app) drawEditor(e *editor, x, y, width, height int, secret bool) {
+	rows := e.rows(width)
+	cx, cy := e.location(rows)
+	e.scroll = max(0, min(e.scroll, max(0, len(rows)-height)))
+	if cy < e.scroll {
+		e.scroll = cy
+	}
+	if cy >= e.scroll+height {
+		e.scroll = cy - height + 1
+	}
+	tokenRanges := [][2]int{}
+	for _, token := range e.tokens {
+		for at := 0; at < len(e.text); {
+			i := strings.Index(e.text[at:], token)
+			if i < 0 {
+				break
+			}
+			i += at
+			tokenRanges = append(tokenRanges, [2]int{i, i + len(token)})
+			at = i + len(token)
+		}
+	}
+	for n, r := range rows[e.scroll:min(len(rows), e.scroll+height)] {
+		at := x
+		g := uniseg.NewGraphemes(e.text[r.start:r.end])
+		for g.Next() {
+			start, _ := g.Positions()
+			text := g.Str()
+			w := g.Width()
+			color := userHighlight
+			for _, span := range tokenRanges {
+				if r.start+start >= span[0] && r.start+start < span[1] {
+					color = accentColor
+					break
+				}
+			}
+			if text == "\t" {
+				w = 4 - (at-x)%4
+				text = strings.Repeat(" ", w)
+			}
+			if secret {
+				text = strings.Repeat("•", max(1, w))
+			}
+			if at+w <= x+width {
+				for len(text) > 0 {
+					rest, used := m.screen.Put(at, y+n, text, style(color))
+					if used < 1 {
+						break
+					}
+					at += used
+					text = rest
+				}
+			}
+		}
+	}
+	m.screen.ShowCursor(x+min(cx, max(0, width-1)), y+cy-e.scroll)
+}
+func (m *app) turnSteps() int {
+	count := 0
+	for _, r := range m.records[min(m.turnIndex, len(m.records)):] {
+		if r.Kind == "bash" || r.Kind == "reasoning" {
+			count++
+		}
+		if r.Meta != nil {
+			count = max(count, r.Meta.Steps)
+		}
+	}
+	return count
+}
+func workingText(status core.Status, steps int, showBash bool) string {
+	parts := []string{formatDuration(time.Since(status.Started))}
+	if status.Cancelling {
+		parts = append(parts, "cancelling")
+	} else {
+		parts = append(parts, formatSteps(steps))
+	}
+	switch queued := len(status.Queued); {
+	case queued == 1:
+		parts = append(parts, "queued")
+	case queued > 1:
+		parts = append(parts, fmt.Sprintf("%d queued", queued))
+	}
+	if !status.Cancelling && showBash {
+		parts = append(parts, cmp.Or(activityLine(status, time.Now()), "thinking..."))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// activityStep is how long each line of a multi-line command stays in the indicator.
+const activityStep = 150 * time.Millisecond
+
+// activityLine is the row of the activity to show now: a running multi-line
+// command cycles through its lines, anything else shows its first line.
+func activityLine(status core.Status, now time.Time) string {
+	lines := strings.Split(status.Activity, "\n")
+	if !status.Live || len(lines) < 2 {
+		return lines[0]
+	}
+	return lines[int(max(0, now.Sub(status.LiveSince))/activityStep)%len(lines)]
+}
+
+// turnSteps counts the tool calls and thinking blocks of the running turn. The
+// chat hides those entries, but they still arrive and keep the count live.
+// Completed answers carry authoritative totals, including steps missing from live
+// events. Continue counting subsequent work from that total without resetting it.

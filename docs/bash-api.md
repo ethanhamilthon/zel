@@ -121,8 +121,8 @@ finished</notification>` (or `failed`, `stopped`, `timed out`).
 (several questions queue up); the user picks one, chooses **Write your own
 answer…**, or presses Esc. The custom answer edits like the composer: it grows
 with its lines (Alt+Enter, Shift+Enter or Ctrl+J insert a newline), a click
-moves the cursor (mouse reporting is on only while it is open), and up to 4096
-characters fit; Enter sends a non-empty answer, and Esc returns to the options
+moves the cursor, and up to 4096 characters fit; Enter sends a non-empty answer,
+and Esc returns to the options
 without losing the custom text. The normal composer draft is preserved. Each
 answer stays in the chat as `question: answer` (saved in the session's
 `choices.jsonl`, so it is shown again on resume). The agent gets

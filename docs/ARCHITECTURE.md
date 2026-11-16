@@ -99,12 +99,18 @@ Legacy embedded images remain readable without migration. Copy the attachment
 folder together with session history; older binaries cannot read new references.
 
 Only complete commands are published before tool execution; incomplete argument
-fragments do not become UI records. The TUI retains chat and in-flight previews,
-not duplicate committed hidden trace records. Stable formatted Markdown blocks,
-path checks, event-log snapshots and prepared terminal rows are cached. Appending
-or editing the chat tail updates only the affected row-index suffix. Slow initial
-Markdown upgrades use a short cooperative budget and prioritize recent entries.
-The bounded UI event spool and selection-preserving terminal renderer remain.
+fragments do not become UI records. The tcell frontend has one event loop owning
+all UI state. Controller events use a bounded, lossless spool; background work
+returns results with session identities so stale results cannot replace a draft.
+The shared editor is used for chat, custom answers, search and settings forms;
+the shared searchable list is used by menus and completions. There is no widget
+framework or second frontend. tcell owns terminal modes, input, cursor and cell
+updates. Glamour formats Markdown; its output is decoded into styled cells,
+never sent directly to the terminal. Formatted records and stable Markdown
+prefixes are cached; oversized text uses a bounded plain-text fallback.
+Mouse selection holds a screen snapshot while answers continue streaming.
+Drag and release copies selected text; Ctrl+C copies it again. Shift+drag uses
+the terminal's native selection. Ctrl+click opens a rendered hyperlink.
 
 Asynchronous hooks belong to the session lifecycle. Shutdown cancels and joins
 them before releasing resources or removing an unsaved session directory.

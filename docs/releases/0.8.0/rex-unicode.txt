@@ -1,0 +1,24 @@
+Rex keyboard: русский 👩🏽‍💻
+second line
+
+* 2s · 0 steps
+Hello — привет 👩🏽‍💻!
+
+Streaming works.
+
+- Unicode: я, 界, é
+- A link https://example.com
+
+fmt.Println("tcell")
+
+
+
+
+
+
+
+
+
+
+
+smoke/smoke-model · medium · 0K

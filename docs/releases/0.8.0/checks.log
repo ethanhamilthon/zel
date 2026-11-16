@@ -1,0 +1,17 @@
+t18 done release checks 5.8s exit 0
+$ make test
+go vet ./...
+go test -race ./...
+?   	zel	[no test files]
+ok  	zel/docs	1.410s
+ok  	zel/internal/agent	(cached)
+ok  	zel/internal/cli	4.115s
+ok  	zel/internal/config	(cached)
+ok  	zel/internal/core	(cached)
+ok  	zel/internal/edit	(cached)
+?   	zel/internal/entities	[no test files]
+ok  	zel/internal/ipc	(cached)
+ok  	zel/internal/provider	(cached)
+ok  	zel/internal/shell	(cached)
+ok  	zel/internal/store	(cached)
+ok  	zel/internal/tui	2.025s

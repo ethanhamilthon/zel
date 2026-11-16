@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -30,13 +29,13 @@ func terminalLink(target, text string, allowFile bool) string {
 }
 
 var (
-	markedLink        = regexp.MustCompile("(?s)\u2063(.*?)\u2064")
-	markedCode        = regexp.MustCompile("(?s)\u2062(.*?)\u2061")
-	codeSpan          = regexp.MustCompile("`([^`\n]+)`")
-	pathText          = regexp.MustCompile(`^[\pL\pN_ ./~+@:%?=&,#-]+$`)
-	lineSuffix        = regexp.MustCompile(`(:\d+){1,2}$`)
-	linkBase          string // the directory relative paths in backticks are resolved against
-	hyperlinkSequence = regexp.MustCompile("\x1b\\]8;[^\x1b\x07]*(?:\x07|\x1b\\\\)")
+	markedLink = regexp.MustCompile("(?s)\u2063(.*?)\u2064")
+	markedCode = regexp.MustCompile("(?s)\u2062(.*?)\u2061")
+	codeSpan   = regexp.MustCompile("`([^`\n]+)`")
+	pathText   = regexp.MustCompile(`^[\pL\pN_ ./~+@:%?=&,#-]+$`)
+	lineSuffix = regexp.MustCompile(`(:\d+){1,2}$`)
+	linkBase   string // the directory relative paths in backticks are resolved against
+
 )
 
 // Glamour's legacy reflow breaks OSC 8 sequences. Add hyperlinks only after
@@ -131,71 +130,21 @@ func markCodeTargets(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// linkAt is the hyperlink target under display column col of a rendered row, or "".
-func linkAt(row string, col int) string {
-	link, x, last := "", 0, 0
-	for _, loc := range hyperlinkSequence.FindAllStringIndex(row, -1) {
-		width := ansi.StringWidth(row[last:loc[0]])
-		if col < x+width {
-			return link
-		}
-		x, last = x+width, loc[1]
-		_, uri, _ := strings.Cut(strings.TrimPrefix(row[loc[0]:loc[1]], "\x1b]8;"), ";")
-		link = strings.TrimSuffix(strings.TrimSuffix(uri, "\x07"), "\x1b\\")
-	}
-	if col < x+ansi.StringWidth(row[last:]) {
-		return link
-	}
-	return ""
-}
-
-type linkOpened struct {
-	target string
-	err    error
-}
-
 // openLink hands a clicked link to the system opener.
-func openLink(target string) tea.Cmd {
-	return func() tea.Msg {
-		opener := "xdg-open"
-		if runtime.GOOS == "darwin" {
-			opener = "open"
-		}
-		if u, err := url.Parse(target); err == nil && u.Scheme == "file" {
-			target = u.Path
-		}
-		cmd := exec.Command(opener, target)
-		err := cmd.Start()
-		if err == nil {
-			go func() { _ = cmd.Wait() }()
-		}
-		return linkOpened{target, err}
+func openLink(target string) error {
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
 	}
-}
-
-// Close links on each row so truncation, padding and viewport clipping cannot
-// leak a link onto adjacent UI elements. Reopen wrapped links on the next row.
-func linkedRows(body string, width int) []string {
-	rows := strings.Split(body, "\n")
-	active := ""
-	for i, row := range rows {
-		prefix := active
-		for _, seq := range hyperlinkSequence.FindAllString(row, -1) {
-			if seq == ansi.ResetHyperlink() {
-				active = ""
-			} else {
-				active = seq
-			}
-		}
-		if prefix != "" {
-			prefix += "\x1b[4m"
-		}
-		rows[i] = ansi.Truncate(prefix+row, max(1, width), "…")
-		if prefix != "" || strings.Contains(row, "\x1b]8;") {
-			rows[i] += "\x1b[24m" + ansi.ResetHyperlink()
-		}
+	if u, err := url.Parse(target); err == nil && u.Scheme == "file" {
+		target = u.Path
 	}
-	return rows
+	cmd := exec.Command(opener, target)
+	err := cmd.Start()
+	if err == nil {
+		go func() { _ = cmd.Wait() }()
+	}
+	return err
 }
 
 var (
@@ -240,12 +189,6 @@ func renderMarkdownStyle(text string, width int, streaming bool, style string) (
 
 	out, ok := renderGlamour(text)
 	return markdownLinks(out), ok
-}
-
-// renderTraceMarkdown keeps trace body colors local to the tracing viewer.
-func renderTraceMarkdown(text string, width int, color lipgloss.Color) (string, bool) {
-	style := strings.Replace(markdownStyle, `{"document":`, `{"text":{"color":"`+string(color)+`"},"document":`, 1)
-	return renderMarkdownStyle(cleanLinkMarkers(text), width, false, style)
 }
 
 func renderGlamour(text string) (string, bool) {

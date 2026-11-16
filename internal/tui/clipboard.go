@@ -12,15 +12,7 @@ import (
 	"zel/internal/core"
 
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 )
-
-type clipboardResult struct {
-	generation int
-	image      string
-	text       string
-	err        error
-}
 
 func clipboardCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
@@ -87,40 +79,4 @@ func readClipboard(ctx context.Context, directory string) (string, string, error
 	}
 	text, err := clipboard.ReadAll()
 	return "", text, err
-}
-
-func (m model) pasteClipboard() (tea.Model, tea.Cmd) {
-	if m.pasting {
-		return m, nil
-	}
-	directory := m.attachments
-	if dir := m.ctl.AttachmentsDir(); dir != "" {
-		directory = dir
-	}
-	m.pasting = true
-	generation := m.pasteGeneration
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		image, text, err := readClipboard(ctx, directory)
-		return clipboardResult{generation, image, text, err}
-	}
-}
-func (m *model) acceptClipboard(result clipboardResult) tea.Cmd {
-	if result.generation != m.pasteGeneration {
-		if result.image != "" {
-			_ = os.Remove(result.image)
-		}
-		return nil
-	}
-	m.pasting = false
-	if result.err != nil {
-		m.add("error", result.err.Error())
-		return nil
-	}
-	if result.image != "" {
-		result.text = result.image + " "
-	}
-	m.input.InsertString(result.text)
-	return nil
 }

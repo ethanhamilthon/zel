@@ -9,9 +9,6 @@ import (
 	"zel/internal/config"
 )
 
-// showTurnStats controls metadata on answer headers.
-var showTurnStats = true
-
 // accentColors are the accents offered in Settings; the first is the default.
 var accentColors = []struct{ name, hex string }{
 	{"Clay", "#d97757"}, {"Coral", "#ff7f6e"}, {"Rose", "#e06c95"}, {"Pink", "#f38ba8"},
@@ -42,7 +39,13 @@ func accentName(accent string) string {
 
 // applyTheme sets every UI color from [colors]; the TUI has no other hex values
 // except the accent palette and the literal tones of highlighted bash.
+var activeColors config.Colors
+
 func applyTheme(c config.Colors) {
+	if c == activeColors {
+		return
+	}
+	activeColors = c
 	color := func(key string) lipgloss.Color { return lipgloss.Color(c.Get(key)) }
 	bgColor, accentColor, agentColor, userColor = color("bg"), color("accent"), color("agent"), color("user")
 	userHighlight, grayColor, darkGray, errorColor = color("user_highlight"), color("gray"), color("dark_gray"), color("error")

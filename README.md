@@ -29,6 +29,11 @@ Ctrl+K opens the menu for models, sessions and settings. Type `@` for files
 or `#` for prompt completions. Ctrl+D stops the current turn; Ctrl+Q saves
 and quits. Bash calls and other details live in Tracing, not the chat.
 
+The interface uses tcell. Drag text to select and copy it, or use Shift+drag
+for native terminal selection. Click in the input to place the cursor;
+Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Some shortcuts need an
+enhanced keyboard protocol; the Ctrl+K menu works in legacy terminals too.
+
 **No sandbox:** commands run with your user permissions and network access.
 Only use configuration files and tools you trust.
 
@@ -50,6 +55,7 @@ See [configuration examples](docs/examples/) for a starting point.
   Also available in the terminal with `zel docs`.
 - [Examples](docs/examples/): complete configurations and a script tool.
 - [Architecture](docs/ARCHITECTURE.md): project structure and ownership.
+- [0.8.0 release](docs/RELEASE-0.8.0.md): a smaller tcell frontend with a shared editor and direct terminal rendering.
 - [0.7.6 release](docs/RELEASE-0.7.6.md): choice answers in the chat, composer-grade custom answers, steadier updates, completed tokens.
 - [0.7.5 release](docs/RELEASE-0.7.5.md): improvements, compatibility and verification evidence.
 

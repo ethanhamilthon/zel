@@ -5,9 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
-
 	"zel/internal/core"
 )
 
@@ -57,20 +54,6 @@ func infoRows(info core.Info) []menuRow {
 		{"Context:", formatContext(info.Context)},
 		{"Spend:", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
 	}
-}
-
-// infoBody returns the key/value rows of the Info page, keys gray.
-func infoBody(rows []menuRow, w int) []string {
-	if len(rows) > 0 {
-		rows = rows[1:]
-	}
-	key, val := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(agentColor)
-	lines := make([]string, 0, len(rows))
-	for _, r := range rows {
-		k := fmt.Sprintf("%-10s", r.label)
-		lines = append(lines, key.Render(k)+val.Render(ansi.Truncate(r.detail, max(1, w-len(k)), "…")))
-	}
-	return lines
 }
 
 // configLabel lists the zel.toml layers of the session, in merge order.

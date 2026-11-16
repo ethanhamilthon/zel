@@ -1,774 +1,334 @@
 package tui
 
 import (
-	"cmp"
 	"context"
-	"path/filepath"
+	"errors"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-
+	"github.com/atotto/clipboard"
+	"github.com/gdamore/tcell/v2"
+	"zel/internal/config"
 	"zel/internal/core"
 )
 
-type entry = core.Record
-type renderedEntry struct {
-	source   entry
-	width    int
-	maxLines int
-	draft    bool
-	Text     string
-	rows     []string
-	startRow int
+var Version = "dev"
+
+type result struct {
+	kind       string
+	value      any
+	err        error
+	generation int
 }
-type model struct {
-	ctl                       *core.Controller
-	display                   *display
-	events                    *eventQueue
-	input                     textarea.Model
-	pendingSteer, steerSerial uint64
-	pendingText               string
-	viewport                  pager
-	entries                   []entry
-	contextTokens             int64
-	turnIndex                 int
-	completedTokens           map[string]bool // #names and @paths picked from completion lists
-	spans                     []tokenSpan     // the completed tokens of spansValue
-	spansValue                string
-	spansValid                bool
-	sentEntry                 int // 1 + the index of the sent message shown until the agent confirms it; 0 = none
-	statsKey, themeKey        string
-	attachments               string
-	pasteGeneration           int
-	pasting                   bool
-	width, height             int
-	cwd                       string
-	menu                      *menuState
-	failure                   error
-	hideCompletion            bool
-	cache                     []renderedEntry
-	inputValue                string
-	inputWidth, inputHeight   int
-	inputTop                  int
-	layoutValue               string
-	layoutWidth               int
-	layout                    []composerRow
-	startCmd                  tea.Cmd
-	models                    []core.ModelChoice
-	modelsLoading             bool
-	modelsKey                 string
-	modelsAt                  time.Time
-	fileGen, fileDebounceGen  int
-	fileLoading               bool
-	fileCompletions           []string
-	fileSelected              int
-	fileTokenStart            int
-	fileTokenEnd              int
-	fileIndexCache            []string
-	fileIndexCacheTime        time.Time
-	fileIndexCwd              string
-	fileScanCancel            context.CancelFunc
-	fileDismissed             bool
-	fileDismissedValue        string
-	fileDismissedCursor       int
-	promptItems               []string // # completions of the token at the cursor
-	promptStart, promptEnd    int
-	promptSelected            int
-	promptSeq                 int
-	promptPending             int // seq of the expansion in flight; 0 when none
-	promptCancel              context.CancelFunc
-	choice                    *core.Choice // the agent's question; replaces the composer while set
-	choiceSel                 int
-	choiceWriting             bool
-	choiceInput               *textarea.Model
-	tasks                     []core.ActiveTask // running background tasks, one chat row each
-	frameAt                   time.Time
-	dirty                     bool
-	renderPending             bool
-	redrawScheduled           bool
-	pulsing                   bool       // a loader tick is outstanding
-	pulseGen                  uint64     // generation of the outstanding tick
-	history                   screenRows // the chat rows, rebuilt only when an entry, the width or the theme changed
-	historyStale              bool
-	menuPulsing, menuDirty    bool // a menu timer tick is outstanding / the session logged something since the last snapshot
+type cachedRecord struct {
+	source core.Record
+	width  int
+	theme  config.Colors
+	rows   []row
+	plain  bool
+}
+type app struct {
+	screen  tcell.Screen
+	ctl     *core.Controller
+	runtime *core.Runtime
+
+	ctx                                           context.Context
+	cancel                                        context.CancelFunc
+	results                                       chan result
+	records                                       []core.Record
+	cache                                         []cachedRecord
+	input                                         editor
+	menu                                          *menu
+	choice                                        *core.Choice
+	answer                                        editor
+	choiceIndex                                   int
+	writing                                       bool
+	cwd                                           string
+	generation                                    int
+	queued                                        uint64
+	serial                                        uint64
+	queuedText                                    string
+	pending                                       string
+	turnIndex                                     int
+	contextTokens                                 int64
+	scroll                                        int
+	history, historyBase                          []row
+	visibleStart, chatHeight, inputY, inputHeight int
+	choiceFirst, choiceVisible                    int
+	dirty                                         bool
+	failure                                       error
+	busy, pasting, clipboardBusy, operation       bool
+	promptCancel                                  context.CancelFunc
+	promptSerial                                  int
+	paste                                         strings.Builder
+	pasteTarget                                   *editor
+	pasteGeneration                               int
+	models                                        []core.ModelChoice
+	modelProviders                                map[string]core.Provider
+	modelsAt                                      time.Time
+	modelsLoading                                 bool
+	completions                                   list
+	completionStart, completionEnd                int
+	completionKind                                byte
+	completionHidden                              string
+	fileRoot                                      string
+	fileIndex                                     []string
+	fileAt                                        time.Time
+	fileLoading                                   bool
+	tasks                                         []core.ActiveTask
+	selected                                      *selection
+	copyText                                      func(string) error
 }
 
-const (
-	frameInterval = 33 * time.Millisecond
-	renderBudget  = 4 * time.Millisecond
-)
-
-type redraw struct{}
-
-// hasRows reports whether task rows show under the chat; they animate.
-func (m model) hasRows() bool { return len(m.tasks) > 0 }
-
-func newComposer() textarea.Model {
-	input := textarea.New()
-	input.Prompt = ""
-	input.ShowLineNumbers = false
-	input.CharLimit, input.MaxHeight, input.MaxWidth = 0, 0, 0
-	input.SetHeight(1)
-	input.Focus()
-	input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
-	input.FocusedStyle, input.BlurredStyle = composerStyle(), composerStyle()
-	input.Cursor.SetMode(cursor.CursorStatic)
-	// A zero-width marker locates the native terminal cursor after rendering.
-	input.Cursor.Style = lipgloss.NewStyle().Transform(func(s string) string {
-		return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(userHighlight).Render(s)
-	})
-	return input
+// Run owns the screen, not the runtime. Only this goroutine touches UI state.
+func Run(ctx context.Context, a *core.Runtime, cwd string) error {
+	screen, err := tcell.NewScreen()
+	if err != nil {
+		return err
+	}
+	if err = screen.Init(); err != nil {
+		return err
+	}
+	defer screen.Fini()
+	screen.EnablePaste()
+	screen.EnableMouse(tcell.MouseButtonEvents, tcell.MouseDragEvents)
+	screen.SetCursorStyle(tcell.CursorStyleSteadyBar)
+	return runScreen(ctx, a, cwd, screen)
 }
-
-// composerStyle colors the composer: its text matches sent user messages and
-// the line being edited is highlighted.
-func composerStyle() textarea.Style {
-	base := lipgloss.NewStyle().Foreground(userColor)
-	current := lipgloss.NewStyle().Foreground(userHighlight)
-	return textarea.Style{Base: base, CursorLine: current, Text: base, Placeholder: base.Foreground(grayColor), EndOfBuffer: base}
-}
-
-func newModel(a *core.Runtime, cwd string) model {
-	input := newComposer()
-
-	events := newEventQueue()
-	ctl := core.NewController(a, func(e core.Event) { events.Push(e) })
-	linkBase = cwd
-	m := model{ctl: ctl, events: events, input: input, viewport: pager{Width: 80, Height: 24}, width: 80, height: 24, cwd: cwd}
-	if home, err := core.ZelHome(cwd); err == nil {
-		m.attachments = filepath.Join(home, "attachments")
+func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Screen) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	q := newEventQueue()
+	defer q.Close()
+	m := &app{screen: screen, runtime: a, ctx: ctx, cancel: cancel, cwd: cwd, results: make(chan result, 32), dirty: true}
+	m.copyText = clipboard.WriteAll
+	m.ctl = core.NewController(a, q.Push)
+	defer func() { cancel(); m.cancelPrompt(); m.ctl.Close() }()
+	if s, err := m.ctl.Session(); err == nil {
+		m.records = s.Records
+		m.contextTokens = s.Context
 	}
-	if session, err := ctl.Session(); err == nil {
-		m.entries, m.contextTokens = session.Records, session.Context
+	m.turnIndex = len(m.records)
+	a.OnChoiceChanged(func() { m.post(result{kind: "choice"}) })
+	defer a.OnChoiceChanged(nil)
+	a.OnSubagentsChanged(func() { m.post(result{kind: "tasks"}) })
+	defer a.OnSubagentsChanged(nil)
+	m.syncChoice()
+	m.tasks = m.ctl.ActiveTasks()
+	keyboard := make(chan tcell.Event, 64)
+	quit := make(chan struct{})
+	defer close(quit)
+	go screen.ChannelEvents(keyboard, quit)
+	ticker := time.NewTicker(33 * time.Millisecond)
+	defer ticker.Stop()
+	m.fetchModels()
+	if len(m.ctl.Settings().Providers) == 0 {
+		m.providerForm("")
 	}
-	m.tasks = ctl.ActiveTasks()
-	m.releaseCommittedTrace()
-	m.refresh(true)
-	if len(ctl.Settings().Providers) == 0 {
-		m.menu = &menuState{}
-		m.openProviderForm("", true)
-	} else if ctl.Settings().Model == "" {
-		m.menu = &menuState{page: menuModel}
-	}
-	return m
-}
-
-func (m model) Init() tea.Cmd {
-	return tea.Batch(m.startCmd, func() tea.Msg { return prefetchModels{} }, m.ensureMenuPulse())
-}
-func (m *model) resizeInput() {
-	value, width, height := m.input.Value(), max(1, m.width), max(1, m.height-2)
-	if m.inputWidth == width && m.inputHeight == height && m.inputValue == value {
-		return
-	}
-	m.inputWidth, m.inputHeight, m.inputValue = width, height, value
-	fitTextarea(&m.input, width, height)
-}
-
-// fitTextarea sets the width of input and grows its height to its wrapped
-// lines, at most maxHeight.
-func fitTextarea(input *textarea.Model, width, maxHeight int) {
-	input.SetWidth(max(1, width))
-	lines := 0
-	for _, line := range strings.Split(input.Value(), "\n") {
-		lines += len(wrapRows([]rune(line), input.Width()))
-	}
-	input.SetHeight(min(max(1, maxHeight), max(1, lines)))
-}
-
-// updateInput runs the textarea update with its maximum height.
-// A cursor that lands inside a completed token moves to its edge.
-func (m *model) updateInput(msg tea.Msg) tea.Cmd {
-	before := m.composerCursorOffset()
-	cmd := updateTextarea(&m.input, msg, m.height-2)
-	m.snapCursor(before)
-	m.inputValue, m.inputWidth = "\x00", 0
-	return cmd
-}
-
-// updateTextarea runs the textarea update with its maximum height. The textarea
-// scrolls its viewport to the cursor during Update using its current height, so
-// with a stale smaller height an inserted newline would scroll earlier lines out
-// of view before the height is grown.
-func updateTextarea(input *textarea.Model, msg tea.Msg, maxHeight int) tea.Cmd {
-	previous := input.Height()
-	input.SetHeight(max(1, maxHeight))
-	var cmd tea.Cmd
-	*input, cmd = input.Update(msg)
-	input.SetHeight(previous)
-	return cmd
-}
-
-// syncTheme applies [colors] when they changed (a menu or hot reload); it
-// reports whether they did, so the caller redraws.
-func (m *model) syncTheme() bool {
-	colors, _ := m.ctl.Appearance()
-	key := strings.Join(colors[:], " ")
-	if key == m.themeKey {
-		return false
-	}
-	m.themeKey, m.cache, m.menuDirty = key, nil, true
-	applyTheme(colors)
-	m.input.FocusedStyle, m.input.BlurredStyle = composerStyle(), composerStyle()
-	// The textarea draws through a pointer to one of these, taken by Focus/Blur.
-	if m.input.Focused() {
-		m.input.Focus()
-	} else {
-		m.input.Blur()
-	}
-	return true
-}
-
-func (m *model) refresh(follow bool) {
-	m.syncTheme()
-	m.resizeInput()
-	m.viewport.Width = max(1, m.width)
-	m.viewport.Height = max(1, m.height)
-	// Timeline rows already begin at the first content row; never reserve a header margin.
-	m.viewport.TopMargin = 0
-	head, tail := m.timelineSegments(renderBudget)
-	m.viewport.SetSegments(head, tail)
-	m.frameAt, m.dirty = time.Now(), false
-	if follow {
-		m.viewport.GotoBottom()
-	}
-}
-
-// add keeps messages in chat and sends all other client output to Tracing.
-func (m *model) add(kind, text string) {
-	switch kind {
-	case "assistant", "user":
-		m.entries = core.ApplyEvent(m.entries, core.TurnEvent{Kind: kind, Text: text})
-		m.refresh(false)
-	default:
-		m.ctl.LogEvent(kind, text)
-		m.menuDirty = true
-	}
-}
-
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	hadMouse := m.wantsMouse()
-	themeChanged := m.syncTheme()
-	if themeChanged { // hot reload changed the colors: redraw everything with them
-		m.refresh(m.viewport.AtBottom())
-	}
-	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
-		m.syncSteer()
-	}
-	next, cmd := m.update(msg)
-	n, ok := next.(model)
-	if !ok {
-		return next, cmd
-	}
-	if wants := n.wantsMouse(); wants != hadMouse {
-		mouse := tea.DisableMouse
-		if wants {
-			mouse = tea.EnableMouseCellMotion
-		}
-		cmd = tea.Batch(cmd, mouse)
-	}
-	if pulse := n.ensureMenuPulse(); pulse != nil {
-		cmd = tea.Batch(cmd, pulse)
-	}
-	draw := true
-	switch v := msg.(type) {
-	case core.Event:
-		draw = v.Kind != "agent" || n.menu != nil || n.frameAt != m.frameAt
-	case redraw:
-		draw = n.frameAt != m.frameAt
-	case workingTick:
-		draw = n.frameAt != m.frameAt
-	case menuTick:
-		draw = false // the asynchronous snapshot triggers its own draw
-	case tea.MouseMsg:
-		if v.Action == tea.MouseActionMotion {
-			draw = false
-		}
-	}
-	if n.display != nil && (draw || themeChanged) {
-		n.display.draw(n.render(), n.width, n.height)
-	}
-
-	if (n.dirty || n.renderPending) && !n.redrawScheduled {
-		n.redrawScheduled = true
-		wait := max(time.Millisecond, frameInterval-time.Since(n.frameAt))
-		cmd = tea.Batch(cmd, tea.Tick(wait, func(time.Time) tea.Msg { return redraw{} }))
-	}
-	return n, cmd
-}
-
-func (m *model) stop(kind, text string) (tea.Model, tea.Cmd) {
-	m.add(kind, text)
-	m.refresh(true)
-	return *m, nil
-}
-
-func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	msg = normalizeTerminalKey(msg)
-	follow := m.viewport.AtBottom()
-	switch v := msg.(type) {
-	case fileDebounceMsg:
-		return m.handleFileDebounce(v)
-	case fileScanMsg:
-		return m.handleFileScan(v)
-	case clipboardResult:
-		return m, m.edit(true, func() tea.Cmd { return m.acceptClipboard(v) })
-	case prefetchModels:
-		return m, m.fetchModels()
-	case modelsLoaded:
-		if !m.modelsLoading || v.key != m.modelsKey {
-			return m, nil
-		}
-		m.modelsLoading = false
-		var failed []string
-		for name, err := range v.errs {
-			failed = append(failed, name+": "+err)
-		}
-		sort.Strings(failed)
-		if m.menu != nil {
-			switch {
-			case v.err != nil:
-				m.menu.status = v.err.Error()
-			case len(v.models) == 0 && len(failed) > 0:
-				m.menu.status = "Could not list models: " + strings.Join(failed, "; ")
-			case len(v.models) == 0:
-				m.menu.status = "No models returned by providers"
-			case len(failed) > 0:
-				m.menu.status = "Some providers failed to list models: " + strings.Join(failed, "; ")
-			}
-		}
-		if len(v.models) == 0 && m.models != nil {
-			m.refresh(true)
-			return m, nil // keep the cached list when a refresh fails
-		}
-		current := m.ctl.Settings().Provider
-		m.models, m.modelsAt = v.models, time.Now()
-		slices.SortStableFunc(m.models, func(a, b core.ModelChoice) int {
-			rank := func(c core.ModelChoice) int { return map[bool]int{true: 0, false: 1}[c.Provider == current] }
-			return cmp.Compare(rank(a), rank(b))
-		})
-		m.refresh(true)
-		return m, nil
-	case menuTick:
-		m.menuPulsing = false
-		cmd := m.menuSnapshotCmd()
-		return m, tea.Batch(cmd, m.ensureMenuPulse())
-	case menuSnapshotMsg:
-		m.applyMenuSnapshot(v.snap)
-		return m, nil
-	case redraw:
-		m.redrawScheduled = false
-		if m.dirty || m.renderPending {
-			m.refresh(follow)
-		}
-		if m.hasRows() {
-			return m, m.pulse()
-		}
-		return m, nil
-	case workingTick:
-		if v.gen != m.pulseGen || !m.pulsing {
-			return m, nil // a tick of an earlier timer
-		}
-		m.pulsing = false
-		if m.ctl == nil {
-			return m, nil
-		}
-		if !m.ctl.Status().Busy && !m.hasRows() {
-			m.refresh(follow)
-			return m, nil
-		}
-		m.refresh(follow)
-		return m, m.pulse()
-	case subagentsChanged:
-		m.tasks = m.ctl.ActiveTasks()
-		m.refresh(follow)
-		if m.hasRows() {
-			return m, m.pulse()
-		}
-		return m, nil
-	case choiceChanged:
-		m.syncChoice()
-		return m, nil
-	case promptExpanded:
-		return m.finishPrompt(v)
-	case tea.WindowSizeMsg:
-		m.width, m.height = max(1, v.Width), max(1, v.Height)
-		m.refresh(follow)
-		return m, nil
-	case tea.MouseMsg:
-		if m.menu != nil {
-			return m.menuMouse(v)
-		}
-		if m.choiceWriting && m.choice != nil && v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonLeft {
-			return m, m.clickChoiceInput(v.X, v.Y)
-		}
-		if v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonWheelUp {
-			return m, m.scrollUp(3)
-		}
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	case linkOpened:
-		if v.err != nil {
-			return m.stop("error", "Could not open "+v.target+": "+v.err.Error())
-		}
-		return m, nil
-	case core.Event:
-		return m.handleControl(v)
-	case menuShortcut:
-		if m.menu != nil && m.menu.page == menuForm {
-			return m, nil
-		}
-		return m.openMenuPage(menuPage(v))
-	case tea.KeyMsg:
-		if m.choice != nil && m.menu == nil {
-			if next, cmd, handled := m.choiceKey(v); handled {
-				return next, cmd
-			}
-		}
-		if m.promptPending != 0 {
-			switch v.String() {
-			case "ctrl+d":
-				// The composer stays read-only, but Ctrl+D still stops the active turn
-				// and cancels the expansion: a slow completion never holds a turn.
-				m.cancelPrompt()
-				if m.ctl.Status().Busy {
-					m.requestCancel()
+	m.draw()
+	for {
+		select {
+		case <-ctx.Done():
+			return m.failure
+		case <-m.ctl.Closed():
+			return m.failure
+		case <-q.wake:
+			for range 256 {
+				e, ok := q.TryPop()
+				if !ok {
+					break
 				}
-				m.refresh(true)
-				return m, nil
-			case "ctrl+q":
-				// quit below
-			default:
-				return m, nil // the composer is read-only while a prompt expands
+				m.control(e)
 			}
-		}
-		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
-			return m.formKey(v)
-		}
-		// Terminals paste only text: an image-only clipboard arrives as an
-		// empty bracketed paste (foot's Ctrl+Shift+V, Hyprland's Cmd+V).
-		if v.Paste && len(v.Runes) == 0 {
-			if m.menu != nil {
-				return m, nil
-			}
-			return m.pasteClipboard()
-		}
-		if v.String() == "ctrl+t" {
-			return m.openMenuPage(menuTracing)
-		}
-		if v.String() == "ctrl+n" {
-			return m.switchSession("")
-		}
-		if v.String() == "ctrl+r" {
-			return m.openMenuPage(menuResume)
-		}
-		if m.menu == nil && !v.Paste && v.Type == tea.KeyRunes && string(v.Runes) == "/" && m.input.Value() == "" && m.ctl.Settings().UI.SlashMenu {
-			cmd := m.openMenu()
-			return m, cmd
-		}
-		if v.String() == "ctrl+k" {
-			if m.menu != nil {
-				return m.closeMenu(), nil
-			}
-			cmd := m.openMenu()
-			return m, cmd
-		}
-		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
-			return m.menuKey(v)
-		}
-		switch v.String() {
-		case "ctrl+v":
-			return m.pasteClipboard()
-		case "ctrl+c":
-			// Copying belongs to the terminal, not the application.
-			return m, nil
-		case "ctrl+d":
-			if m.ctl.Status().Busy {
-				m.requestCancel()
-				return m, nil
-			}
-			return m, nil
-		case "ctrl+q":
-			return m.quit()
-		case "esc":
-			if m.fileLoading || m.hasFileCompletions() {
-				m.dismissFileCompletion()
-				m.refresh(true)
-				return m, nil
-			}
-			m.hideCompletion = true
-			m.refresh(true)
-			return m, nil
-		case "pgup", "pgdown", "ctrl+up", "ctrl+down", "ctrl+home", "ctrl+end":
-			switch v.String() {
-			case "ctrl+home":
-				m.viewport.GotoTop()
-			case "ctrl+end":
-				m.viewport.GotoBottom()
-			case "ctrl+up":
-				m.viewport.ScrollUp(1)
-			case "ctrl+down":
-				m.viewport.ScrollDown(1)
-			default:
-				m.viewport, _ = m.viewport.Update(msg)
-			}
-			return m, nil
-		case "tab":
-			if m.hasPromptCompletions() {
-				cmd := m.acceptPromptCompletion()
-				m.refresh(true)
-				return m, cmd
-			}
-			if m.hasFileCompletions() {
-				cmd := m.completeFile(true)
-				m.refresh(true)
-				return m, cmd
-			}
-		case "up", "down":
-			delta := 1
-			if v.String() == "up" {
-				delta = -1
-			}
-			if m.hasPromptCompletions() {
-				n := len(m.promptItems)
-				m.promptSelected = (m.promptSelected + delta + n) % n
-				m.refresh(true)
-				return m, nil
-			}
-			if m.hasFileCompletions() {
-				n := len(m.fileCompletions)
-				m.fileSelected = (m.fileSelected + delta + n) % n
-				m.refresh(true)
-				return m, nil
-			}
-			if v.String() == "up" && m.input.Value() == "" && len(m.ctl.Status().Queued) > 0 {
-				in, err := m.ctl.Recall()
-				if err != nil {
-					return m.reject(err)
-				}
-				if in != nil {
-					m.setComposer(in.Text)
-					m.input.CursorEnd()
-					m.refresh(true)
-					return m, nil
+			// A bounded drain keeps keyboard input responsive during large streams.
+			q.mu.Lock()
+			more := len(q.items) > 0 || q.read < q.written
+			q.mu.Unlock()
+			if more {
+				select {
+				case q.wake <- struct{}{}:
+				default:
 				}
 			}
-			if v.String() == "up" {
-				return m, m.scrollUp(1)
+		case r := <-m.results:
+			m.accept(r)
+		case e, ok := <-keyboard:
+			if !ok {
+				return m.failure
 			}
-			return m, m.scrollDown(1)
-		case "enter":
-			if m.pasting {
-				return m.stop("notice", "Clipboard read in progress; wait before submitting.")
+			switch e := e.(type) {
+			case *tcell.EventKey:
+				m.key(e)
+			case *tcell.EventMouse:
+				m.mouse(e)
+			case *tcell.EventResize:
+				m.selected = nil
+				screen.Sync()
+				m.dirty = true
+			case *tcell.EventPaste:
+				if e.Start() {
+					m.pasting = true
+					m.paste.Reset()
+					m.pasteTarget = m.activeEditor()
+					m.pasteGeneration = m.generation
+				}
+				if e.End() {
+					m.pasting = false
+					if m.pasteTarget != nil && m.pasteGeneration == m.generation {
+						m.pasteTarget.insert(m.paste.String())
+						if m.pasteTarget == &m.input {
+							m.composerChanged()
+							m.updateCompletions()
+						}
+					}
+					m.pasteTarget = nil
+					m.dirty = true
+				}
 			}
-			if m.hasPromptCompletions() && !m.promptIsComplete() {
-				cmd := m.acceptPromptCompletion()
-				m.refresh(true)
-				return m, cmd
+		case <-ticker.C:
+			if m.menu != nil && !m.menu.loading && time.Since(m.menu.refreshed) > time.Second {
+				switch m.menu.page {
+				case "sessions", "trace", "info":
+					m.loadPage()
+				}
 			}
-			if m.hasFileCompletions() {
-				cmd := m.acceptFileCompletion()
-				m.refresh(true)
-				return m, cmd
+			status := m.ctl.Status()
+			if status.Busy || len(m.tasks) > 0 {
+				m.dirty = true
 			}
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
-				return m, nil
+			if status.Busy != m.busy {
+				m.busy = status.Busy
+				m.dirty = true
 			}
-			if m.ctl.HasPromptTokens(text) {
-				return m.expandPrompt(text)
+			if m.dirty {
+				m.draw()
 			}
-			return m.sendInput(core.Input{Text: text})
 		}
-		return m, m.edit(follow, func() tea.Cmd {
-			if cmd, ok := m.tokenKey(v); ok {
-				return cmd
-			}
-			return m.updateInput(msg)
-		})
 	}
-	if m.choice != nil && m.choiceWriting && m.menu == nil {
-		cmd := m.updateChoiceInput(msg)
-		m.refresh(true)
-		return m, cmd
+}
+func (m *app) post(r result) {
+	select {
+	case m.results <- r:
+	case <-m.ctx.Done():
 	}
+}
+func (m *app) work(kind string, fn func() (any, error)) {
+	generation := m.generation
+	go func() { value, err := fn(); m.post(result{kind: kind, value: value, err: err, generation: generation}) }()
+}
+func (m *app) notice(err error) {
+	if err != nil {
+		m.records = append(m.records, core.Record{Kind: "error", Text: core.Redact(m.ctl.Settings(), err.Error())})
+		m.dirty = true
+	}
+}
+func (m *app) activeEditor() *editor {
 	if m.menu != nil {
-		if m.menu.page == menuForm {
-			var cmd tea.Cmd
-			m.menu.form.input, cmd = m.menu.form.input.Update(msg)
-			return m, cmd
+		if m.menu.form != nil {
+			return &m.menu.form.input
 		}
-		if searchableMenu(m.menu.page) {
-			cmd := m.updateMenuSearch(msg)
-			return m, cmd
-		}
-		return m, nil
+		return &m.menu.search
 	}
-	return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
-}
-
-// scrollUp traverses the composer's visual rows before scrolling chat.
-func (m *model) scrollUp(rows int) tea.Cmd {
-	return m.edit(false, func() tea.Cmd {
-		var cmds []tea.Cmd
-		for range rows {
-			if m.input.Line() == 0 && m.input.LineInfo().RowOffset == 0 {
-				m.viewport.ScrollUp(1)
-			} else {
-				cmds = append(cmds, m.updateInput(tea.KeyMsg{Type: tea.KeyUp}))
-			}
-		}
-		return tea.Batch(cmds...)
-	})
-}
-
-// scrollDown returns to the composer before moving its cursor down.
-func (m *model) scrollDown(rows int) tea.Cmd {
-	return m.edit(false, func() tea.Cmd {
-		var cmds []tea.Cmd
-		for range rows {
-			if !m.viewport.AtBottom() {
-				m.viewport.ScrollDown(1)
-			} else {
-				cmds = append(cmds, m.updateInput(tea.KeyMsg{Type: tea.KeyDown}))
-			}
-		}
-		return tea.Batch(cmds...)
-	})
-}
-
-func (m *model) edit(follow bool, change func() tea.Cmd) tea.Cmd {
-	valBefore, curBefore := m.input.Value(), m.composerCursorOffset()
-	cmd := change()
-	changed := m.input.Value() != valBefore
-	moved := m.composerCursorOffset() != curBefore
-	if changed {
-		m.withdrawSteer()
-		m.hideCompletion = false
+	if m.choice != nil && m.writing {
+		return &m.answer
 	}
-	var fileCmd tea.Cmd
-	if changed || moved {
-		m.fileDismissed = false
-		fileCmd = m.checkFileCompletion()
-		m.checkPromptCompletion()
-	}
-	m.refresh(follow || changed)
-	return tea.Batch(cmd, fileCmd)
+	return &m.input
 }
-
-// View is a placeholder at runtime, where display draws render's frames itself.
-func (m model) View() string {
-	if m.display != nil {
-		return displayFrame
+func (m *app) syncChoice() {
+	next := m.ctl.PendingChoice()
+	if next == nil || m.choice == nil || next.ID != m.choice.ID {
+		m.choiceIndex = 0
+		m.writing = false
+		m.answer = editor{limit: 4096}
 	}
-	return m.render()
+	m.choice = next
+	m.dirty = true
 }
-
-func (m model) render() string {
-	if m.menu != nil {
-		return m.menuView()
-	}
-	return frame(strings.Split(m.viewport.View(), "\n"))
-}
-
-func (m model) sendInput(input core.Input) (tea.Model, tea.Cmd) {
-	return m.deliver(input, m.input.Value())
-}
-
-// deliver sends input to the agent, or queues it while a turn runs. draft is the
-// composer text the input came from: it stays in the composer while the input is
-// queued (editing withdraws it), and is cleared once the agent takes the input.
-func (m model) deliver(input core.Input, draft string) (tea.Model, tea.Cmd) {
-	if m.pendingSteer != 0 {
-		return m, nil
-	}
-	m.steerSerial++
-	input.QueueID = m.steerSerial
-	if err := m.ctl.Input(input); err != nil {
-		return m.reject(err)
-	}
-	if slices.ContainsFunc(m.ctl.Status().Queued, func(in core.Input) bool { return in.QueueID == input.QueueID }) {
-		m.pendingSteer, m.pendingText = input.QueueID, draft
-	} else {
-		m.input.Reset()
-		m.showSent(input.Display())
-	}
-	m.hideCompletion = false
-	m.dismissFileCompletion()
-	m.refresh(true)
-	return m, nil
-}
-
-func (m *model) requestCancel() {
-	m.ctl.Stop()
-	m.refresh(false)
-}
-
-// syncSteer clears the composer when the agent has accepted its queued input.
-func (m *model) syncSteer() {
-	if m.pendingSteer == 0 {
-		return
-	}
-	for _, in := range m.ctl.Status().Queued {
-		if in.QueueID == m.pendingSteer {
+func (m *app) control(e core.Event) {
+	m.dirty = true
+	switch e.Kind {
+	case "started":
+		m.turnIndex = len(m.records)
+	case "agent":
+		if e.Agent == nil || e.Agent.Kind == "error" {
 			return
 		}
+		if e.Agent.Kind == "user" {
+			m.syncQueued()
+			m.pending = ""
+		}
+		m.records = core.ApplyEvent(m.records, *e.Agent)
+		if meta := e.Agent.Meta; meta != nil && meta.ContextInput != nil {
+			m.contextTokens = *meta.ContextInput
+		}
+	case "notice", "error":
+		m.ctl.LogEvent(e.Kind, e.Text)
+	case "fatal":
+		m.failure = errors.New(e.Text)
+		m.cancel()
+	case "session":
+		m.generation++
+		m.operation = false
+		m.modelsLoading = false
+		m.records = slices.Clone(e.Session.Records)
+		m.contextTokens = e.Session.Context
+		m.cache = nil
+		m.scroll = 0
+		m.turnIndex = len(m.records)
+		m.input = editor{}
+		m.pending = ""
+		m.queued = 0
+		m.fileRoot = ""
+		m.fileIndex = nil
+		m.fileLoading = false
+		m.clipboardBusy = false
+		m.resetCompletions()
+		m.selected = nil
+		clear(pathTargets)
+		mdStable.key = nil
+	case "done":
+		m.pending = ""
+		m.contextTokens = e.Context
+		if e.Error != "" && !slices.ContainsFunc(m.records[min(m.turnIndex, len(m.records)):], func(r core.Record) bool { return r.Kind == "turn_end" }) {
+			m.notice(errors.New(e.Error))
+		}
+		if len(e.Unsent) > 0 {
+			var parts []string
+			for _, in := range e.Unsent {
+				if in.QueueID == m.queued && m.input.text == m.queuedText {
+					m.input.set("")
+				}
+				parts = append(parts, in.Text)
+			}
+			if m.input.text != "" {
+				parts = append(parts, m.input.text)
+			}
+			m.input.set(strings.Join(parts, "\n\n"))
+			m.queued = 0
+		}
+		m.pruneRecords()
 	}
-	m.pendingSteer = 0
-	if m.input.Value() == m.pendingText {
-		m.input.Reset()
-	}
-	if m.ctl.Status().Busy {
-		m.showSent(m.pendingText)
-	}
-	m.pendingText = ""
-	m.refresh(false)
+	m.tasks = m.ctl.ActiveTasks()
 }
-
-// showSent keeps a sent message in the chat from the moment it leaves the
-// composer; the agent's own copy of it replaces this one when it arrives.
-func (m *model) showSent(text string) {
-	if text = strings.TrimSpace(text); text == "" {
-		return
-	}
-	m.dropSent()
-	m.entries = append(m.entries, entry{Kind: "user", Text: text, Preview: true})
-	m.sentEntry = len(m.entries)
-}
-
-// confirmSent puts the agent's copy of a sent message in its shown place; it
-// reports false when no sent message waits for it.
-func (m *model) confirmSent(e core.TurnEvent) bool {
-	i := m.sentEntry - 1
-	if i < 0 || i >= len(m.entries) || e.Kind != "user" {
-		return false
-	}
-	m.sentEntry = 0
-	m.entries[i] = entry{Kind: "user", Text: e.Text, ID: e.ID, Meta: e.Meta}
-	return true
-}
-
-// dropSent removes a sent message the agent never took (a hook blocked it).
-func (m *model) dropSent() {
-	if i := m.sentEntry - 1; i >= 0 && i < len(m.entries) && m.entries[i].Kind == "user" && m.entries[i].Preview {
-		m.entries = slices.Delete(m.entries, i, i+1)
-		if m.turnIndex > i {
-			m.turnIndex--
+func (m *app) pruneRecords() {
+	kept := m.records[:0]
+	cached := m.cache[:0]
+	for i, r := range m.records {
+		switch r.Kind {
+		case "user", "assistant", "choice", "compaction", "turn_end", "error":
+			kept = append(kept, r)
+			if i < len(m.cache) {
+				cached = append(cached, m.cache[i])
+			} else {
+				cached = append(cached, cachedRecord{})
+			}
 		}
 	}
-	m.sentEntry = 0
-}
-
-func (m *model) withdrawSteer() {
-	if m.pendingSteer != 0 {
-		m.ctl.Withdraw(m.pendingSteer)
+	clear(m.records[len(kept):])
+	m.records = kept
+	if len(cached) < len(m.cache) {
+		clear(m.cache[len(cached):])
 	}
-	m.pendingSteer, m.pendingText = 0, ""
+	m.cache = cached
 }

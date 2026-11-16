@@ -1,0 +1,41 @@
+t20 done verify installed 0.8.0 22.9s exit 0
+$ /tmp/zel-080-smoke/venv/bin/python docs/releases/0.8.0/verify-terminal.py /Users/yen/.local/bin/zel /tmp/zel-080-evidence
+PASS tcell enters the alternate screen
+PASS bracketed multiline paste is editable
+PASS Unicode message reaches provider
+PASS model list is searchable
+PASS effort picker opens
+PASS model selection is applied
+PASS prompt suggestions open
+PASS prompt completion expands before sending
+PASS quoted file suggestion opens
+PASS paths with spaces complete as one token
+PASS choice card opens
+PASS custom answer uses the shared editor
+PASS mouse places the custom-answer cursor
+PASS custom answer notification reaches provider
+PASS answered question remains in chat
+PASS preset question opens
+PASS numeric preset answer works
+PASS cancel question opens
+PASS Esc cancels a question
+PASS formatted stream starts
+PASS formatted stream completes
+PASS provider receives the decoded image
+PASS running background task is visible
+PASS background completion notification arrives
+PASS headless child agent runs
+PASS tracing opens
+PASS trace entry opens
+PASS terminal resize retains the session
+PASS slow stream begins
+PASS sending during a turn queues the draft
+PASS editing a queued draft withdraws it
+PASS Ctrl+D cancels and displays the result
+PASS provider error is visible
+PASS new turn works after an error
+PASS settings menu opens
+PASS setting editor opens
+PASS setting persists through the shared form
+PASS clean quit restores terminal modes
+PASS saved image and answers survive resume
