@@ -2,7 +2,7 @@ package core
 
 import (
 	"context"
-	"fmt"
+
 	"sort"
 	"strings"
 	"time"
@@ -156,5 +156,3 @@ func (s *session) expandPrompt(parent context.Context, text string) (string, err
 	b.WriteString(string(runes[pos:]))
 	return b.String(), nil
 }
-
-var _ = fmt.Sprint

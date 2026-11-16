@@ -32,7 +32,7 @@ func TestFreshStateEnvironmentAndBASHENV(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("BASH_ENV"), []byte("echo rc-ran\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
+	r := &commandFixture{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
 	first := execute(r, context.Background(), "x=1; cd /; echo $ZEL_SESSION_ID ${PAGER}", 5*time.Second, 0)
 	second := execute(r, context.Background(), "echo \"[$x]\" $PWD", 5*time.Second, 0)
 	if first.Output != "s1 cat\n" || strings.Contains(first.Output, "rc-ran") {
@@ -57,7 +57,7 @@ func TestExitCodeAndTimeoutKillsGroup(t *testing.T) {
 func TestCancellationKillsProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	r := &Runner{Dir: t.TempDir()}
+	r := &commandFixture{Dir: t.TempDir()}
 	result := execute(r, ctx, "sleep 30", 10*time.Second, 0)
 	if result.ExitCode != 130 {
 		t.Fatalf("cancel: %+v", result)
@@ -67,7 +67,7 @@ func TestCancellationKillsProcessGroup(t *testing.T) {
 func TestBackgroundDescendantsDoNotSurviveCall(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
-	r := &Runner{Dir: dir}
+	r := &commandFixture{Dir: dir}
 	result := execute(r, context.Background(), "(sleep 0.5; touch marker) >/dev/null 2>&1 &", 5*time.Second, 0)
 	if result.ExitCode != 0 {
 		t.Fatalf("call: %+v", result)
@@ -81,7 +81,7 @@ func TestBackgroundDescendantsDoNotSurviveCall(t *testing.T) {
 func TestPipeHoldingDescendantIsKilled(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
-	r := &Runner{Dir: dir}
+	r := &commandFixture{Dir: dir}
 	start := time.Now()
 	result := execute(r, context.Background(), "(sleep 1; touch marker) &", 5*time.Second, 0)
 	if result.ExitCode != 0 || time.Since(start) > 4*time.Second {
@@ -133,7 +133,7 @@ func TestCommandDiesWithOwner(t *testing.T) {
 }
 
 func TestOutputBufferKeepsHeadAndTail(t *testing.T) {
-	b := newOutputBuffer(10)
+	b := NewOutputBuffer(10)
 	for _, chunk := range []string{"0123", "456789", "abcdefghij", "klmnopqrst"} {
 		b.Write([]byte(chunk))
 	}
@@ -145,9 +145,9 @@ func TestOutputBufferKeepsHeadAndTail(t *testing.T) {
 }
 
 func TestOutputBufferWithinLimitAndUnlimitedAreExact(t *testing.T) {
-	short := newOutputBuffer(64)
+	short := NewOutputBuffer(64)
 	short.Write([]byte("short output"))
-	unlimited := newOutputBuffer(0)
+	unlimited := NewOutputBuffer(0)
 	long := strings.Repeat("x", 5000)
 	unlimited.Write([]byte(long))
 	if short.Text() != "short output" || unlimited.Text() != long {
@@ -165,9 +165,9 @@ func TestOutputBufferKeepsMultibyteStraddlingHeadTailSplit(t *testing.T) {
 		{6, "ab€"},
 		{8192, strings.Repeat("x", 4095) + "€"},
 	} {
-		whole := newOutputBuffer(tc.limit)
+		whole := NewOutputBuffer(tc.limit)
 		whole.Write([]byte(tc.text))
-		chunked := newOutputBuffer(tc.limit)
+		chunked := NewOutputBuffer(tc.limit)
 		for _, c := range []byte(tc.text) {
 			chunked.Write([]byte{c})
 		}
@@ -216,15 +216,49 @@ func decodePreview(t *testing.T, img Image) (image.Image, string, []byte) {
 	return preview, format, data
 }
 
-func run(t *testing.T, command string, timeout time.Duration, limit int) Result {
+func run(t *testing.T, command string, timeout time.Duration, limit int) commandResult {
 	t.Helper()
-	r := &Runner{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
+	r := &commandFixture{Dir: t.TempDir(), Env: func() map[string]string { return map[string]string{"ZEL_SESSION_ID": "s1"} }}
 	return execute(r, context.Background(), command, timeout, limit)
 }
 
-func execute(r *Runner, ctx context.Context, command string, timeout time.Duration, limit int) Result {
-	result, _ := r.Run(ctx, command, timeout, limit, nil)
-	return result
+type commandFixture struct {
+	Dir string
+	Env func() map[string]string
+}
+type commandResult struct {
+	Output   string
+	ExitCode int
+	Error    bool
+}
+
+func execute(r *commandFixture, ctx context.Context, command string, timeout time.Duration, limit int) commandResult {
+	child, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var env map[string]string
+	if r.Env != nil {
+		env = r.Env()
+	}
+	cmd := Command(child, r.Dir, env, command)
+	buffer := NewOutputBuffer(limit)
+	cmd.Stdout, cmd.Stderr = buffer, buffer
+	err := cmd.Start()
+	if err == nil {
+		err = Reap(cmd)
+	}
+	code := 0
+	if err != nil {
+		code = 1
+		if e, ok := err.(*exec.ExitError); ok {
+			code = e.ExitCode()
+		}
+	}
+	if ctx.Err() != nil {
+		code = 130
+	} else if child.Err() != nil {
+		code = 124
+	}
+	return commandResult{buffer.Text(), code, code != 0}
 }
 
 func TestOutputBudgetFourKiBAndLargeWrites(t *testing.T) {

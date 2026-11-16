@@ -73,7 +73,10 @@ type session struct {
 	children      map[string]SubagentRun // zel -p children that run now, by session ID
 	childPIDs     map[string]int
 	hookWG        sync.WaitGroup // async hooks
-	outputMu      sync.Mutex     // numbers the files of cut bash outputs
+	hookMu        sync.Mutex
+	hookCtx       context.Context
+	stopHooks     context.CancelFunc
+	outputMu      sync.Mutex // numbers the files of cut bash outputs
 	bashMu        sync.Mutex
 	bashDir       string // zel cd: where bash calls and tasks start; empty = dir
 	turning       atomic.Bool
@@ -181,7 +184,9 @@ func New(dir string, opts Options) (*Runtime, error) {
 }
 
 func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) *session {
+	hookCtx, stopHooks := context.WithCancel(context.Background())
 	return &session{
+		hookCtx: hookCtx, stopHooks: stopHooks,
 		opts:    a.opts,
 		home:    a.home,
 		dir:     dir,
@@ -201,7 +206,6 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 }
 
 // ReloadConfig reads the zel.toml layers again; the session's model selection stays.
-func (a *Runtime) ReloadConfig() error { return a.session().loadConfig() }
 
 func raw(v any) json.RawMessage { data, _ := json.Marshal(v); return data }
 

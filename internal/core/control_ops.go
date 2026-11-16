@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,12 @@ func (c *Controller) Input(input Input) error {
 			err = fail(CodeBusy, "Session changed while preparing the input; please retry.")
 		case c.shut:
 			err = fail(CodeFailed, "the session is closed")
+		case c.changing:
+			if c.switching {
+				err = fail(CodeBusy, "Session is changing; please retry.")
+			} else {
+				err = c.queueLocked(input)
+			}
 		case strings.TrimSpace(input.Text) == "":
 			err = fail(CodeInvalid, "input requires text or images")
 		case c.active != nil:
@@ -74,6 +81,13 @@ func (c *Controller) Stop() {
 
 func (c *Controller) Quit() (closed bool, err error) {
 	c.view(func() {
+		if c.closing {
+			return
+		}
+		if c.changing {
+			c.quitPending = true
+			return
+		}
 		if c.active != nil {
 			c.quitPending = true
 			c.active.cancelled = true
@@ -91,48 +105,47 @@ func (c *Controller) NewSession() error { return c.switchRequest("new", "") }
 func (c *Controller) Resume(sessionID string) error { return c.switchRequest("resume", sessionID) }
 
 func (c *Controller) switchRequest(kind, id string) error {
-	var err error
-	c.view(func() {
-		if err = c.requireIdle("Wait for the active turn before starting or resuming a session."); err != nil {
-			return
+	var snapshot Session
+	return c.change("session", func() error {
+		var err error
+		if kind == "resume" {
+			err = c.a.Resume(id)
+		} else {
+			err = c.a.NewSession()
 		}
-		if err = c.switchLocked(kind, id); err != nil {
-			err = fail(CodeFailed, "%s", err)
+		if err != nil {
+			return fail(CodeFailed, "%s", err)
+		}
+		snapshot = c.sessionLocked() // stable reservation, no controller mutex held
+		return nil
+	}, func(err error) {
+		if err == nil {
+			c.emit(Event{Kind: "session", Session: &snapshot})
 		}
 	})
-	return err
 }
 
-// Reload applies a changed config (hot reload); during a turn it waits until the turn ends.
+// Reload applies configuration between turns. The actual work runs outside mu.
 func (c *Controller) Reload() {
-	c.view(func() {
-		if c.shut || c.closing {
-			return
-		}
-		if c.active != nil {
-			c.reload = true
-			return
-		}
-		c.reloadLocked()
-	})
-}
-
-func (c *Controller) reloadLocked() {
-	if err := c.a.Reload(); err != nil {
-		c.emit(Event{Kind: "error", Text: err.Error()})
+	c.mu.Lock()
+	if c.shut || c.closing {
+		c.mu.Unlock()
 		return
 	}
-	c.emit(Event{Kind: "notice", Text: "zel.toml reloaded"})
+	if c.active != nil || c.changing {
+		c.reload = true
+		c.mu.Unlock()
+		return
+	}
+	c.beginChangeLocked(false)
+	c.mu.Unlock()
+	err := c.a.Reload()
+	c.completeChange(err, c.publishReload)
 }
 
 func (c *Controller) Rename(title string) error {
-	var err error
-	c.view(func() {
-		if err = c.requireIdle("Wait for the active turn before renaming."); err != nil {
-			return
-		}
-		if err = c.a.Rename(title); err != nil {
-			err = fail(CodeFailed, "%s", err)
+	return c.change("settings", func() error { return c.a.Rename(title) }, func(err error) {
+		if err != nil {
 			return
 		}
 		text := "Session title reset to the first message."
@@ -141,7 +154,6 @@ func (c *Controller) Rename(title string) error {
 		}
 		c.emit(Event{Kind: "notice", Text: text, Title: c.titleLocked()})
 	})
-	return err
 }
 
 func (c *Controller) Models(ctx context.Context) (models []ModelChoice, failures map[string]string, err error) {
@@ -167,21 +179,13 @@ func (c *Controller) Models(ctx context.Context) (models []ModelChoice, failures
 }
 
 func (c *Controller) SelectModel(provider, model, effort string) error {
-	var err error
-	c.view(func() {
-		if err = c.requireIdle("Wait for the active turn before changing models."); err != nil {
-			return
-		}
-		if provider == "" || model == "" {
-			err = fail(CodeInvalid, "a model and its provider are required")
-			return
-		}
-		err = c.selectLocked(provider, model, effort)
-	})
-	return err
+	if provider == "" || model == "" {
+		return fail(CodeInvalid, "a model and its provider are required")
+	}
+	return c.change("settings", func() error { return c.selectModel(provider, model, effort) }, nil)
 }
 
-func (c *Controller) selectLocked(provider, model, effort string) error {
+func (c *Controller) selectModel(provider, model, effort string) error {
 	if _, ok := c.a.Settings().Providers[provider]; !ok {
 		return fail(CodeInvalid, "provider not found: %s", provider)
 	}
@@ -189,11 +193,6 @@ func (c *Controller) selectLocked(provider, model, effort string) error {
 		return fail(CodeFailed, "%s", Redact(c.a.Settings(), err.Error()))
 	}
 	return nil
-}
-
-func (c *Controller) ActiveSubagents() (list []SubagentRun) {
-	c.view(func() { list = c.a.ActiveSubagents() })
-	return list
 }
 
 // ActiveTasks lists the running background tasks for the chat rows.
@@ -215,7 +214,7 @@ func (c *Controller) ActiveTasks() (list []ActiveTask) {
 func (c *Controller) Trace() []TraceEntry {
 	var history []TraceEntry
 	var slow func() []TraceEntry
-	c.view(func() { history, slow = c.a.traceSources() })
+	history, slow = c.a.session().traceSources()
 	// The task rows and the events log are read without the controller lock.
 	return mergeTrace(history, slow())
 }
@@ -227,13 +226,10 @@ func (c *Controller) LogEvent(kind, text string) {
 
 // Info reads the session totals from the history.
 func (c *Controller) Info() (info Info, err error) {
-	c.view(func() {
-		s := c.a.Settings()
-		info = Info{Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: c.a.session().sessionDir(),
-			Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: c.a.ConfigFiles(),
-			Messages: c.a.UserMessages(), Tasks: c.a.RunningTasks(), Context: c.a.ContextTokens()}
-		info.Usage, info.Requests = c.a.SessionUsage()
-	})
+	session := c.a.session()
+	s := session.Settings()
+	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, DB: session.sessionDir(), Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: session.configPaths(), Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
+	info.Usage, info.Requests = session.SessionUsage()
 	return info, nil
 }
 
@@ -244,14 +240,8 @@ func (c *Controller) Withdraw(id uint64) (removed bool) {
 }
 
 // UpdateSettings persists UI preferences and providers while the session is idle.
-func (c *Controller) UpdateSettings(s Settings) (err error) {
-	c.view(func() {
-		if err = c.requireIdle("Wait for the active turn before changing settings."); err != nil {
-			return
-		}
-		err = c.a.UpdateSettings(s)
-	})
-	return err
+func (c *Controller) UpdateSettings(s Settings) error {
+	return c.change("settings", func() error { return c.a.UpdateSettings(s) }, nil)
 }
 
 // AttachmentsDir is the folder of the session's images (pasted ones too).

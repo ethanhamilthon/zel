@@ -27,18 +27,6 @@ type confHolder struct {
 	mu     sync.RWMutex
 	cfg    *config.Config
 	notice func(string)
-	models modelListing
-}
-
-// modelListing is the session's list of provider models for zel models.
-// mu guards the fields; it is never held while providers are asked.
-type modelListing struct {
-	mu       sync.Mutex
-	key      string // the providers the list was made for
-	ready    bool
-	choices  []ModelChoice
-	failures map[string]string
-	flight   chan struct{} // closed when the listing in progress ends
 }
 
 func (h *confHolder) get() *config.Config {
@@ -66,7 +54,6 @@ func (h *confHolder) setNotice(fn func(string)) {
 }
 
 // SetNoticeHandler routes config notices (broken layers, failed ${{ }}) to the UI.
-func (a *Runtime) SetNoticeHandler(fn func(string)) { a.session().conf.setNotice(fn) }
 
 func (s *session) notify(msg string) {
 	s.LogEvent("notice", msg)
@@ -210,11 +197,17 @@ func (s *session) Reload() error {
 	if err := s.applyConfig(cfg); err != nil {
 		return err
 	}
-	if s.promptFrozen && s.assemblePrompt() != s.prompt {
-		previous := s.prompt
+	s.histMu.RLock()
+	frozen, previous := s.promptFrozen, s.prompt
+	s.histMu.RUnlock()
+	if frozen && s.assemblePrompt() != previous {
+		s.histMu.Lock()
 		s.promptFrozen = false
+		s.histMu.Unlock()
 		if _, err := s.instructions(context.Background()); err != nil {
+			s.histMu.Lock()
 			s.prompt, s.promptFrozen = previous, true
+			s.histMu.Unlock()
 			return err
 		}
 	}

@@ -14,7 +14,6 @@ type OutputBuffer struct {
 }
 
 func NewOutputBuffer(limit int) *OutputBuffer { return &OutputBuffer{limit: limit} }
-func newOutputBuffer(limit int) *OutputBuffer { return NewOutputBuffer(limit) }
 
 func (b *OutputBuffer) Write(p []byte) (int, error) {
 	total := len(p)

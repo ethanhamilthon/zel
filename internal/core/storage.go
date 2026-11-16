@@ -234,7 +234,7 @@ func (a *Runtime) DefaultTitle() string { return a.session().DefaultTitle() }
 func (s *session) DefaultTitle() string {
 	s.histMu.RLock()
 	defer s.histMu.RUnlock()
-	return firstUserLine(s.History)
+	return s.firstUserLine()
 }
 
 func interruptedOutputs(history []json.RawMessage) []json.RawMessage {

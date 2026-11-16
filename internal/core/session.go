@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -82,7 +83,13 @@ func (s *session) release() {
 
 func (s *session) shutdown(reason string) {
 	s.sessionClosed(reason)
+	s.hookMu.Lock()
 	s.ended.Store(true)
+	if s.stopHooks != nil {
+		s.stopHooks()
+	}
+	s.hookMu.Unlock()
+	s.hookWG.Wait()
 	if s.queue != nil {
 		s.queue.OnPush(nil)
 	}
@@ -90,10 +97,7 @@ func (s *session) shutdown(reason string) {
 	s.conf.setNotice(nil)
 	s.release()
 	s.leaveParent()
-	s.hookWG.Wait()
 }
-
-func (a *Runtime) release() { a.session().release() }
 
 func (a *Runtime) HasSavedSession() bool { return a.session().HasSavedSession() }
 
@@ -166,6 +170,7 @@ func (s *session) startWatch() {
 	for _, l := range s.layers {
 		files = append(files, l.Path)
 	}
+	files = slices.Compact(slices.Sorted(slices.Values(files)))
 	ctx, cancel := context.WithCancel(context.Background())
 	s.stopWatch = cancel
 	go config.Watch(ctx, files, func() {

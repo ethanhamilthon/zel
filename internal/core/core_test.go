@@ -357,6 +357,75 @@ bad = "${{ exit 3 }}"
 	}
 }
 
+func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
+	dir := t.TempDir()
+	started, release := filepath.Join(dir, "started"), filepath.Join(dir, "release")
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf("[hooks]\nmodel_changed = [{run = 'touch %s; while [ ! -f %s ]; do sleep 0.01; done'}]\n", started, release)))
+	ctl := NewController(a, func(Event) {})
+	defer ctl.Close()
+	done := make(chan error, 1)
+	go func() { done <- ctl.SelectModel("p", "new-model", "high") }()
+	defer os.WriteFile(release, nil, 0600)
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			os.WriteFile(release, nil, 0600)
+			t.Fatal("hook did not start")
+		}
+	}
+	read := make(chan struct{})
+	go func() { _ = ctl.Status(); _ = ctl.Settings(); _, _ = ctl.Appearance(); _, _ = ctl.Info(); close(read) }()
+	select {
+	case <-read:
+	case <-time.After(500 * time.Millisecond):
+		os.WriteFile(release, nil, 0600)
+		t.Fatal("controller reads blocked on hook")
+	}
+	if err := ctl.NewSession(); codeOf(err) != CodeBusy {
+		t.Fatalf("overlapping change: %v", err)
+	}
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("change did not finish")
+	}
+}
+
+func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hooks]\nturn_start = [{run = 'touch hook-started; sleep 30; touch survived', async = true}]\n"))
+	s := a.session()
+	s.fireHooks("turn_start", map[string]any{})
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(s.dir, "hook-started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("async hook did not start")
+		}
+	}
+	start := time.Now()
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("async hook blocked shutdown")
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "survived")); !os.IsNotExist(err) {
+		t.Fatal("cancelled hook survived")
+	}
+	if _, err := os.Stat(s.sessionDir()); !os.IsNotExist(err) {
+		t.Fatal("unsaved session directory leaked")
+	}
+}
+
 func TestAsyncHookDoesNotBlock(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
 bash_after = [{ run = "sleep 1; echo IGNORED; touch async-done", async = true }]
@@ -1017,9 +1086,11 @@ func TestPromotedBashKeepsTimeoutAndCanBeStopped(t *testing.T) {
 				t.Fatal("handoff blocked")
 			}
 			if stop {
-				if err := s.tasks.stop("t1"); err != nil {
+				job, err := s.tasks.find("t1")
+				if err != nil {
 					t.Fatal(err)
 				}
+				job.Stop()
 			}
 			s.tasks.mu.Lock()
 			j := s.tasks.jobs["t1"]

@@ -142,12 +142,10 @@ func (m model) pageLines(pad string, w int) []string {
 		height := m.menuBodyRoom()
 		start := min(max(0, m.menu.offset), max(0, len(body)-1))
 		lines := make([]string, 0, height)
-		gray := 0
+
 		for i := start; i < min(len(body), start+height); i++ {
 			color := agentColor
-			if i < gray {
-				color = grayColor
-			}
+
 			if m.menu.page == menuInfo {
 				lines = append(lines, pad+body[i])
 				continue

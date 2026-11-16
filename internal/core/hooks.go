@@ -65,11 +65,18 @@ func (s *session) runHooks(ctx context.Context, event string, input map[string]a
 		}
 		data, _ := json.Marshal(res.input)
 		if h.Async {
+			s.hookMu.Lock()
+			if s.ended.Load() {
+				s.hookMu.Unlock()
+				continue
+			}
 			s.hookWG.Add(1)
-			go func() {
-				defer s.hookWG.Done()
-				s.execHook(context.Background(), event, h, data)
-			}()
+			life := s.hookCtx
+			if life == nil {
+				life = context.Background()
+			}
+			go func() { defer s.hookWG.Done(); s.execHook(life, event, h, data) }()
+			s.hookMu.Unlock()
 			continue
 		}
 		out, errText, code := s.execHook(ctx, event, h, data)

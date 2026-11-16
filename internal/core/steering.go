@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"zel/internal/entities"
 	"zel/internal/shell"
 )
 
@@ -45,7 +46,7 @@ func (s *session) commitInput(input Input) {
 	s.histMu.Unlock()
 }
 
-const originalImage = "\nOriginal image (for crops): "
+const originalImage = entities.OriginalImage
 
 func imageOriginals(images []shell.Image) string {
 	var text strings.Builder

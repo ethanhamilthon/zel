@@ -153,14 +153,19 @@ func (t *tasks) list() []*job {
 }
 
 func tailBytes(path string, limit int) string {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
-	if len(data) > limit {
-		data = data[len(data)-limit:]
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
 	}
-	return strings.ToValidUTF8(string(data), "")
+	size := min(info.Size(), int64(max(0, limit)))
+	data := make([]byte, size)
+	n, _ := f.ReadAt(data, info.Size()-size)
+	return strings.ToValidUTF8(string(data[:n]), "")
 }
 
 func tailLines(path string, n int) string {

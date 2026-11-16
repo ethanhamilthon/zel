@@ -22,10 +22,6 @@ type activities struct {
 	last string // label of the newest operation, kept after it ends until a new turn
 }
 
-func (a *Runtime) beginActivity(label string) (end func()) {
-	return a.session().beginActivity(label)
-}
-
 // beginActivity records a foreground operation; the returned function ends it
 // safely and at most once, even under concurrent abandonment and late host return.
 func (s *session) beginActivity(label string) (end func()) {
@@ -39,20 +35,19 @@ func (s *session) beginActivity(label string) (end func()) {
 	acts.list = append(acts.list, activity{id: id, label: label, at: time.Now()})
 	acts.last = label
 	acts.mu.Unlock()
-	s.publishActivity()
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			acts.mu.Lock()
 			acts.list = slices.DeleteFunc(acts.list, func(x activity) bool { return x.id == id })
 			acts.mu.Unlock()
-			s.publishActivity()
+
 		})
 	}
 }
 
 // Activity is the label of the operation the session waits on, or "" when none runs.
-func (a *Runtime) Activity() string { return a.session().Activity() }
 
 func (s *session) Activity() string {
 	label, _ := s.liveActivity()
@@ -96,6 +91,3 @@ func (a *Runtime) ResetActivity() {
 		acts.mu.Unlock()
 	}
 }
-
-// publishActivity is a no-op: the working indicator reads Activity.
-func (s *session) publishActivity() {}

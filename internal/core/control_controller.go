@@ -24,6 +24,8 @@ type Controller struct {
 	quitPending bool
 	reload      bool
 	closing     bool
+	changing    bool
+	switching   bool
 	shut        bool
 	closed      chan struct{}
 }
@@ -89,7 +91,7 @@ func (c *Controller) titleLocked() string {
 }
 
 func (c *Controller) Sessions() (sessions []SessionSummary, err error) {
-	c.view(func() { sessions, err = c.a.Sessions() })
+	sessions, err = c.a.session().Sessions()
 	return sessions, err
 }
 
@@ -135,7 +137,14 @@ func (c *Controller) closeLocked() error {
 	}
 	c.closing = true
 	if c.a.HasSavedSession() {
-		if err := c.a.Save(); err != nil {
+		c.beginChangeLocked(true)
+		c.mu.Unlock()
+		err := c.a.Save()
+		c.mu.Lock()
+		c.changing, c.switching = false, false
+		close(c.idle)
+		c.idle = nil
+		if err != nil {
 			c.closing = false
 			return err
 		}
@@ -204,9 +213,12 @@ func (c *Controller) finishTurn(op *operation, err error) {
 }
 
 func (c *Controller) settleLocked() {
-	if c.reload {
-		c.reload = false
-		c.reloadLocked()
+	if c.changing {
+		return
+	}
+	if c.reload && !c.closing && !c.quitPending {
+		c.startReloadLocked()
+		return
 	}
 	if c.quitPending && !c.closing {
 		c.quitPending = false
@@ -221,24 +233,8 @@ func (c *Controller) settleLocked() {
 	}
 }
 
-// switchLocked changes the session. Callers guarantee that no operation runs.
-func (c *Controller) switchLocked(kind, id string) error {
-	var err error
-	if kind == "resume" {
-		err = c.a.Resume(id)
-	} else {
-		err = c.a.NewSession()
-	}
-	if err != nil {
-		return err
-	}
-	session := c.sessionLocked()
-	c.emit(Event{Kind: "session", Session: &session})
-	return nil
-}
-
 func (c *Controller) deliverLocked() {
-	if c.active != nil || c.shut || c.closing {
+	if c.active != nil || c.changing || c.shut || c.closing {
 		return
 	}
 	if next, ok := c.a.Queue().PopBatch(); ok {
@@ -258,7 +254,10 @@ func (c *Controller) setupError() error {
 }
 
 func (c *Controller) requireIdle(msg string) error {
-	if c.active != nil {
+	if c.shut || c.closing {
+		return fail(CodeFailed, "the session is closing or closed")
+	}
+	if c.active != nil || c.changing {
 		return fail(CodeBusy, "%s", msg)
 	}
 	return nil

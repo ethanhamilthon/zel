@@ -23,8 +23,11 @@ const BashToolDescription = "Run a bash script: its input is the raw script. Out
 // instructions returns the session's system prompt. It is assembled once and stored
 // in the history, so a resumed session keeps its prompt until the config changes.
 func (s *session) instructions(ctx context.Context) (string, error) {
-	if s.promptFrozen {
-		return s.prompt, nil
+	s.histMu.RLock()
+	frozen, previous := s.promptFrozen, s.prompt
+	s.histMu.RUnlock()
+	if frozen {
+		return previous, nil
 	}
 	prompt := s.assemblePrompt()
 	s.histMu.Lock()
@@ -36,7 +39,9 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 		s.histMu.Unlock()
 		return "", err
 	}
+	s.histMu.Lock()
 	s.prompt, s.promptFrozen = prompt, true
+	s.histMu.Unlock()
 	return prompt, nil
 }
 

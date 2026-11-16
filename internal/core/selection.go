@@ -53,17 +53,16 @@ func (s *session) ConfigureSession(ctx context.Context, provider, model, effort 
 	}
 	c := s.cfg
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	previous := c.sel
 	c.sel = selection{provider, model, effort}
 	if err := s.applyLocked(c.base); err != nil {
 		c.sel = previous
 		_ = s.applyLocked(c.base)
+		c.mu.Unlock()
 		return err
 	}
 	changed := previous != c.sel
 	c.mu.Unlock()
-	defer c.mu.Lock()
 	if changed {
 		s.fireHooks("model_changed", map[string]any{"provider": provider, "model": model, "effort": effort})
 	}

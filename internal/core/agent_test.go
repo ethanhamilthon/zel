@@ -498,7 +498,7 @@ func TestTailOfHugeLog(t *testing.T) {
 	}
 	file.WriteAt([]byte("\nlast line\n"), 1<<30)
 	file.Close()
-	if got := tail(path); !strings.HasPrefix(got, "... earlier output") || !strings.HasSuffix(got, "\nlast line") || len(got) > taskResultBytes+40 {
+	if got := tailLines(path, 40); !strings.HasSuffix(got, "\nlast line") || len(got) > 256<<10 {
 		t.Fatalf("tail %d bytes: %q", len(got), got[max(0, len(got)-60):])
 	}
 }

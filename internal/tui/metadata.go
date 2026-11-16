@@ -33,17 +33,6 @@ func formatContext(n int64) string {
 	return fmt.Sprintf("%dK", (n+500)/1000)
 }
 
-// formatBytes describes the stored output, before UI line limits and ANSI stripping.
-func formatBytes(n int) string {
-	if n >= 1000000 {
-		return fmt.Sprintf("%.1f MB", float64(n)/1000000)
-	}
-	if n >= 1000 {
-		return fmt.Sprintf("%.1f KB", float64(n)/1000)
-	}
-	return fmt.Sprintf("%d B", n)
-}
-
 // infoRows are the rows of the Info page. The first row is the page title (the session
 // name); the rest are key/value pairs: id, dir, model, context and spend.
 func infoRows(info core.Info) []menuRow {

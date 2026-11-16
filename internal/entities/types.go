@@ -61,12 +61,6 @@ func (input Input) Display() string {
 	return strings.TrimSpace(text)
 }
 
-type Task struct {
-	ID, Command, Status, Log string
-	ExitCode                 *int
-	Started, Ended           time.Time
-}
-
 type TraceEntry struct {
 	Kind string // system, user, assistant, thinking, bash, output, error, notice, task, event
 	Text string

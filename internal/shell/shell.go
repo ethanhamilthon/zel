@@ -3,8 +3,7 @@ package shell
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
+
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,17 +12,6 @@ import (
 	"syscall"
 	"time"
 )
-
-type Result struct {
-	Output   string `json:"output"`
-	ExitCode int    `json:"exit_code"`
-	Error    bool   `json:"error,omitempty"`
-}
-
-type Runner struct {
-	Dir string
-	Env func() map[string]string
-}
 
 // Command builds `bash -c script` in its own process group in dir. extra
 // overrides the inherited environment (extra PATH replaces the inherited one);
@@ -93,95 +81,6 @@ func killGroup(cmd *exec.Cmd) error {
 	}
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
-
-func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration, limit int, detach <-chan struct{}) (Result, *Background) {
-	var env map[string]string
-	if r.Env != nil {
-		env = r.Env()
-	}
-	// Not tied to ctx: a detached command must outlive the call. Cancellation and the
-	// timeout kill the group below.
-	cmd := Command(context.Background(), r.Dir, env, command)
-	cmd.Stdin = strings.NewReader("")
-	buffer := newOutputBuffer(limit)
-	// Stdout and Stderr share one writer, so exec never calls Write concurrently.
-	out := &switchWriter{w: buffer}
-	cmd.Stdout, cmd.Stderr = out, out
-	if ctx.Err() != nil {
-		return Result{Output: "\n[zel: cancelled]\n", ExitCode: 130, Error: true}, nil
-	}
-	if err := cmd.Start(); err != nil {
-		io.WriteString(buffer, err.Error()+"\n")
-		return Result{Output: buffer.Text(), ExitCode: 127, Error: true}, nil
-	}
-	done := make(chan error, 1)
-	go func() { done <- Reap(cmd) }()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	var err error
-	result := Result{}
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		_ = killGroup(cmd)
-		err = <-done
-		result.ExitCode = 130
-	case <-timer.C:
-		_ = killGroup(cmd)
-		err = <-done
-		result.ExitCode = 124
-	case <-detach:
-		out.mu.Lock()
-		text := buffer.Text()
-		out.mu.Unlock()
-		return Result{Output: text}, &Background{Cmd: cmd, done: done, out: out, buffer: buffer}
-	}
-	var exit *exec.ExitError
-	switch {
-	case result.ExitCode == 130:
-		io.WriteString(buffer, "\n[zel: cancelled]\n")
-	case result.ExitCode == 124:
-		io.WriteString(buffer, fmt.Sprintf("\n[zel: timed out after %s]\n", timeout))
-	case errors.As(err, &exit):
-		result.ExitCode = exit.ExitCode()
-		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			result.ExitCode = 128 + int(status.Signal())
-		}
-	case err != nil:
-		result.ExitCode = 1
-		io.WriteString(buffer, fmt.Sprintf("\n[zel: %v]\n", err))
-	}
-	result.Output = buffer.Text()
-	result.Error = result.ExitCode != 0
-	return result, nil
-}
-
-type switchWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (s *switchWriter) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.w.Write(p)
-}
-
-type Background struct {
-	Cmd    *exec.Cmd
-	done   <-chan error
-	out    *switchWriter
-	buffer *OutputBuffer
-}
-
-func (b *Background) Redirect(w io.Writer) {
-	b.out.mu.Lock()
-	defer b.out.mu.Unlock()
-	io.WriteString(w, b.buffer.Text())
-	b.out.w = w
-}
-
-func (b *Background) Wait() error { return <-b.done }
 
 var lifeline struct {
 	once sync.Once

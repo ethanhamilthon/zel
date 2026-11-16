@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -25,7 +24,6 @@ const sessionClosedTimeout = 5 * time.Second
 
 const (
 	taskResultLines = 40
-	taskResultBytes = 8192
 )
 
 type tasks struct {
@@ -201,18 +199,6 @@ func (t *tasks) finish(id, status string, exit *int) error {
 	return t.db.FinishTask(t.project, t.session, id, status, exit)
 }
 
-func (t *tasks) stop(id string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	p, ok := t.running[id]
-	if !ok {
-		return fmt.Errorf("task %s is not running", id)
-	}
-	t.stopped[id] = true
-	p.cancel()
-	return nil
-}
-
 func (t *tasks) Running() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -264,41 +250,6 @@ func (t *tasks) drain() {
 	case <-drained:
 	case <-t.life.Done():
 	}
-}
-
-func tail(path string) string {
-	file, err := os.Open(path)
-	if err != nil {
-		return "(no output: " + err.Error() + ")"
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "(no output: " + err.Error() + ")"
-	}
-	start := max(0, info.Size()-taskResultBytes-1)
-	data := make([]byte, info.Size()-start)
-	n, err := file.ReadAt(data, start)
-	if err != nil && n < len(data) {
-		data = data[:n]
-	}
-	if start > 0 {
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			data = data[i+1:]
-		}
-	}
-	text := strings.TrimRight(string(data), "\n")
-	if text == "" {
-		return "(no output)"
-	}
-	lines := strings.Split(text, "\n")
-	switch {
-	case len(lines) > taskResultLines:
-		lines = append([]string{"... earlier lines"}, lines[len(lines)-taskResultLines:]...)
-	case start > 0:
-		lines = append([]string{"... earlier output"}, lines...)
-	}
-	return strings.Join(lines, "\n")
 }
 
 var IsNotice = entities.IsNotice
