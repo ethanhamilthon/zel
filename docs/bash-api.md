@@ -204,8 +204,9 @@ plan = "${{ cat PLAN.md }}"
 - Hot reload: Zel watches the layer files. A change is applied after the
   current turn; a broken file keeps the previous config. The system prompt
   itself is empty: the intro, `instructions` and the built-in zel text all go
-  into the description of the bash tool. That text is rebuilt only when the
-  instructions changed. Files read by `${{ }}` are not watched.
+  into the description of the bash tool. Your `instructions` are frozen in the
+  session history and rebuilt only when they changed; the built-in zel text is
+  added fresh to every request. Files read by `${{ }}` are not watched.
 - The menus write back into the layer a value comes from: picking a model
   changes this session and the `provider`/`model`/`effort` lines of the file
   they come from (`~/.zel/zel.toml` when no file sets them). Other open

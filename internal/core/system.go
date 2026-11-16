@@ -45,16 +45,27 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 	return prompt, nil
 }
 
-// assemblePrompt renders the intro, the instructions of the config for this
-// session mode, then the built-in part about bash and the zel commands.
+// assemblePrompt renders the instructions of the config for this session mode.
+// Only this part is frozen in the history; the built-in text is added live by
+// toolDescription, so a new Zel version reaches resumed sessions too.
 func (s *session) assemblePrompt() string {
-	parts := []string{systemIntro}
+	var parts []string
 	if cfg := s.conf.get(); cfg != nil {
 		for _, in := range cfg.Instructions {
 			if (s.mode() == "main" && in.Main) || (s.mode() == "headless" && in.Headless) {
 				parts = append(parts, strings.TrimSpace(in.Text))
 			}
 		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// toolDescription is the whole text the model gets: the system prompt is empty.
+// Order: the tool line, the intro, the frozen config instructions, bash.md.
+func (s *session) toolDescription(configPart string) string {
+	parts := []string{BashToolDescription, systemIntro}
+	if configPart != "" {
+		parts = append(parts, configPart)
 	}
 	return strings.Join(append(parts, s.builtin()), "\n\n")
 }

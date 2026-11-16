@@ -168,7 +168,7 @@ func TestBashOutputExitCodeAndEnvironment(t *testing.T) {
 func TestBashOutputCut(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, nil)
 	s, ctx := a.session(), context.Background()
-	if !strings.Contains(s.assemblePrompt(), "cut to 8000 bytes") {
+	if !strings.Contains(s.toolDescription(s.assemblePrompt()), "cut to 8000 bytes") {
 		t.Fatal("the prompt does not say the output limit")
 	}
 	// Under the limit: as is, no file.
@@ -209,7 +209,7 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 	if got := s.runBash(context.Background(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) != 13000 {
 		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
 	}
-	if strings.Contains(s.assemblePrompt(), "cut to") || !strings.Contains(s.assemblePrompt(), "never truncated") {
+	if strings.Contains(s.toolDescription(s.assemblePrompt()), "cut to") || !strings.Contains(s.toolDescription(s.assemblePrompt()), "never truncated") {
 		t.Fatal("the prompt does not keep the old text when the cut is off")
 	}
 	for _, bad := range []string{"-1", "500"} {
@@ -225,7 +225,7 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 func TestBashTimeoutAndCancel(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 1\n"))
 	s := a.session()
-	if !strings.Contains(s.assemblePrompt(), "A call has 1 s") {
+	if !strings.Contains(s.toolDescription(s.assemblePrompt()), "A call has 1 s") {
 		t.Fatal("the prompt does not say the bash timeout")
 	}
 	start := time.Now()
@@ -363,12 +363,12 @@ bad = "${{ exit 3 }}"
 	if got := headless.session().runBash(ctx, "echo x"); got != "x\nBOTH\nHEADLESS" {
 		t.Errorf("headless hooks: %q", got)
 	}
-	prompt := main.session().assemblePrompt()
+	prompt := main.session().toolDescription(main.session().assemblePrompt())
 	if !strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || strings.Contains(prompt, "HEADLESS-ONLY") ||
 		!strings.Contains(prompt, `zel choice "Question"`) {
 		t.Errorf("main prompt:\n%s", prompt)
 	}
-	prompt = headless.session().assemblePrompt()
+	prompt = headless.session().toolDescription(headless.session().assemblePrompt())
 	if strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || !strings.Contains(prompt, "HEADLESS-ONLY") ||
 		strings.Contains(prompt, `zel choice "Question"`) || !strings.Contains(prompt, "zel choice is not available") {
 		t.Errorf("headless prompt:\n%s", prompt)
