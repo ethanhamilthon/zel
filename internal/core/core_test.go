@@ -217,7 +217,8 @@ bad = "${{ exit 3 }}"
 		strings.Contains(prompt, `zel choice "Question"`) || !strings.Contains(prompt, "zel choice is not available") {
 		t.Errorf("headless prompt:\n%s", prompt)
 	}
-	if got, err := main.ExpandPrompt(ctx, "#hi and #unknown, #hi"); err != nil || got != "say 42 and #unknown, say 42" {
+	hi := "<completion name=\"hi\">\nsay 42\n</completion>"
+	if got, err := main.ExpandPrompt(ctx, "#hi and #unknown, #hi"); err != nil || got != hi+" and #unknown, "+hi {
 		t.Errorf("main expansion: %q %v", got, err)
 	}
 	if _, err := main.ExpandPrompt(ctx, "#bad"); err == nil || !strings.Contains(err.Error(), "#bad") {

@@ -15,4 +15,4 @@ zel task list | get ID | tail ID [-n 20] | wait ID... [--timeout S] | stop ID
 zel view IMG...   -- attach images to your next request
 zel session [--json] | zel session rename NAME | zel models | zel docs [topic]
 Errors: one line on stderr "zel CMD: CODE: msg"; exit codes 2 EINVAL, 3 ENOENT, 4 ENOMATCH, 5 EAMBIG, 6 EDENIED, 124 ETIMEOUT, 130 ECANCELED.
-A #name in a user message arrives already expanded.
+A #name in a user message arrives already expanded, inside <completion name="name">...</completion>.

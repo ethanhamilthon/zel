@@ -2704,7 +2704,7 @@ boom = "${{ exit 3 }}"`)
 	if m.promptPending != 0 || m.input.Value() != "" {
 		t.Fatalf("expanded message must be taken: pending=%d composer=%q", m.promptPending, m.input.Value())
 	}
-	if !hasEntry(m, "user", "PLAN BODY now") {
+	if !hasEntry(m, "user", "<completion name=\"plan\">\nPLAN BODY\n</completion> now") {
 		t.Fatalf("the agent must receive the expanded text: %+v", m.entries)
 	}
 

@@ -126,8 +126,9 @@ plan = "${{ cat PLAN.md }}"
   events from `session_created` to `bash_before`, `turn_end` and `idle`. Exit 2
   blocks a message, notification or bash call; `match`, `timeout` and `async`
   tune an entry. See `zel docs hooks`.
-- **completions** register `#plan`: type `#` to list them, and the text
-  replaces the token when you send the message (main session only).
+- **completions** register `#plan`: type `#` to list them, and the text,
+  wrapped in `<completion name="plan">`, replaces the token when you send the
+  message (main session only).
 - **tools** are scripts: put them in `~/.zel/bin` or `./.zel/bin` (both lead
   the agent's PATH) and describe them in `instructions`.
 

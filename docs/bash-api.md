@@ -193,9 +193,22 @@ on `turn_start`, `turn_end`, `error` and `session_closed`.
 
 `[completions] name = "text"` registers `#name` in the main session. Typing
 `#` in the composer lists the names; when you send a message, each `#name`
-is replaced by its text with `${{ }}` expanded (10 s). An empty or failing
-completion keeps your draft and shows why; Ctrl+D cancels one still running.
-Names are 1 to 64 letters, digits, `-` or `_`; unknown `#names` stay as typed.
+is replaced by its text with `${{ }}` expanded (10 s), wrapped in a tag so the
+agent sees where it starts and ends:
+
+```
+fix this #plan
+```
+is sent as
+```
+fix this <completion name="plan">
+...text of plan...
+</completion>
+```
+
+An empty or failing completion keeps your draft and shows why; Ctrl+D cancels
+one still running. Names are 1 to 64 letters, digits, `-` or `_`; unknown
+`#names` stay as typed, with no tag.
 
 ## Examples
 
