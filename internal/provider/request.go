@@ -31,7 +31,10 @@ func (r Request) payload(custom bool) map[string]any {
 		}
 		tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": true})
 	}
-	body := map[string]any{"model": r.Model, "instructions": r.Instructions, "input": input, "store": false, "tools": tools}
+	body := map[string]any{"model": r.Model, "input": input, "store": false, "tools": tools}
+	if r.Instructions != "" {
+		body["instructions"] = r.Instructions
+	}
 	reasoning := map[string]any{}
 	if r.Effort != "" {
 		reasoning["effort"] = r.Effort

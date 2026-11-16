@@ -202,7 +202,9 @@ plan = "${{ cat PLAN.md }}"
 - Unknown keys and wrong types make the whole layer invalid: it is skipped
   with a notice naming the file (and the line, for syntax errors).
 - Hot reload: Zel watches the layer files. A change is applied after the
-  current turn; a broken file keeps the previous config. The system prompt is
+  current turn; a broken file keeps the previous config. The system prompt
+  itself is empty: the intro, `instructions` and the built-in zel text all go
+  into the description of the bash tool. That text is
   rebuilt only when the instructions changed. Files read by `${{ }}` are not
   watched.
 - The menus write back into the layer a value comes from: picking a model

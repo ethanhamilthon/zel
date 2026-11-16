@@ -435,14 +435,18 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 				}
 				mu.Unlock()
 				var body struct {
-					Model        string
-					Reasoning    struct{ Effort string }
-					Instructions string
+					Model     string
+					Reasoning struct{ Effort string }
+					Tools     []struct{ Description string }
 				}
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body.Model != "override" || body.Reasoning.Effort != "high" || !strings.Contains(body.Instructions, "headless config") || strings.Contains(body.Instructions, "main only") {
+				desc := ""
+				if len(body.Tools) > 0 {
+					desc = body.Tools[0].Description
+				}
+				if body.Model != "override" || body.Reasoning.Effort != "high" || !strings.Contains(desc, "headless config") || strings.Contains(desc, "main only") {
 					t.Errorf("request overrides: %+v", body)
 				}
 				switch scenario {
@@ -608,6 +612,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 		var body struct {
 			Instructions string
 			Input        []json.RawMessage
+			Tools        []struct{ Description string }
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		var first, lastOutput string
@@ -633,8 +638,11 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 		case lastOutput != "":
 			responseText(w, "parent final: "+lastOutput)
 		default:
-			if !strings.Contains(body.Instructions, "Project rule: be brief") {
-				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
+			if body.Instructions != "" {
+				t.Errorf("the system prompt must be empty:\n%s", body.Instructions)
+			}
+			if len(body.Tools) == 0 || !strings.Contains(body.Tools[0].Description, "Project rule: be brief") {
+				t.Errorf("the project layer is missing from the bash tool description: %+v", body.Tools)
 			}
 			args, _ := json.Marshal(map[string]string{"command": "zel -p 'child task'\n./hello world"})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": string(args)})

@@ -15,7 +15,10 @@ import (
 
 // chatMessages converts the system prompt and Responses input items to chat messages.
 func chatMessages(instructions string, input []json.RawMessage) []map[string]any {
-	messages := []map[string]any{{"role": "system", "content": instructions}}
+	messages := []map[string]any{}
+	if instructions != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": instructions})
+	}
 	for _, item := range input {
 		var v struct {
 			Role, Type, Name, Arguments, Output string
