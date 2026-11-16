@@ -192,6 +192,12 @@ func (m *model) syncTheme() bool {
 	m.themeKey, m.cache, m.menuDirty = key, nil, true
 	applyTheme(colors)
 	m.input.FocusedStyle, m.input.BlurredStyle = composerStyle(), composerStyle()
+	// The textarea draws through a pointer to one of these, taken by Focus/Blur.
+	if m.input.Focused() {
+		m.input.Focus()
+	} else {
+		m.input.Blur()
+	}
 	return true
 }
 

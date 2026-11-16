@@ -3166,15 +3166,19 @@ func (m *model) applyAgent(e core.TurnEvent) {
 	}
 }
 
-// Colors changed behind the UI's back (hot reload) apply on the next message, with no key press.
+// Colors changed behind the UI's back (hot reload) apply on the next message, with
+// no key press, the composer included.
 func TestThemeFollowsReload(t *testing.T) {
 	defer applyTheme(config.DefaultColors())
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
 	m := bareModel(t, t.TempDir())
 	m.refresh(true)
-	setConfig(t, m.ctl, func(s *core.Settings) { s.Colors.Set("bg", "#102030"); s.Colors.Set("user", "#405060") })
+	setConfig(t, m.ctl, func(s *core.Settings) { s.Colors.Set("bg", "#102030"); s.Colors.Set("user_highlight", "#405060") })
 	next, _ := m.Update(redraw{})
 	m = next.(model)
-	if bgColor != "#102030" || userColor != "#405060" {
-		t.Fatalf("theme after reload: bg %q user %q", bgColor, userColor)
+	m.input.SetValue("draft")
+	if bgColor != "#102030" || userHighlight != "#405060" || !strings.Contains(m.input.View(), "38;2;64;80;96mdraft") {
+		t.Fatalf("theme after reload: bg %q highlight %q composer %q", bgColor, userHighlight, m.input.View())
 	}
 }
