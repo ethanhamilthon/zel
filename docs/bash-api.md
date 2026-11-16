@@ -221,7 +221,7 @@ rewriting hooks chain.
 | `session_closed` | quit, new or resume | `{"reason"}` | | |
 | `config_changed` | after hot reload | `{"ok","error","files"}` | | |
 | `message` | the user sent a message | `{"text"}` | new text | the message is dropped |
-| `notification` | before a notification reaches the agent | `{"text"}` | new text | it is dropped |
+| `notification` | before a notification reaches the agent | `{"text"}` (plain, no tags) | new text; zel wraps it in `<notification>` | it is dropped |
 | `turn_start` | the agent starts a turn | `{"text"}` | | |
 | `turn_end` | the agent answered | `{"answer","running":[{"id","name","ms"}]}` | a notification; the turn goes on (at most 3 times in a row) | |
 | `idle` | the turn ended and no task or child runs | `{}` | | |
@@ -230,6 +230,50 @@ rewriting hooks chain.
 | `compaction` | after auto compaction | `{"before","after"}` | | |
 | `model_changed` | the session's model or effort changed | `{"provider","model","effort"}` | | |
 | `error` | a turn failed | `{"kind","message"}` | | |
+
+### What the agent sees
+
+Only five events send hook output to the agent; the output of all others
+(`session_*`, `config_changed`, `turn_start`, `idle`, `compaction`,
+`model_changed`, `error`) is only in Tracing.
+
+**bash_after**: stdout of each hook is added on its own line after the output,
+after `[exit N]`:
+
+```
+--- FAIL: TestParse (0.00s)
+[exit 1]
+uncommitted changes, commit them
+```
+
+**bash_before**: stdout replaces the command; the agent sees only the output of
+the new command, with no note. Exit 2: the call does not run and the agent gets
+only:
+
+```
+[blocked by a hook: no force push]
+```
+
+**turn_end**: stdout of all hooks, joined by new lines, comes to the agent as a
+new message, and the turn goes on (at most 3 times in a row):
+
+```
+<notification>uncommitted changes, commit them</notification>
+```
+
+**message**: stdout replaces the whole user message; the agent gets only the
+new text. Exit 2: the agent gets nothing, the chat shows
+`Message blocked by a hook: <reason>`.
+
+**notification**: the hook gets the plain text, `{"text":"t1 finished"}`; its
+stdout replaces it and zel wraps it back (output that already is one
+`<notification>…</notification>` block is not wrapped again):
+
+```
+<notification>t1 finished, run make test</notification>
+```
+
+Exit 2: the notification is dropped without a trace in the chat.
 
 `session_closed` runs within what is left of the 5 s shutdown budget, after
 the session's tasks were stopped.

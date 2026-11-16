@@ -241,6 +241,31 @@ turn_end = ['grep -q "\"answer\":\"ok\"" && echo keep going']
 	}
 }
 
+func TestNotificationHookGetsPlainTextAndIsWrapped(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
+notification = [
+  'jq -r .text | sed "s/\$/, run make test/"',
+  'jq -r .text | sed "s/^/[/; s/\$/]/"',
+]
+`))
+	s := a.session()
+	in := notification("t1 finished")
+	got, ok := s.hookInput(context.Background(), in, func(TurnEvent) {})
+	if !ok || got.Text != "<notification>[t1 finished, run make test]</notification>" || !got.Notice {
+		t.Fatalf("plain hook: %+v %v", got, ok)
+	}
+}
+
+func TestNotificationHookPrintingTagsIsNotWrappedAgain(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
+notification = ['cat >/dev/null; echo "<notification>t1 finished, run make test</notification>"']
+`))
+	got, ok := a.session().hookInput(context.Background(), notification("t1 finished"), func(TurnEvent) {})
+	if !ok || got.Text != "<notification>t1 finished, run make test</notification>" {
+		t.Fatalf("tagged hook: %+v %v", got, ok)
+	}
+}
+
 func TestHooksInstructionsAndCompletionsFollowTheMode(t *testing.T) {
 	conf := withLocal(`instructions = [
   "MAIN-ONLY",

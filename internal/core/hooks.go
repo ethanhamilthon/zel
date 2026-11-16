@@ -153,15 +153,41 @@ func (s *session) hookInput(ctx context.Context, input Input, emit func(TurnEven
 	if input.Text == "" || !s.hasHooks(event) {
 		return input, true
 	}
-	res := s.runHooks(ctx, event, map[string]any{"text": input.Text})
+	text, wrapped := input.Text, false
+	if input.Notice {
+		text, wrapped = unwrapNotification(text)
+	}
+	res := s.runHooks(ctx, event, map[string]any{"text": text})
 	if res.blocked {
 		if !input.Notice {
 			emit(TurnEvent{Kind: "notice", Text: "Message blocked by a hook: " + res.reason})
 		}
 		return input, false
 	}
-	input.Text, _ = res.input["text"].(string)
+	out, _ := res.input["text"].(string)
+	switch {
+	case !wrapped:
+		input.Text = out
+	case out != text:
+		// The hook rewrote the plain text; an old hook may print the tags itself.
+		if _, tagged := unwrapNotification(out); tagged {
+			input.Text = strings.TrimSpace(out)
+		} else {
+			input.Text = notification(out).Text
+		}
+	}
 	return input, true
+}
+
+// unwrapNotification returns the text inside one <notification>…</notification>
+// block; ok is false when text is not exactly one such block.
+func unwrapNotification(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	const open, end = "<notification>", "</notification>"
+	if !strings.HasPrefix(t, open) || !strings.HasSuffix(t, end) || strings.Count(t, open) != 1 {
+		return text, false
+	}
+	return strings.TrimSpace(t[len(open) : len(t)-len(end)]), true
 }
 
 // turnEnd runs the turn_end hooks; returned text becomes a notification that continues the turn.
