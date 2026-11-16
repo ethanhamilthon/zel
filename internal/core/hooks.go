@@ -104,11 +104,24 @@ func (s *session) runHooks(ctx context.Context, event string, input map[string]a
 
 // fireHooks runs the hooks of an event whose output is not used.
 func (s *session) fireHooks(event string, input map[string]any) {
-	if s.hasHooks(event) {
-		ctx, cancel := context.WithTimeout(context.Background(), config.HookTimeout)
-		defer cancel()
-		s.runHooks(ctx, event, input)
+	if !s.hasHooks(event) {
+		return
 	}
+	s.hookMu.Lock()
+	if s.ended.Load() {
+		s.hookMu.Unlock()
+		return
+	}
+	s.hookWG.Add(1)
+	life := s.hookCtx
+	if life == nil {
+		life = context.Background()
+	}
+	s.hookMu.Unlock()
+	defer s.hookWG.Done()
+	ctx, cancel := context.WithTimeout(life, config.HookTimeout)
+	defer cancel()
+	s.runHooks(ctx, event, input)
 }
 
 const hookOutputLimit = 1 << 20

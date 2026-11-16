@@ -23,8 +23,8 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 		return nil, err
 	}
 	s.histMu.RLock()
-	for i, item := range s.History {
-		if !json.Valid(item) {
+	for i := range s.History {
+		if !s.projection(i).valid {
 			s.histMu.RUnlock()
 			return nil, fmt.Errorf("invalid history item %d", i)
 		}

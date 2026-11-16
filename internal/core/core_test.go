@@ -454,6 +454,26 @@ func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
 	}
 }
 
+func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hooks]\nidle = ['touch idle-started; sleep 30']\n"))
+	s := a.session()
+	s.checkIdle()
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(s.dir, "idle-started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("idle hook never started")
+		}
+	}
+	start := time.Now()
+	a.Close()
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("idle hook outlived shutdown budget")
+	}
+	s.hookWG.Wait()
+}
+
 func TestAsyncHookDoesNotBlock(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
 bash_after = [{ run = "sleep 1; echo IGNORED; touch async-done", async = true }]

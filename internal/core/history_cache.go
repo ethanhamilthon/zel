@@ -10,6 +10,7 @@ import (
 type historyProjection struct {
 	raw           json.RawMessage
 	sent, user    bool
+	valid         bool
 	tokens        int64
 	records       []Record
 	compactRaw    json.RawMessage
@@ -60,6 +61,7 @@ func (s *session) projection(i int) historyProjection {
 	p := &s.projections[i]
 	if p.raw == nil || !sameItem(p.raw, s.History[i]) {
 		*p = historyProjection{raw: s.History[i]}
+		p.valid = json.Valid(p.raw)
 		p.sent, p.user = historyItem(p.raw)
 		p.tokens = estimateTokens([]json.RawMessage{p.raw})
 		p.records = RecordsForItem(p.raw)
