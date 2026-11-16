@@ -3274,3 +3274,25 @@ func TestInlinePathWithSpacesAndUnderlineReset(t *testing.T) {
 		t.Fatalf("underline lost or leaked: %q", rows)
 	}
 }
+
+func TestHookRecordsHiddenOnlyFromTracing(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.ctl.LogEvent("hook", "private hook output")
+	m.ctl.LogEvent("notice", "visible notice")
+	for _, e := range m.sessionTrace() {
+		if e.Kind == "hook" || strings.Contains(e.Text, "private hook output") {
+			t.Fatalf("hook visible in tracing: %+v", e)
+		}
+	}
+	found := false
+	for _, e := range m.ctl.Trace() {
+		found = found || e.Kind == "hook" && e.Text == "private hook output"
+	}
+	if !found {
+		t.Fatal("UI filtering removed the stored diagnostic")
+	}
+	m.menu = &menuState{page: menuTracing, trace: m.sessionTrace(), query: "private hook output"}
+	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
+		t.Fatalf("hook searchable: %+v", rows)
+	}
+}

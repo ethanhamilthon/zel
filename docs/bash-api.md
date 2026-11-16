@@ -210,8 +210,9 @@ hook and does not wait; hooks run in the main session only unless
 
 A hook is `bash -c` with the session environment and `ZEL_HOOK`; the event
 data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
-blockable event, with stderr as the reason. Any other exit is logged in
-Tracing and the hook is skipped. Hooks run one by one, in layer order;
+blockable event, with stderr as the reason. Any other exit is recorded in
+session diagnostics and the hook is skipped. Hook execution records are hidden
+from the Tracing view. Hooks run one by one, in layer order;
 rewriting hooks chain.
 
 | event | when | stdin | stdout (exit 0) | exit 2 |
@@ -235,7 +236,9 @@ rewriting hooks chain.
 
 Only five events send hook output to the agent; the output of all others
 (`session_*`, `config_changed`, `turn_start`, `idle`, `compaction`,
-`model_changed`, `error`) is only in Tracing.
+`model_changed`, `error`) is retained only in session diagnostics, not shown in
+Tracing. Hiding hook execution records does not change which hooks run or what
+they send to the agent.
 
 **bash_after**: stdout of each hook is added on its own line after the output,
 after `[exit N]`:
