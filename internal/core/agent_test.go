@@ -368,7 +368,7 @@ func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	}
 }
 
-func TestTypedInputWaitsForRunningCall(t *testing.T) {
+func TestSteeringMovesRunningCallToTaskAndSkipsRest(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
 			args := func(code string) string {
@@ -378,7 +378,7 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
 				`{"type":"function_call","call_id":"c1","name":"bash","arguments":%q},`+
 				`{"type":"function_call","call_id":"c2","name":"bash","arguments":%q}]}}`,
-				args("touch started\nsleep 1\necho late"), args("touch second")))
+				args("echo early\ntouch started\nsleep 1\necho late"), args("touch second")))
 		}
 		return textReply("ok")
 	}}
@@ -398,18 +398,28 @@ func TestTypedInputWaitsForRunningCall(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); took < 900*time.Millisecond {
-		t.Fatalf("the call was interrupted by a typed message: %s", took)
+	if took := time.Since(start); took > 900*time.Millisecond {
+		t.Fatalf("steering waited for the command: %s", took)
 	}
 	requests := fp.requests()
-	if len(requests) != 2 || !strings.Contains(requests[1], "late") || !strings.Contains(requests[1], "STOP-AND-LISTEN") {
+	if len(requests) != 2 || !strings.Contains(requests[1], "moved to task t1") || !strings.Contains(requests[1], "STOP-AND-LISTEN") || !strings.Contains(requests[1], "skipped: superseded by steering") {
 		t.Fatalf("second request: %s", requests[len(requests)-1])
 	}
-	if strings.Index(requests[1], "late") > strings.Index(requests[1], "STOP-AND-LISTEN") {
-		t.Fatal("the queued message arrived before the call output")
+	if _, err := os.Stat(filepath.Join(a.session().dir, "second")); !os.IsNotExist(err) {
+		t.Fatal("the superseded second call ran")
 	}
-	if _, err := os.Stat(filepath.Join(a.session().dir, "second")); err != nil {
-		t.Fatal("the second call of the response did not run")
+	job := a.session().tasks.jobs["t1"]
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background command did not finish")
+	}
+	log, err := os.ReadFile(job.log)
+	if err != nil || !strings.Contains(string(log), "early") || !strings.Contains(string(log), "late") {
+		t.Fatalf("lost task output: %q, %v", log, err)
+	}
+	if a.Queue().noticeCount() == 0 {
+		t.Fatal("task completion did not notify the agent")
 	}
 }
 

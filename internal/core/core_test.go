@@ -933,3 +933,53 @@ func TestChildInAnotherFolderLoadsItsProjectLayer(t *testing.T) {
 		t.Fatalf("layers %v, env %v", files, child.Settings().Env)
 	}
 }
+
+func TestPromotedBashKeepsTimeoutAndCanBeStopped(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprint(stop), func(t *testing.T) {
+			a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 1\n"))
+			s := a.session()
+			done := make(chan string, 1)
+			go func() { done <- s.runBash(context.Background(), "touch started; echo before; sleep 30; echo after") }()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(s.dir, "started")); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("bash never started")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			s.queue.Push(Input{Text: "change direction"})
+			select {
+			case out := <-done:
+				if !strings.Contains(out, "moved to task t1") {
+					t.Fatal(out)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("handoff blocked")
+			}
+			if stop {
+				if err := s.tasks.stop("t1"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.tasks.mu.Lock()
+			j := s.tasks.jobs["t1"]
+			s.tasks.mu.Unlock()
+			select {
+			case <-j.done:
+			case <-time.After(4 * time.Second):
+				t.Fatal("promoted process outlived its stop/timeout")
+			}
+			want := "timeout"
+			if stop {
+				want = "stopped"
+			}
+			if j.status != want {
+				t.Fatalf("status %s, want %s", j.status, want)
+			}
+		})
+	}
+}

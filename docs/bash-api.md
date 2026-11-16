@@ -232,6 +232,17 @@ rewriting hooks chain.
 | `model_changed` | the session's model or effort changed | `{"provider","model","effort"}` | | |
 | `error` | a turn failed | `{"kind","message"}` | | |
 
+### Steering during bash
+
+When a typed steering message arrives during a bash call, the already-running
+process is moved into a background task without restarting it. Its existing
+output is retained, its original timeout still applies, and normal task get,
+stop and completion notifications work. The tool result gives the task ID.
+Bash calls from the same model response that have not started are returned as
+`[skipped: superseded by steering]`; they are not executed. The steering text
+is delivered after these tool results, before the next model request.
+Notifications alone do not move a running bash call into a task.
+
 ### What the agent sees
 
 Only five events send hook output to the agent; the output of all others

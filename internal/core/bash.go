@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,12 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 	if ctx.Err() != nil {
 		return "[cancelled]", 130, false, nil
 	}
+	typed := s.queue.typedSignal()
+	s.queue.drainTyped()
+	if s.queue.hasTyped() {
+		return "[skipped: superseded by steering]", 0, false, nil
+	}
+	started := time.Now()
 	cmd := shell.Command(context.Background(), s.bashCwd(), s.shellEnv(), command)
 	capture = &bashCapture{buffer: shell.NewOutputBuffer(bashOutputLimit), limit: s.Settings().BashOutput, open: s.openOutputFile}
 	buffer := capture.buffer
@@ -66,7 +73,17 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 	defer timer.Stop()
 	var err error
 	suffix := ""
+wait:
 	select {
+	case <-typed:
+		if s.queue.hasTyped() && ctx.Err() == nil {
+			id, adoptErr := s.backgroundBash(command, cmd, done, w, capture, max(time.Millisecond, timeout-time.Since(started)))
+			if adoptErr == nil {
+				return "[moved to task " + id + " after steering; use zel task get " + id + "]", 0, false, nil
+			}
+			s.LogEvent("error", "Could not move bash to a task: "+adoptErr.Error())
+		}
+		goto wait
 	case err = <-done:
 		code = exitCode(err)
 		if code != 0 {
@@ -338,4 +355,43 @@ func (s *session) changeDir(dir, base string) (string, error) {
 		}
 	}
 	return path, nil
+}
+
+// backgroundBash transfers ownership of the existing process; it never reruns
+// the script. Switch the writer while locked so no streamed bytes are lost at
+// the handoff, and let the task lifecycle own cancellation and reaping.
+func (s *session) backgroundBash(command string, cmd *exec.Cmd, done <-chan error, w *lockedWriter, capture *bashCapture, timeout time.Duration) (string, error) {
+	w.mu.Lock()
+	id, err := s.tasks.start(command, startOpts{name: "steered bash", timeout: timeout}, func(log io.Writer, _ *job) (*proc, error) {
+		if capture.file != nil {
+			file, err := os.Open(capture.file.Name())
+			if err != nil {
+				return nil, err
+			}
+			_, err = io.Copy(log, file)
+			file.Close()
+			if err != nil {
+				return nil, err
+			}
+		} else if _, err := io.WriteString(log, capture.buffer.Text()); err != nil {
+			return nil, err
+		}
+		w.w = log
+		var waitErr error
+		signal := func(sig syscall.Signal) { _ = syscall.Kill(-cmd.Process.Pid, sig) }
+		return &proc{
+			cancel: func() { signal(syscall.SIGKILL) },
+			term:   func() { signal(syscall.SIGTERM) },
+			wait:   func() error { waitErr = <-done; return waitErr },
+			exit:   func() int { return exitCode(waitErr) },
+		}, nil
+	})
+	if err == nil {
+		capture.finish(false)
+	}
+	w.mu.Unlock()
+	if err == nil {
+		s.tasks.changed()
+	}
+	return id, err
 }
