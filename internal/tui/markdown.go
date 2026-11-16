@@ -24,14 +24,14 @@ func terminalLink(target, text string, allowFile bool) string {
 	if err != nil || !(web || allowFile && u.Scheme == "file" && u.Path != "") || strings.ContainsFunc(target, unicode.IsControl) {
 		return text
 	}
-	return ansi.SetHyperlink(u.String()) + text + ansi.ResetHyperlink()
+	return ansi.SetHyperlink(u.String()) + "\x1b[4m" + text + "\x1b[24m" + ansi.ResetHyperlink()
 }
 
 var (
 	markedLink        = regexp.MustCompile("(?s)\u2063(.*?)\u2064")
 	markedCode        = regexp.MustCompile("(?s)\u2062(.*?)\u2061")
 	codeSpan          = regexp.MustCompile("`([^`\n]+)`")
-	pathText          = regexp.MustCompile(`^[\w./~+@:-]+$`)
+	pathText          = regexp.MustCompile(`^[\pL\pN_ ./~+@:%?=&,#-]+$`)
 	lineSuffix        = regexp.MustCompile(`(:\d+){1,2}$`)
 	linkBase          string // the directory relative paths in backticks are resolved against
 	hyperlinkSequence = regexp.MustCompile("\x1b\\]8;[^\x1b\x07]*(?:\x07|\x1b\\\\)")
@@ -180,7 +180,7 @@ var (
 )
 
 func renderMarkdown(text string, width int, streaming bool) (string, bool) {
-	return renderMarkdownStyle(text, width, streaming, markdownStyle)
+	return renderMarkdownStyle(markPlainTargets(cleanLinkMarkers(text)), width, streaming, markdownStyle)
 }
 
 func renderMarkdownStyle(text string, width int, streaming bool, style string) (string, bool) {
@@ -192,7 +192,7 @@ func renderMarkdownStyle(text string, width int, streaming bool, style string) (
 	if mdRenderer == nil {
 		return "", false
 	}
-	text = markCodeTargets(strings.NewReplacer("\u2063", "", "\u2064", "", "\u2062", "", "\u2061", "").Replace(text))
+	text = markCodeTargets(text)
 	if split := stableSplit(text); streaming && split > 0 {
 		if key := [2]any{mdKey, text[:split]}; mdStable.key != key {
 			out, ok := renderGlamour(text[:split])
@@ -214,7 +214,7 @@ func renderMarkdownStyle(text string, width int, streaming bool, style string) (
 // renderTraceMarkdown keeps trace body colors local to the tracing viewer.
 func renderTraceMarkdown(text string, width int, color lipgloss.Color) (string, bool) {
 	style := strings.Replace(markdownStyle, `{"document":`, `{"text":{"color":"`+string(color)+`"},"document":`, 1)
-	return renderMarkdownStyle(text, width, false, style)
+	return renderMarkdownStyle(cleanLinkMarkers(text), width, false, style)
 }
 
 func renderGlamour(text string) (string, bool) {
@@ -276,4 +276,45 @@ func protectHyphens(text string) string {
 		lines[i] = b.String()
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Protect inline code and Markdown links from the plain-text scanner. Fenced
+// code is untouched, and punctuation next to a path is not part of its target.
+var plainTargetToken = regexp.MustCompile("`+[^`]*`+|!?\\[[^\\]]*\\]\\([^\\n]*?\\)|[^\\s<>`\\[\\]()\"'\\x{2061}-\\x{2064}]+")
+
+func markPlainTargets(text string) string {
+	lines, fence := strings.Split(text, "\n"), ""
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			if fence == "" {
+				fence = trimmed[:3]
+			} else if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if fence != "" || strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		lines[i] = plainTargetToken.ReplaceAllStringFunc(line, func(token string) string {
+			if strings.ContainsAny(token, "`[]") {
+				return token
+			}
+			label := strings.TrimRight(token, ".,;!?")
+			// Avoid turning ordinary words (even if a same-named file exists)
+			// into links; plain paths must look like paths.
+			if !strings.ContainsAny(label, "/.") || codeTarget(label) == "" {
+				return token
+			}
+			// Escape Markdown punctuation without changing the displayed text.
+			escaped := strings.NewReplacer("\\", "\\\\", "_", "\\_", "*", "\\*", "#", "\\#").Replace(label)
+			return "\u2062" + escaped + "\u2061" + token[len(label):]
+		})
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cleanLinkMarkers(text string) string {
+	return strings.NewReplacer("\u2063", "", "\u2064", "", "\u2062", "", "\u2061", "").Replace(text)
 }

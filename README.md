@@ -173,6 +173,18 @@ search accepts a leading type, optionally followed by text: `:user`,
 stopped with Ctrl+D ends in the chat with a red line of time and steps, then
 the reason.
 
+Agent messages underline web links and existing file/folder paths, both in
+inline code and plain text. Cmd+click opens them in Ghostty and iTerm2 (other
+terminals use their own hyperlink shortcut). Relative paths use the session's
+working folder; `path:line:column` opens the file, not a particular editor line.
+Missing paths stay plain. Plain paths containing spaces should be put in
+backticks. Terminals without OSC 8 still show the underline. Zel does not add
+hover effects or enable mouse reporting, so selection and copying stay native.
+
+Click-to-move in the composer is not supported: Ghostty 1.4 disables semantic
+prompt clicks on the alternate screen used by zel. Keyboard navigation works
+as before, including inside multiplexers.
+
 Typing `@` in the composer completes file paths; `#` lists prompt completions.
 
 ### Shortcuts

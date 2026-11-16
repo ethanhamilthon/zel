@@ -3214,3 +3214,46 @@ func TestThemeFollowsReload(t *testing.T) {
 		t.Fatalf("theme after reload: bg %q highlight %q composer %q", bgColor, userHighlight, m.input.View())
 	}
 }
+
+func TestPlainPathsUnderlinedAndWrapped(t *testing.T) {
+	oldBase := linkBase
+	linkBase = t.TempDir()
+	t.Cleanup(func() { linkBase = oldBase })
+	name := "long_existing_file-name.txt"
+	if err := os.WriteFile(filepath.Join(linkBase, name), []byte("proof"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, width := range []int{12, 24, 100} {
+		text := "See " + name + ":12:3, `" + name + "` and missing-file.txt. https://example.com/a?q=1&b=2\n\n```\n" + name + "\n```"
+		out, ok := renderMarkdown(text, width, false)
+		if !ok || !strings.Contains(out, "\x1b[4m") || strings.ContainsAny(out, "\u2061\u2062\u2063\u2064") {
+			t.Fatalf("bad rendering at %d: %q", width, out)
+		}
+		if !strings.Contains(out, ansi.SetHyperlink("file://"+filepath.Join(linkBase, name))) || !strings.Contains(out, ansi.SetHyperlink("https://example.com/a?q=1&b=2")) {
+			t.Fatalf("missing targets at %d: %q", width, out)
+		}
+		for _, row := range linkedRows(out, width) {
+			if ansi.StringWidth(row) > width {
+				t.Fatalf("overflow: %q", row)
+			}
+			plain := ansi.Strip(row)
+			if at := strings.Index(plain, "missing-file"); at >= 0 && linkAt(row, ansi.StringWidth(plain[:at])) != "" {
+				t.Fatalf("missing path linked: %q", row)
+			}
+		}
+		// Two file references and one URL, never the fenced code.
+		if strings.Count(out, "\x1b]8;") != 6 {
+			t.Fatalf("unexpected links: %q", out)
+		}
+	}
+	for _, text := range []string{"missing-file.txt", "`missing-file.txt`", "[unsafe](javascript:alert)", "    " + name} {
+		out, _ := renderMarkdown(text, 80, false)
+		if strings.Contains(out, "\x1b]8;") {
+			t.Fatalf("unexpected link in %q: %q", text, out)
+		}
+	}
+	trace, _ := renderTraceMarkdown(name, 80, grayColor)
+	if strings.Contains(trace, "\x1b]8;") {
+		t.Fatal("plain paths in tracing should not be linked")
+	}
+}
