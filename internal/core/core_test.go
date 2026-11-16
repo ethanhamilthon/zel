@@ -48,6 +48,34 @@ func TestContextProjectionInvalidation(t *testing.T) {
 	}
 }
 
+func BenchmarkUnchangedSave(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			b.Setenv("ZEL_HOME", b.TempDir())
+			a, err := New(b.TempDir(), Options{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer a.Close()
+			s := a.session()
+			for i := 0; i < n; i++ {
+				s.message("user", "small message")
+				s.setItemMeta(i, Metadata{At: time.Now()})
+			}
+			if err := s.Save(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := s.Save(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkImageContext(b *testing.B) {
 	s := &session{}
 	for i := 0; i < 16; i++ {

@@ -803,6 +803,43 @@ func TestFileBackedImagesAndLegacyHistory(t *testing.T) {
 	}
 }
 
+func TestAttachmentReferencesAreTypedAndConfined(t *testing.T) {
+	a := newTestAgent(t, okProvider(), Options{})
+	s := a.session()
+	for _, item := range []json.RawMessage{
+		raw(map[string]any{"role": "user", "content": "explain zel-image:v1: references"}),
+		callOutput("c", "zel-image:v1: is an internal scheme"),
+	} {
+		if _, err := s.hydrateImages([]json.RawMessage{item}); err != nil {
+			t.Fatal("ordinary text treated as attachment", err)
+		}
+	}
+	ref, err := s.storePreview("data:image/png;base64,aQ==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := strings.TrimPrefix(ref, imageRefPrefix)
+	if err := os.WriteFile(filepath.Join(s.sessionDir(), "attachments", name), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.loadPreview(name); err == nil {
+		t.Fatal("corrupt preview accepted")
+	}
+	if err := os.Remove(filepath.Join(s.sessionDir(), "attachments", name)); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("i"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(s.sessionDir(), "attachments", name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.loadPreview(name); err == nil {
+		t.Fatal("symlink escaped attachment root")
+	}
+}
+
 func TestFileBackedImageFailureDoesNotCommit(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
 	s := a.session()

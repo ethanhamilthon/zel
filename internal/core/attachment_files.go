@@ -139,7 +139,7 @@ func (s *session) hydrateImages(input []json.RawMessage) ([]json.RawMessage, err
 		}
 		var parts []map[string]json.RawMessage
 		if err := json.Unmarshal(v["content"], &parts); err != nil {
-			return nil, err
+			continue // ordinary text/tool output may mention the reference scheme
 		}
 		changed := false
 		for _, part := range parts {
