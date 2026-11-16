@@ -1,6 +1,6 @@
 # Zel 0.7.5 — Performance and Simplification Plan
 
-Status: implementation and release authorized on 2026-11-16, including commit, tag, push, and CI verification.
+Status: implemented and locally verified on 2026-11-16. Release publication and CI verification are authorized. See [release evidence](RELEASE-0.7.5.md).
 
 Based on [the performance and architecture audit](AUDIT-2026-11-16.md).
 

@@ -19,18 +19,24 @@ subcommands (`zel task`, `zel choice`, ...), which only talk to a session socket
 | `agent` | One model/tool loop, steering checkpoints, turn-end hook and cancellation boundaries | `entities` |
 | `core` | Runtime assembly, sessions, controller, queues, the bash tool, tasks, hooks, completions, choice queue, zel -p children, hot reload, persistence and application events | Backend packages |
 | `cli` | Argument parsing, headless runs, `update`, and the subcommands (`task`, `choice`, `view`, `session`, `edit`, `docs`, `models`, `config`) | `core`, `config`, `ipc`, `edit`, `shell` |
-| `tui` | Display state, composer, menus, input events and rendering | `core`, `entities` |
+| `tui` | Display state, composer, menus, input events and rendering | `core`, `entities`, immutable types from `config` |
 
-The frontend never imports backend packages directly. `core` exposes settings and
-shared domain types using type aliases, not copies. Dependencies never point back
-from backend packages to `core`.
+The frontend uses the controller for runtime operations and may import pure
+configuration/domain leaf types; it does not import provider, storage, shell or
+IPC implementations. `core` exposes shared domain types using aliases, not copies.
+Backend packages never point back to `core`. Production import-boundary tests
+protect this dependency graph.
 
 ## Ownership and events
 
 `core.Runtime` owns live application state and backend lifetimes. Its controller
 serializes interactive operations, runs one turn at a time, and emits ordered
 `core.Event` lifecycle notifications. A `TurnEvent` is the shared `entities.Event`
-produced during a turn. UI-only state stays in `tui`.
+produced during a turn. UI-only state stays in `tui`. Slow configuration, selection and session changes
+reserve an operation and release the controller mutex during external work.
+Results publish before queued turns proceed. Conflicting session changes are
+rejected; input queued during settings reload is delivered afterward. Closing
+waits for reserved operations. Status and snapshot reads remain available.
 
 `agent.Run` depends on a small host interface rather than on `core`. The runtime
 implements its operations: accepting steering, saving, requesting a response,
@@ -61,7 +67,7 @@ which applies it between turns. A layer with errors keeps the old snapshot.
 The model sees one tool, `bash`. `provider` normalizes its transport (free-form
 custom tool on Responses, JSON `{command}` elsewhere) so history always holds a
 function call with `{"command": ...}`. `core.runBash` runs it with `bash -c` in
-the session folder and its own process group, with the session environment
+the configured bash working folder and its own process group, with the session environment
 (`ZEL_SESSION_ID`, `ZEL_MODE`, `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG`, ...),
 `bash_before`/`bash_after` hooks around it and the `settings.bash_timeout` and `settings.bash_output` limits.
 
@@ -72,13 +78,36 @@ request there: tasks (`bash -c` jobs owned by the session, logged in
 shows; the answer comes back as a notification), view, session info and rename.
 A `zel -p` started by that bash finds the socket in its environment, becomes a
 child (headless, depth + 1, at most 3) and reports `child.start`/`child.end`
-for the parent's chat rows. Children are separate processes in the caller's
+for the parent's lifecycle/idle tracking (not separate child chat rows). Children are separate processes in the caller's
 process group, so a killed call or task takes them down.
 
 Hooks are commands from the config: the event data goes to stdin as JSON, exit
 0 output is used per event, exit 2 blocks the blockable events. Instructions and
 completions are strings with `${{ }}` expanded by `bash -c`. The system prompt
 is stored in the history and rebuilt only when the instructions change.
+
+## History, attachments, and rendering
+
+History items are immutable after append. The session caches their display
+records, type/role and token estimates; compaction caches transformed zones.
+Saves prepare only dirty suffixes and leave unchanged metadata files alone.
+
+New image previews are private, checksum-named files in the session attachments
+directory. History stores versioned `zel-image:v1:` references. Only the compacted
+outgoing request loads and encodes required previews; display extraction does not.
+Legacy embedded images remain readable without migration. Copy the attachment
+folder together with session history; older binaries cannot read new references.
+
+Only complete commands are published before tool execution; incomplete argument
+fragments do not become UI records. The TUI retains chat and in-flight previews,
+not duplicate committed hidden trace records. Stable formatted Markdown blocks,
+path checks, event-log snapshots and prepared terminal rows are cached. Appending
+or editing the chat tail updates only the affected row-index suffix. Slow initial
+Markdown upgrades use a short cooperative budget and prioritize recent entries.
+The bounded UI event spool and selection-preserving terminal renderer remain.
+
+Asynchronous hooks belong to the session lifecycle. Shutdown cancels and joins
+them before releasing resources or removing an unsaved session directory.
 
 ## Verification
 

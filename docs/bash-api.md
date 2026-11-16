@@ -125,9 +125,18 @@ custom text. The normal composer draft is preserved. The agent gets
 `<notification>c1 Question: A</notification>` (or the custom text, or `cancelled`). It works
 in the main session, its tasks and hooks; `zel -p` has no user (EDENIED).
 
+New image previews are saved in the session's `attachments` folder; history
+stores versioned references and loads preview bytes only for requests that need
+them. Keep that folder with `session.jsonl` when copying a session. Old chats
+with embedded images still work and are not migrated. An old Zel binary cannot
+read the new references. Missing or corrupt preview files produce an explicit
+error rather than silently omitting the image. Original image copies remain
+available for crops. Tracing shows complete generated commands, not partial
+argument fragments.
+
 A subagent is `zel -p` run from the agent's bash. It becomes a child of the
 session: `ZEL_MODE=headless`, the parent's model and config layers unless
-given others, and a row in the parent's chat while it runs. Its answer goes
+given others. Child tracking participates in idle/lifecycle handling. Its answer goes
 to stdout, `zel: session ID` to stderr (`--json` prints `{ok, answer,
 session, error}`). `zel -p --resume ID` continues one of your own children
 only. Children nest at most 3 deep. In a bash call a child has the same time
@@ -294,7 +303,8 @@ stdout replaces it and zel wraps it back (output that already is one
 Exit 2: the notification is dropped without a trace in the chat.
 
 `session_closed` runs within what is left of the 5 s shutdown budget, after
-the session's tasks were stopped.
+the session's tasks were stopped. Asynchronous hooks are cancelled and joined
+before session resources are released; they do not outlive the session.
 
 zel writes no window title or progress to the terminal. A hook can, by writing
 to `/dev/tty`; the global example shows the terminal progress bar (OSC 9;4)
