@@ -316,12 +316,20 @@ func (s *session) UpdateSettings(next Settings) error {
 	}
 	add("settings.compaction", next.CompactionThreshold != cur.CompactionThreshold, next.CompactionThreshold)
 	add("settings.reasoning_summary", next.ReasoningSummary != cur.ReasoningSummary, next.ReasoningSummary)
-	add("settings.accent", next.UI.Accent != cur.UI.Accent, next.UI.Accent)
+	for i, key := range config.ColorKeys {
+		add("colors."+key, next.Colors[i] != cur.Colors[i], next.Colors[i])
+	}
 	add("settings.slash_menu", next.UI.SlashMenu != cur.UI.SlashMenu, next.UI.SlashMenu)
 	add("settings.bash_timeout", next.BashTimeout != cur.BashTimeout, next.BashTimeout)
 	for _, c := range set {
 		if err := config.SetKey(s.target(c.key), c.key, c.value); err != nil {
 			return err
+		}
+		// settings.accent was the old place of colors.accent: drop it once the new key is written.
+		if cfg := s.conf.get(); c.key == "colors.accent" && cfg != nil && cfg.Sources["settings.accent"] != "" {
+			if err := config.DeleteKey(cfg.Sources["settings.accent"], "settings.accent"); err != nil {
+				return err
+			}
 		}
 	}
 	for name, p := range next.Providers {

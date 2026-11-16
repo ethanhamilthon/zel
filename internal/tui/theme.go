@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"zel/internal/config"
 )
 
 // showTurnStats controls metadata on answer headers.
@@ -19,24 +21,37 @@ var accentColors = []struct{ name, hex string }{
 	{"Amber", "#f5b041"}, {"Orange", "#ff9e57"}, {"Sand", "#d4b483"}, {"Silver", "#b0b8c4"},
 }
 
-// accentIndex finds an accent by hex value; unknown and empty values are the default.
+// accentIndex finds an accent of the palette by hex value; -1 when it is not there
+// (Settings shows it as "Custom").
 func accentIndex(accent string) int {
 	for i, c := range accentColors {
 		if strings.EqualFold(c.hex, strings.TrimSpace(accent)) {
 			return i
 		}
 	}
-	return 0
+	return -1
 }
 
-// applyTheme applies the accent to every accent-bearing UI element; neutral and
-// error colors stay fixed.
-func applyTheme(accent string) {
-	if accent = strings.TrimSpace(accent); accent == "" {
-		accent = accentColors[0].hex
+// accentName is the palette name of an accent, or "Custom".
+func accentName(accent string) string {
+	if i := accentIndex(accent); i >= 0 {
+		return accentColors[i].name
 	}
-	for _, color := range []*lipgloss.Color{&inputBlue, &cyan, &assistantColor, &infoColor, &warnColor} {
-		*color = lipgloss.Color(accent)
+	return "Custom"
+}
+
+// applyTheme sets every UI color from [colors]; the TUI has no other hex values
+// except the accent palette and the literal tones of highlighted bash.
+func applyTheme(c config.Colors) {
+	color := func(key string) lipgloss.Color { return lipgloss.Color(c.Get(key)) }
+	bgColor, accentColor, agentColor, userColor = color("bg"), color("accent"), color("agent"), color("user")
+	userHighlight, grayColor, darkGray, errorColor = color("user_highlight"), color("gray"), color("dark_gray"), color("error")
+	notice := color("trace.notice")
+	traceColors = map[string]lipgloss.Color{
+		"system": color("trace.system"), "user": color("trace.user"), "assistant": color("trace.agent"), "agent": color("trace.agent"),
+		"bash": color("trace.bash"), "notice": notice, "compaction": notice, "task": notice,
+		"output": color("trace.output"), "error": color("trace.error"),
 	}
-	markdownStyle = fmt.Sprintf(markdownTemplate, assistantColor, cyan, warnColor, inputBlue, inputBlue, inputBlue, inputBlue, inputBlue)
+	a := accentColor
+	markdownStyle = fmt.Sprintf(markdownTemplate, a, a, a, a, a, a, a, a)
 }

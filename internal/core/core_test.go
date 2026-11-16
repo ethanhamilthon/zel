@@ -386,11 +386,11 @@ func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, local, "instructions = [\"RULE-ONE\"]\n[settings]\naccent = \"magenta\"\n")
-	if err := a.Reload(); err != nil || a.Settings().UI.Accent != "magenta" || instructionItems(a) != 1 {
-		t.Fatalf("reload: %v accent %q, %d prompts", err, a.Settings().UI.Accent, instructionItems(a))
+	writeFile(t, local, "instructions = [\"RULE-ONE\"]\n[colors]\naccent = \"#aa00aa\"\n")
+	if err := a.Reload(); err != nil || a.Settings().Colors.Get("accent") != "#aa00aa" || instructionItems(a) != 1 {
+		t.Fatalf("reload: %v accent %q, %d prompts", err, a.Settings().Colors.Get("accent"), instructionItems(a))
 	}
-	writeFile(t, local, "instructions = [\"RULE-TWO\"]\n[settings]\naccent = \"magenta\"\n")
+	writeFile(t, local, "instructions = [\"RULE-TWO\"]\n[colors]\naccent = \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || instructionItems(a) != 2 {
 		t.Fatalf("reload: %v, %d prompts", err, instructionItems(a))
 	}
@@ -398,7 +398,11 @@ func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "modle") {
 		t.Fatalf("broken layer: %v", err)
 	}
-	if a.Settings().UI.Accent != "magenta" || instructionItems(a) != 2 {
+	writeFile(t, local, "[colors]\naccent = \"purple\"\n")
+	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "colors.accent") {
+		t.Fatalf("bad color: %v", err)
+	}
+	if a.Settings().Colors.Get("accent") != "#aa00aa" || instructionItems(a) != 2 {
 		t.Fatal("a broken layer changed the snapshot")
 	}
 	if _, err := turn(t, a, "again"); err != nil {
@@ -435,15 +439,22 @@ func TestSettingsAreWrittenToTheLayerTheyComeFrom(t *testing.T) {
 	if next.Model != "picked" || next.Effort != "high" {
 		t.Fatalf("selection: %+v", next)
 	}
-	next.UI.Accent, next.BashTimeout = "magenta", 9
+	// the old settings.accent gives way to colors.accent in its file
+	if err := config.SetKey(global, "settings.accent", "#111111"); err != nil || a.Reload() != nil || a.Settings().Colors.Get("accent") != "#111111" {
+		t.Fatalf("settings.accent: %v %q", err, a.Settings().Colors.Get("accent"))
+	}
+	next = a.Settings()
+	next.Colors.Set("accent", "#aa00aa")
+	next.BashTimeout = 9
 	if err := a.UpdateSettings(next); err != nil {
 		t.Fatal(err)
 	}
 	g, l = read(global), read(local)
-	if !strings.Contains(g, `accent = "magenta"`) || strings.Contains(l, "accent") || !strings.Contains(l, "bash_timeout = 9") || strings.Contains(g, "bash_timeout") {
+	if !strings.Contains(g, "[colors]\naccent = \"#aa00aa\"") || strings.Contains(g, "#111111") || strings.Contains(l, "accent") ||
+		!strings.Contains(l, "bash_timeout = 9") || strings.Contains(g, "bash_timeout") {
 		t.Fatalf("settings change:\nglobal:\n%s\nlocal:\n%s", g, l)
 	}
-	if st := a.Settings(); st.UI.Accent != "magenta" || st.BashTimeout != 9 || st.Model != "picked" {
+	if st := a.Settings(); st.Colors.Get("accent") != "#aa00aa" || st.BashTimeout != 9 || st.Model != "picked" {
 		t.Fatalf("after update: %+v", st)
 	}
 	bad := a.Settings()
@@ -694,7 +705,7 @@ func TestConfigWatchAndBrokenLayerAtStart(t *testing.T) {
 	// The watcher takes its first look in the background, so a change made at
 	// once may be part of it: change the file again until it is noticed.
 	for i := 0; ; i++ {
-		if err := config.SetKey(filepath.Join(a.Home(), "zel.toml"), "settings.accent", fmt.Sprint("color", i)); err != nil {
+		if err := config.SetKey(filepath.Join(a.Home(), "zel.toml"), "env.WATCH", fmt.Sprint("value", i)); err != nil {
 			t.Fatal(err)
 		}
 		select {

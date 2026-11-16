@@ -107,7 +107,7 @@ func (m model) workingBlock() string {
 	}
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
 	text := ansi.Truncate(workingText(status, m.turnSteps()), max(1, m.width-2), "…")
-	return lipgloss.NewStyle().Foreground(inputBlue).Render(star) + " " + lipgloss.NewStyle().Foreground(muted).Render(text) + "\n\n"
+	return lipgloss.NewStyle().Foreground(accentColor).Render(star) + " " + lipgloss.NewStyle().Foreground(grayColor).Render(text) + "\n\n"
 }
 
 // workingText is the text of the working indicator: elapsed time, steps (or
@@ -194,7 +194,7 @@ func (m model) formatTaskRow(task core.ActiveTask) string {
 	}
 	pad := max(1, m.width-ansi.StringWidth(icon)-1)
 	text := ansi.Truncate(name+" · "+formatDuration(elapsed), pad, "…")
-	return lipgloss.NewStyle().Foreground(inputBlue).Render(icon) + " " + lipgloss.NewStyle().Foreground(muted).Render(text)
+	return lipgloss.NewStyle().Foreground(accentColor).Render(icon) + " " + lipgloss.NewStyle().Foreground(grayColor).Render(text)
 }
 
 func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {

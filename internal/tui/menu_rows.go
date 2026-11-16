@@ -48,7 +48,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentColors[accentIndex(s.UI.Accent)].name}, {"Bash timeout", fmt.Sprintf("%d s", s.BashTimeout)}}
+		rows = []menuRow{{"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentName(s.Colors.Get("accent"))}, {"Bash timeout", fmt.Sprintf("%d s", s.BashTimeout)}}
 	case menuResume:
 		for _, s := range mu.sessions {
 			rows = append(rows, menuRow{sessionTitle(s), sessionTime(s.Updated)})
@@ -77,7 +77,7 @@ func (m model) buildMenuRows() []menuRow {
 			rows = []menuRow{{"No models", ""}}
 		}
 	case menuAccent:
-		current := accentIndex(m.ctl.Settings().UI.Accent)
+		current := accentIndex(m.ctl.Settings().Colors.Get("accent"))
 		for i, c := range accentColors {
 			row := menuRow{label: c.name}
 			if i == current {

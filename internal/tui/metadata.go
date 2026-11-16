@@ -70,12 +70,12 @@ func infoRows(info core.Info) []menuRow {
 	}
 }
 
-// infoBody returns the key/value rows of the Info page, keys muted.
+// infoBody returns the key/value rows of the Info page, keys gray.
 func infoBody(rows []menuRow, w int) []string {
 	if len(rows) > 0 {
 		rows = rows[1:]
 	}
-	key, val := lipgloss.NewStyle().Foreground(muted), lipgloss.NewStyle().Foreground(foreground)
+	key, val := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(agentColor)
 	lines := make([]string, 0, len(rows))
 	for _, r := range rows {
 		k := fmt.Sprintf("%-10s", r.label)

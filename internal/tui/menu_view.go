@@ -16,9 +16,9 @@ func (m model) menuView() string {
 	title, shortcut := m.menuHead()
 	lines := make([]string, 0, m.height)
 	lines = append(lines, make([]string, m.menuTop())...)
-	header := pad + lipgloss.NewStyle().Foreground(foreground).Render(title) +
+	header := pad + lipgloss.NewStyle().Foreground(agentColor).Render(title) +
 		strings.Repeat(" ", max(1, w-ansi.StringWidth(title)-ansi.StringWidth(shortcut))) +
-		lipgloss.NewStyle().Foreground(muted).Render(shortcut)
+		lipgloss.NewStyle().Foreground(grayColor).Render(shortcut)
 	if m.traceEntryView() {
 		header = m.traceHeader(pad, w)
 	}
@@ -40,7 +40,7 @@ func (m model) menuView() string {
 		for len(lines) < bodyRows {
 			lines = append(lines, "")
 		}
-		lines = append(lines, pad+lipgloss.NewStyle().Foreground(muted).Render(hint))
+		lines = append(lines, pad+lipgloss.NewStyle().Foreground(grayColor).Render(hint))
 	}
 	if m.height <= 0 {
 		return ""
@@ -144,9 +144,9 @@ func (m model) pageLines(pad string, w int) []string {
 		lines := make([]string, 0, height)
 		gray := 0
 		for i := start; i < min(len(body), start+height); i++ {
-			color := foreground
+			color := agentColor
 			if i < gray {
-				color = muted
+				color = grayColor
 			}
 			if m.menu.page == menuInfo {
 				lines = append(lines, pad+body[i])
@@ -158,8 +158,8 @@ func (m model) pageLines(pad string, w int) []string {
 	}
 	rows := m.menuRows()
 	width := w
-	fg := lipgloss.NewStyle().Foreground(foreground)
-	dim, accent := lipgloss.NewStyle().Foreground(muted), lipgloss.NewStyle().Foreground(inputBlue)
+	fg := lipgloss.NewStyle().Foreground(agentColor)
+	dim, accent := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(accentColor)
 	first, visible := m.listWindow(len(rows))
 	indices := m.menuIndices(m.rawMenuRows())
 	var lines []string
@@ -228,11 +228,11 @@ func (m model) traceHeader(pad string, width int) string {
 		kind = ansi.Truncate(kind, max(1, rightAt-centerAt-1), "…")
 		kindWidth = ansi.StringWidth(kind)
 	}
-	return pad + lipgloss.NewStyle().Foreground(muted).Render(left) +
+	return pad + lipgloss.NewStyle().Foreground(grayColor).Render(left) +
 		strings.Repeat(" ", max(1, centerAt-leftWidth)) +
 		lipgloss.NewStyle().Foreground(traceColor(e.Kind)).Render(kind) +
 		strings.Repeat(" ", max(1, rightAt-centerAt-kindWidth)) +
-		lipgloss.NewStyle().Foreground(muted).Render(right)
+		lipgloss.NewStyle().Foreground(grayColor).Render(right)
 }
 
 // textLayout is the laid-out body of the open text page. It is rebuilt only when

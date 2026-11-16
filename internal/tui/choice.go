@@ -59,8 +59,8 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // choiceBlock is the question and its options, drawn in the composer's place.
 func (m model) choiceBlock() string {
 	width := max(1, m.width)
-	title := lipgloss.NewStyle().Foreground(foreground).Bold(true)
-	dim, accent := lipgloss.NewStyle().Foreground(muted), lipgloss.NewStyle().Foreground(inputBlue)
+	title := lipgloss.NewStyle().Foreground(agentColor).Bold(true)
+	dim, accent := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(accentColor)
 	rows := []string{title.Render(ansi.Truncate(sanitizeLabel(m.choice.Title), width, "…"))}
 	count := len(m.choice.Options)
 	visible := min(count, max(1, m.height-6))

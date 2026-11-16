@@ -27,6 +27,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 
+	"zel/internal/config"
 	"zel/internal/core"
 	"zel/internal/ipc"
 )
@@ -1304,22 +1305,39 @@ func TestTracingPrefixFiltersEveryType(t *testing.T) {
 	}
 }
 
-func TestSingleAccent(t *testing.T) {
-	applyTheme("#80b3ad")
-	for _, color := range []string{string(inputBlue), string(cyan), string(assistantColor), string(infoColor), string(warnColor)} {
-		if color != "#80b3ad" {
-			t.Fatalf("independent accent: %s", color)
+// Every [colors] key reaches its variable; bg fills whole rows, also after resets.
+func TestTheme(t *testing.T) {
+	defer applyTheme(config.DefaultColors())
+	var c config.Colors
+	for i := range c {
+		c[i] = fmt.Sprintf("#0000%02x", i+1)
+	}
+	applyTheme(c)
+	got := []lipgloss.Color{bgColor, accentColor, agentColor, userColor, userHighlight, grayColor, darkGray, errorColor,
+		traceColors["system"], traceColors["user"], traceColors["agent"], traceColors["bash"], traceColors["notice"], traceColors["output"], traceColors["error"]}
+	for i, key := range config.ColorKeys {
+		if string(got[i]) != c[i] {
+			t.Errorf("%s = %s, want %s", key, got[i], c[i])
 		}
 	}
-	if string(errorColor) == string(inputBlue) || string(queueColor) == string(inputBlue) {
-		t.Fatal("error red or neutral queued pulse lost")
+	if traceColors["task"] != traceColors["notice"] || traceColors["assistant"] != traceColors["agent"] || !strings.Contains(markdownStyle, c[1]) {
+		t.Errorf("trace kinds or markdown do not follow the theme")
 	}
-	applyTheme("")
+
+	bg := "\x1b[48;2;1;2;3m"
+	row := withBackground("a\x1b[38;2;0;0;0mb\x1b[0mc\x1b[1;49md\x1b[38;5;0me", 8, bg)
+	want := bg + "a\x1b[38;2;0;0;0mb\x1b[0m" + bg + "c\x1b[1;49m" + bg + "d\x1b[38;5;0me   \x1b[m"
+	if row != want {
+		t.Errorf("row = %q\nwant  %q", row, want)
+	}
+	if withBackground("", 3, bg) != bg+"   \x1b[m" || withBackground("x", 3, "") != "x" {
+		t.Error("empty rows must be filled, and no bg leaves rows as they are")
+	}
 }
 
 func TestAccentChoiceFromSettings(t *testing.T) {
-	defer applyTheme("")
-	m := bareModel(t, t.TempDir())
+	defer applyTheme(config.DefaultColors())
+	m, a := freshModel(t)
 	m.menu = &menuState{page: menuSettings, selected: 3}
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.menu.page != menuAccent || len(m.menuRows()) < 15 || m.menuRows()[0].detail != "current" {
@@ -1327,11 +1345,17 @@ func TestAccentChoiceFromSettings(t *testing.T) {
 	}
 	m.menu.selected = accentIndex("#80b3ad")
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.ctl.Settings().UI.Accent != "#80b3ad" || string(inputBlue) != "#80b3ad" || m.menu.page != menuSettings {
-		t.Fatalf("accent not applied: %q %q %v", m.ctl.Settings().UI.Accent, inputBlue, m.menu.page)
+	if accent := m.ctl.Settings().Colors.Get("accent"); accent != "#80b3ad" || string(accentColor) != "#80b3ad" || m.menu.page != menuSettings {
+		t.Fatalf("accent not applied: %q %q %v", accent, accentColor, m.menu.page)
 	}
 	if rows := m.menuRows(); rows[3].detail != "Teal" {
 		t.Fatalf("settings row = %v", rows[3])
+	}
+	if data, _ := os.ReadFile(a.ConfigFiles()[0]); !strings.Contains(string(data), "[colors]\naccent = \"#80b3ad\"") {
+		t.Fatalf("the accent must be written as colors.accent:\n%s", data)
+	}
+	if accentName("#123456") != "Custom" || accentName("#D97757") != "Clay" {
+		t.Fatal("a hex outside the palette is Custom")
 	}
 }
 
@@ -1838,7 +1862,7 @@ func TestTracingEntryMarkdownHeaderColorsAndScrolling(t *testing.T) {
 			t.Fatalf("duplicate type-only line remains: %q", lines[i])
 		}
 	}
-	for kind, want := range map[string]string{"system": string(darkGray), "user": string(inputBlue), "assistant": "#ffffff", "bash": string(codeGray), "notice": "#808080", "task": "#808080", "output": "#404040"} {
+	for kind, want := range map[string]string{"system": string(darkGray), "user": string(accentColor), "assistant": "#ffffff", "bash": "#a0a0a0", "notice": "#808080", "task": "#808080", "output": "#404040"} {
 		if got := string(traceColor(kind)); got != want {
 			t.Errorf("%s color = %s, want %s", kind, got, want)
 		}
@@ -2544,19 +2568,19 @@ func (m *model) referenceTimelineRows(budget time.Duration) []string {
 		start = max(0, m.fileSelected%count-rows+1)
 		for i := start; i < min(count, start+rows); i++ {
 			selected := i == m.fileSelected%count
-			marker, fg := "  ", muted
+			marker, fg := "  ", grayColor
 			if selected {
-				marker, fg = " <", foreground
+				marker, fg = " <", agentColor
 				if m.width < ansi.StringWidth(marker) {
 					marker = "<"
 				}
 			}
 			label := ansi.Truncate(sanitizeLabel(m.fileCompletions[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
-			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
+			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(accentColor).Render(marker)
 			screen.add(row + "\n")
 		}
 		if remaining := count - min(count, start+rows); remaining > 0 {
-			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
+			screen.add(lipgloss.NewStyle().Foreground(grayColor).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
 		}
 	}
 	return screen

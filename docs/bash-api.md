@@ -108,9 +108,11 @@ instructions = [
 [settings]
 compaction        = 400000     # tokens, 0 = off
 reasoning_summary = true
-accent            = "#c3e88d"
 slash_menu        = true
 bash_timeout      = 30         # seconds per bash call
+
+[colors]                       # the TUI theme; see `zel docs colors`
+accent = "#c3e88d"
 
 [providers.openai]
 base_url = "https://api.openai.com/v1"
@@ -146,6 +148,8 @@ plan = "${{ cat PLAN.md }}"
   they come from (`~/.zel/zel.toml` when no file sets them). Other open
   sessions keep their model; so does an open session when you edit `model` by hand.
 - `zel config` prints the merged config and where every key comes from.
+- `settings.accent` of 0.7.0 is read as `colors.accent`, with a notice;
+  picking an accent in Settings moves it there.
 
 Your own tools are scripts in `~/.zel/bin` or `./.zel/bin`, which lead PATH;
 tell the agent about them in `instructions`.
@@ -209,6 +213,54 @@ fix this <completion name="plan">
 An empty or failing completion keeps your draft and shows why; Ctrl+D cancels
 one still running. Names are 1 to 64 letters, digits, `-` or `_`; unknown
 `#names` stay as typed, with no tag.
+
+## Colors
+
+`[colors]` sets every color of the TUI. Values are `#rrggbb` hex; a missing
+key keeps the default. Layers merge by key, a change applies on reload, and a
+bad value is a config error: the previous config stays and the error is shown.
+
+```toml
+[colors]
+bg             = ""         # empty: the terminal's own background
+accent         = "#d97757"
+agent          = "#d6d6d6"
+user           = "#606060"
+user_highlight = "#8c8c8c"
+gray           = "#929292"
+dark_gray      = "#606060"
+error          = "#e27878"
+
+[colors.trace]
+system  = "#606060"
+user    = "#d97757"
+agent   = "#ffffff"
+bash    = "#a0a0a0"
+notice  = "#808080"   # notices, compaction, tasks
+output  = "#404040"
+error   = "#e27878"
+```
+
+- `bg`: the background of the whole screen (chat, composer, menus, Tracing,
+  choice, onboarding).
+- `accent`: the composer rail, the `*` header over answers, choice and menu
+  markers, status icons, onboarding title, headings, inline code and links in
+  answers, keywords in highlighted bash. Settings → Accent color picks one from
+  a palette and writes `colors.accent` into the layer it comes from; a hex
+  outside the palette shows as "Custom".
+- `agent`: the text of answers, the main text of menus, Info values, the
+  choice title and the rail text of forms.
+- `user`: your messages in the chat and the composer text; `user_highlight`:
+  the composer line under the cursor.
+- `gray`: hints, time and steps, the working line, inactive menu rows, Info
+  keys, the `+ N more` row, the composer placeholder, punctuation in bash.
+- `dark_gray`: the "context compacted" divider, Tracing row numbers, onboarding
+  subtitle and hints, bash comments, the pulse of a queued composer.
+- `error`: failed turns, prompt errors, onboarding form errors.
+- `trace.*`: the kind labels and bodies in Tracing, one per kind; `trace.bash`
+  is also the plain text of highlighted bash.
+
+Strings and numbers in highlighted bash keep fixed tones.
 
 ## Examples
 

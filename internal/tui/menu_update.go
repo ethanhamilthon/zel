@@ -267,7 +267,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 	case menuSettings:
 		if index == 3 {
 			open(menuAccent)
-			mu.selected = accentIndex(m.ctl.Settings().UI.Accent)
+			mu.selected = max(0, accentIndex(m.ctl.Settings().Colors.Get("accent")))
 		} else if index == 1 || index == 2 {
 			settings := m.ctl.Settings()
 			if index == 1 {
@@ -303,10 +303,7 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 	case menuAccent:
 		if index >= 0 && index < len(accentColors) {
 			settings := m.ctl.Settings()
-			settings.UI.Accent = accentColors[index].hex
-			if index == 0 {
-				settings.UI.Accent = ""
-			}
+			settings.Colors.Set("accent", accentColors[index].hex)
 			if err := m.ctl.UpdateSettings(settings); err != nil {
 				return m.reject(err)
 			}

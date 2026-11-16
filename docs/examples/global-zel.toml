@@ -17,8 +17,14 @@ instructions = [
 
 [settings]
 compaction   = 400000
-accent       = "#c3e88d"
 bash_timeout = 30
+
+[colors]
+accent = "#c3e88d"
+bg     = "#1a1b26"
+
+[colors.trace]
+agent = "#e0e0e0"
 
 [providers.openai]
 base_url = "https://api.openai.com/v1"

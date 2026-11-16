@@ -32,7 +32,6 @@ type Provider struct {
 // UI holds application display preferences.
 type UI struct {
 	SlashMenu bool
-	Accent    string // accent color; empty selects the default
 }
 
 // Settings is the effective configuration merged from the zel.toml layers
@@ -43,13 +42,14 @@ type Settings struct {
 	CompactionThreshold     int
 	BashTimeout             int // seconds per bash call of the agent
 	UI                      UI
+	Colors                  Colors // [colors]: the TUI theme, defaults filled in
 	Providers               map[string]Provider
 	Env                     map[string]string // [env]: extra variables for bash, tasks, hooks and ${{ }}
 }
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout,
-		UI: UI{SlashMenu: true}, Providers: map[string]Provider{}, Env: map[string]string{}}
+		UI: UI{SlashMenu: true}, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {
@@ -81,6 +81,11 @@ func Validate(s Settings) error {
 	}
 	if s.BashTimeout <= 0 {
 		return fmt.Errorf("bash_timeout must be > 0 seconds")
+	}
+	for i, key := range ColorKeys {
+		if err := CheckColor(key, s.Colors[i]); err != nil {
+			return err
+		}
 	}
 	if !slices.Contains(Efforts, s.Effort) {
 		return fmt.Errorf("unsupported effort %q", s.Effort)

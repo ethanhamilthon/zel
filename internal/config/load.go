@@ -71,6 +71,7 @@ type layerConf struct {
 	instructions []Instruction
 	hooks        []Hook
 	completions  []named[string]
+	warnings     []string
 }
 
 type setting struct {
@@ -87,9 +88,10 @@ type envEntry struct{ path, name, value string }
 
 // Load reads and merges the layers. Unreadable or invalid layers are skipped
 // and reported in Errors. With a non-nil run, ${{ }} in env values (in merge
-// order, each with the env known so far), provider, model, effort,
-// settings.accent, provider fields and instruction texts is expanded with the
-// Expander run returns. Load does not call Validate.
+// order, each with the env known so far), provider, model, effort, colors,
+// provider fields and instruction texts is expanded with the Expander run
+// returns. A color that is not valid after expansion keeps its default, with a
+// warning. Load does not call Validate.
 func Load(ctx context.Context, layers []Layer, run func(env map[string]string) Expander) *Config {
 	cfg := &Config{Settings: DefaultSettings(), Hooks: map[string][]Hook{}, Completions: map[string]string{}, Sources: map[string]string{}}
 	var env []envEntry // in order of first definition, with the last value
@@ -105,6 +107,9 @@ func Load(ctx context.Context, layers []Layer, run func(env map[string]string) E
 			continue
 		}
 		cfg.Layers = append(cfg.Layers, l)
+		for _, w := range lc.warnings {
+			cfg.Warnings = append(cfg.Warnings, l.Path+": "+w)
+		}
 		for _, s := range lc.settings {
 			s.apply(&cfg.Settings)
 			cfg.Sources[s.key] = l.Path
@@ -161,7 +166,18 @@ func (c *Config) expand(ctx context.Context, env []envEntry, run func(map[string
 	do(exp, c.Sources["provider"], "provider", &s.Provider)
 	do(exp, c.Sources["model"], "model", &s.Model)
 	do(exp, c.Sources["effort"], "effort", &s.Effort)
-	do(exp, c.Sources["settings.accent"], "settings.accent", &s.UI.Accent)
+	defaults := DefaultColors()
+	for i, key := range ColorKeys {
+		path, ok := c.Sources["colors."+key]
+		if !ok || run == nil || !strings.Contains(s.Colors[i], "${{") {
+			continue
+		}
+		do(exp, path, "colors."+key, &s.Colors[i])
+		if err := CheckColor(key, s.Colors[i]); err != nil {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: %v; the default stays", path, err))
+			s.Colors[i] = defaults[i]
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(s.Providers)) {
 		p, path, key := s.Providers[name], c.Sources["providers."+name], "providers."+name
 		do(exp, path, key+".base_url", &p.BaseURL)
@@ -253,6 +269,8 @@ func (p parser) layer(data map[string]any) (*layerConf, error) {
 			}})
 		case "settings":
 			err = p.settings(lc, v)
+		case "colors":
+			err = p.colors(lc, v)
 		case "providers":
 			err = p.providers(lc, v)
 		case "env":
@@ -336,12 +354,19 @@ func (p parser) settings(lc *layerConf, v any) error {
 					s.ReasoningSummary = b
 				}
 			}
-		case "accent":
+		case "accent": // before colors.accent; read as it, with a warning
 			str, ok := v.(string)
 			if !ok {
 				return fmt.Errorf("%s: must be a string", where)
 			}
-			apply = func(s *Settings) { s.UI.Accent = str }
+			if !strings.Contains(str, "${{") {
+				if err := CheckColor("accent", str); err != nil {
+					return fmt.Errorf("%s: %v", where, err)
+				}
+			}
+			lc.warnings = append(lc.warnings, "settings.accent is now colors.accent; it is read as colors.accent")
+			lc.settings = append(lc.settings, setting{where, func(s *Settings) {}})
+			where, apply = "colors.accent", func(s *Settings) { s.Colors.Set("accent", str) }
 		default:
 			return fmt.Errorf("unknown key %q", where)
 		}

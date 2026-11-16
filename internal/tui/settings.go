@@ -222,7 +222,7 @@ func (m model) formView() string {
 		text = ansi.Truncate(text, w, "…")
 		return pad + strings.Repeat(" ", max(0, (w-ansi.StringWidth(text))/2)) + text
 	}
-	lines = append(lines, center(lipgloss.NewStyle().Foreground(inputBlue).Render(title)), center(lipgloss.NewStyle().Foreground(darkGray).Render(subtitle)), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), "", pad+renderRail(view, w, false), "")
+	lines = append(lines, center(lipgloss.NewStyle().Foreground(accentColor).Render(title)), center(lipgloss.NewStyle().Foreground(darkGray).Render(subtitle)), "", pad+fmt.Sprintf("%-*s %d/%d", max(1, w-5), f.fields[f.step], f.step+1, len(f.fields)), "", pad+renderRail(view, w, false), "")
 	if f.err != "" {
 		lines = append(lines, pad+lipgloss.NewStyle().Foreground(errorColor).Render(ansi.Truncate(f.err, w, "…")))
 	}

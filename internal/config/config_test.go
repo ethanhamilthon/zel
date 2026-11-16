@@ -66,7 +66,9 @@ model = "m1"
 instructions = ["global ${{ hi }}", { text = "headless only", main = false, headless = true }, ""]
 [settings]
 compaction = 1000
-accent = "${{ fail }}red"
+[colors]
+accent = "${{ fail }}#123456"
+user = "#111111"
 [providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "${{ env KEY }}"
@@ -84,6 +86,10 @@ instructions = [{ text = "local" }]
 [settings]
 bash_timeout = 5
 slash_menu = false
+[colors]
+user = "#222222"
+[colors.trace]
+bash = "#010203"
 [providers.openai]
 base_url = "http://localhost:1234"
 [env]
@@ -107,8 +113,15 @@ fix = "local fix"
 	}
 	s := cfg.Settings
 	if s.Provider != "openai" || s.Model != "m2" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 ||
-		s.UI.SlashMenu || !s.ReasoningSummary || s.UI.Accent != "red" {
+		s.UI.SlashMenu || !s.ReasoningSummary {
 		t.Fatalf("settings: %+v", s)
+	}
+	wantColors := DefaultColors()
+	wantColors.Set("accent", "#123456")
+	wantColors.Set("user", "#222222")
+	wantColors.Set("trace.bash", "#010203")
+	if s.Colors != wantColors {
+		t.Fatalf("colors: %v", s.Colors)
 	}
 	if p := s.Providers["openai"]; p.BaseURL != "http://localhost:1234" || p.APIKey != "" {
 		t.Fatalf("a later layer replaces the whole provider: %+v", p)
@@ -116,8 +129,8 @@ fix = "local fix"
 	if s.Env["KEY"] != "k-X:one" || s.Env["OTHER"] != "k-X:one" {
 		t.Fatalf("env: %v", s.Env)
 	}
-	wantSrc := map[string]string{"provider": global, "model": local, "settings.compaction": global, "settings.accent": global,
-		"settings.bash_timeout": local, "settings.slash_menu": local, "providers.openai": local, "env.KEY": global, "env.OTHER": local}
+	wantSrc := map[string]string{"provider": global, "model": local, "settings.compaction": global, "colors.accent": global,
+		"colors.user": local, "colors.trace.bash": local, "settings.bash_timeout": local, "settings.slash_menu": local, "providers.openai": local, "env.KEY": global, "env.OTHER": local}
 	if !reflect.DeepEqual(cfg.Sources, wantSrc) {
 		t.Fatalf("sources = %v", cfg.Sources)
 	}
@@ -135,11 +148,12 @@ fix = "local fix"
 		t.Fatalf("completions = %v", cfg.Completions)
 	}
 	if len(cfg.Warnings) != 2 || !strings.Contains(cfg.Warnings[0], "completion #fix of "+local) ||
-		!strings.HasPrefix(cfg.Warnings[1], global+": settings.accent: ${{ fail }}: boom") {
+		!strings.HasPrefix(cfg.Warnings[1], global+": colors.accent: ${{ fail }}: boom") {
 		t.Fatalf("warnings = %q", cfg.Warnings)
 	}
 	desc := cfg.Describe()
-	for _, part := range []string{"model", "m2", "api_key=empty", "Env: KEY, OTHER", "#fix", "bash_before: echo b [main, headless]"} {
+	for _, part := range []string{"model", "m2", "api_key=empty", "Env: KEY, OTHER", "#fix", "bash_before: echo b [main, headless]",
+		`colors.trace.bash          = "#010203"       ` + DisplayPath(local), `colors.bg                  = ""`} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("Describe lacks %q:\n%s", part, desc)
 		}
@@ -371,5 +385,25 @@ func TestDocExamplesLoad(t *testing.T) {
 		if len(cfg.Errors) > 0 || len(cfg.Layers) != 1 {
 			t.Errorf("%s: %v", name, cfg.Errors)
 		}
+	}
+}
+
+// A bad color is a layer error; settings.accent still works as colors.accent, with a warning.
+func TestColors(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{`[colors]` + "\naccent = \"red\"\n", "[colors]\nbg = \"#12345\"\n", "[colors]\nnope = \"#123456\"\n",
+		"[colors.trace]\nuser = 1\n", "[colors.trace]\nbg = \"#123456\"\n", "[colors]\naccent = \"\"\n"} {
+		path := filepath.Join(dir, "bad.toml")
+		writeFile(t, path, bad)
+		if cfg := Load(context.Background(), []Layer{{"config", path}}, nil); len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], "colors") {
+			t.Errorf("%q: errors %q", bad, cfg.Errors)
+		}
+	}
+	path := filepath.Join(dir, "old.toml")
+	writeFile(t, path, "[settings]\naccent = \"#80b3ad\"\n[colors]\nbg = \"\"\n")
+	cfg := Load(context.Background(), []Layer{{"config", path}}, nil)
+	if cfg.Settings.Colors.Get("accent") != "#80b3ad" || cfg.Sources["colors.accent"] != path || cfg.Sources["settings.accent"] != path ||
+		len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "colors.accent") || Validate(cfg.Settings) != nil {
+		t.Fatalf("settings.accent: %v %v %q", cfg.Settings.Colors, cfg.Sources, cfg.Warnings)
 	}
 }

@@ -47,11 +47,14 @@ func (c *Config) Describe() string {
 		{"effort", strconv.Quote(s.Effort)},
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
 		{"settings.reasoning_summary", strconv.FormatBool(s.ReasoningSummary)},
-		{"settings.accent", strconv.Quote(s.UI.Accent)},
 		{"settings.slash_menu", strconv.FormatBool(s.UI.SlashMenu)},
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
 	} {
 		p("  %-26s = %-14s  %s", row[0], row[1], src(row[0]))
+	}
+	p("Colors:")
+	for i, key := range ColorKeys {
+		p("  %-26s = %-14s  %s", "colors."+key, strconv.Quote(s.Colors[i]), src("colors."+key))
 	}
 	if len(s.Providers) > 0 {
 		p("Providers:")

@@ -35,8 +35,9 @@ func (d *display) draw(view string, width, height int) {
 	for len(next) < height {
 		next = append(next, "")
 	}
+	bg := backgroundSGR()
 	for i, row := range next {
-		next[i] = ansi.Truncate(row, width, "")
+		next[i] = withBackground(ansi.Truncate(row, width, ""), width, bg)
 	}
 	var out strings.Builder
 	prev := d.rows

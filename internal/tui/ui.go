@@ -109,17 +109,21 @@ func newComposer() textarea.Model {
 	input.SetHeight(1)
 	input.Focus()
 	input.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
-	// Text matches sent user messages; the line being edited is highlighted.
-	base := lipgloss.NewStyle().Foreground(darkGray)
-	current := lipgloss.NewStyle().Foreground(composerCurrent)
-	style := textarea.Style{Base: base, CursorLine: current, Text: base, Placeholder: base.Foreground(muted), EndOfBuffer: base}
-	input.FocusedStyle, input.BlurredStyle = style, style
+	input.FocusedStyle, input.BlurredStyle = composerStyle(), composerStyle()
 	input.Cursor.SetMode(cursor.CursorStatic)
 	// A zero-width marker locates the native terminal cursor after rendering.
 	input.Cursor.Style = lipgloss.NewStyle().Transform(func(s string) string {
-		return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(composerCurrent).Render(s)
+		return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(userHighlight).Render(s)
 	})
 	return input
+}
+
+// composerStyle colors the composer: its text matches sent user messages and
+// the line being edited is highlighted.
+func composerStyle() textarea.Style {
+	base := lipgloss.NewStyle().Foreground(userColor)
+	current := lipgloss.NewStyle().Foreground(userHighlight)
+	return textarea.Style{Base: base, CursorLine: current, Text: base, Placeholder: base.Foreground(grayColor), EndOfBuffer: base}
 }
 
 func newModel(a *core.Runtime, cwd string) model {
@@ -177,9 +181,10 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 func (m *model) refresh(follow bool) {
-	if accent := m.ctl.Settings().UI.Accent; "accent:"+accent != m.themeKey {
-		m.themeKey, m.cache = "accent:"+accent, nil
-		applyTheme(accent)
+	if colors := m.ctl.Settings().Colors; strings.Join(colors[:], " ") != m.themeKey {
+		m.themeKey, m.cache = strings.Join(colors[:], " "), nil
+		applyTheme(colors)
+		m.input.FocusedStyle, m.input.BlurredStyle = composerStyle(), composerStyle()
 	}
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)

@@ -10,26 +10,18 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lucasb-eyer/go-colorful"
+
+	"zel/internal/config"
 )
 
 var (
-	cyan             = lipgloss.Color("#d97757")
-	foreground       = lipgloss.Color("#d6d6d6")
-	muted            = lipgloss.Color("#929292")
-	codeGray         = lipgloss.Color("#a0a0a0")
-	darkGray         = lipgloss.Color("#606060")
-	composerCurrent  = lipgloss.Color("#8c8c8c")
-	inputBlue        = lipgloss.Color("#d97757")
-	inputBackground  = lipgloss.Color("#202020")
-	selectBackground = lipgloss.Color("#303030")
-	assistantColor   = lipgloss.Color("#d97757")
-	errorColor       = lipgloss.Color("#e27878")
-	warnColor        = lipgloss.Color("#d97757")
-	queueColor       = lipgloss.Color("#606060")
-	infoColor        = lipgloss.Color("#d97757")
-	markdownStyle    = fmt.Sprintf(markdownTemplate, assistantColor, cyan, warnColor, muted,
-		infoColor, errorColor, inputBlue, inputBlue)
+	// The theme, set by applyTheme from [colors]; see config.ColorKeys for where each goes.
+	bgColor, accentColor, agentColor, userColor, userHighlight, grayColor, darkGray, errorColor lipgloss.Color
+	traceColors                                                                                 map[string]lipgloss.Color
+	markdownStyle                                                                               string
 )
+
+func init() { applyTheme(config.DefaultColors()) }
 
 type paintKey struct {
 	row    string
@@ -68,7 +60,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	text := ansi.Strip(clampText(e.Text, maxLayoutBytes))
 	switch e.Kind {
 	case "user":
-		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, darkGray)
+		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, userColor)
 	case "prompt_error":
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, errorColor)
 	case "compaction":
@@ -82,7 +74,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 			header += " " + formatDuration(e.Meta.Duration) + " · " + formatSteps(e.Meta.Steps)
 		}
 		return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, errorColor) + "\n" +
-			paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, muted)
+			paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, grayColor)
 	case "assistant":
 	default:
 		return ""
@@ -98,7 +90,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 		body = "(no output)"
 	}
 	lines := linkedRows(body, width)
-	out := paint(strings.Join(lines, "\n"), width, lipgloss.NoColor{}, foreground)
+	out := paint(strings.Join(lines, "\n"), width, lipgloss.NoColor{}, agentColor)
 	if !showTurnStats {
 		return out
 	}
@@ -106,7 +98,7 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 	if metadata := answerMetadata(e); metadata != "" {
 		header += " " + metadata
 	}
-	return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, assistantColor) + "\n" + out
+	return paint(ansi.Truncate(header, width, "…"), width, lipgloss.NoColor{}, accentColor) + "\n" + out
 }
 
 func answerMetadata(e entry) string {
@@ -119,10 +111,10 @@ func answerMetadata(e entry) string {
 // renderRail draws the composer rail, smoothly pulsing while its draft is queued.
 func renderRail(text string, width int, queued bool) string {
 	lines := strings.Split(text, "\n")
-	color := inputBlue
+	color := accentColor
 	if queued {
-		from, e1 := colorful.Hex(string(inputBlue))
-		to, e2 := colorful.Hex(string(queueColor))
+		from, e1 := colorful.Hex(string(accentColor))
+		to, e2 := colorful.Hex(string(darkGray))
 		if e1 == nil && e2 == nil {
 			phase := (1 - math.Cos(float64(time.Now().UnixMilli())*2*math.Pi/1600)) / 2
 			color = lipgloss.Color(from.BlendRgb(to, phase).Hex())
@@ -130,7 +122,7 @@ func renderRail(text string, width int, queued bool) string {
 	}
 	rail := lipgloss.NewStyle().Foreground(color).Render("▌")
 	for i, line := range lines {
-		body := paint(" "+line, max(1, width-1), lipgloss.NoColor{}, foreground)
+		body := paint(" "+line, max(1, width-1), lipgloss.NoColor{}, agentColor)
 		lines[i] = ansi.Truncate(rail+body, max(1, width), "")
 	}
 	return strings.Join(lines, "\n")
@@ -272,22 +264,22 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 		start = max(0, selectedIndex-rows+1)
 		for i := start; i < min(count, start+rows); i++ {
 			selected := i == selectedIndex
-			marker, fg := "  ", muted
+			marker, fg := "  ", grayColor
 			if selected {
-				marker, fg = " <", foreground
+				marker, fg = " <", agentColor
 				if m.width < ansi.StringWidth(marker) {
 					marker = "<"
 				}
 			}
 			label := ansi.Truncate(sanitizeLabel(items[i]), max(0, m.width-ansi.StringWidth(marker)), "…")
-			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(inputBlue).Render(marker)
+			row := lipgloss.NewStyle().Foreground(fg).Render(label) + lipgloss.NewStyle().Foreground(accentColor).Render(marker)
 			screen := screenRows(tail)
 			screen.add(row + "\n")
 			tail = screen
 		}
 		if remaining := count - min(count, start+rows); remaining > 0 {
 			screen := screenRows(tail)
-			screen.add(lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
+			screen.add(lipgloss.NewStyle().Foreground(grayColor).Render(fmt.Sprintf("  + %d more items", remaining)) + "\n")
 			tail = screen
 		}
 	}

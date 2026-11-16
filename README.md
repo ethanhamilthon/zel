@@ -54,11 +54,12 @@ reasoning effort (default `medium`).
 Ctrl+K opens the menu (typing `/` into an empty composer does too; Settings →
 Slash opens menu turns that off). Providers adds, edits or deletes providers;
 Settings controls auto compaction, reasoning summaries, the accent color and
-the bash timeout. The menus write into the zel.toml layer the value comes from:
-picking a model switches this session and updates the `model` line of the file
-that set it. API keys are stored as you type them; `${{ echo $VAR }}` reads one
-from the environment, `${{ security find-generic-password -s NAME -w }}` from
-the Keychain.
+the bash timeout; every other color is in `[colors]` (`zel docs colors`).
+The menus write into the zel.toml layer the value comes from: picking a model
+switches this session and updates the `model` line of the file that set it.
+API keys are stored as you type them; `${{ echo $VAR }}` reads one from the
+environment, `${{ security find-generic-password -s NAME -w }}` from the
+Keychain.
 
 ## The bash tool
 
@@ -129,6 +130,9 @@ plan = "${{ cat PLAN.md }}"
 - **completions** register `#plan`: type `#` to list them, and the text,
   wrapped in `<completion name="plan">`, replaces the token when you send the
   message (main session only).
+- **colors**: `[colors]` sets every color of the TUI (`bg`, `accent`,
+  `agent`, `user`, grays, `error`, and `[colors.trace]` for Tracing) as
+  `#rrggbb`. See `zel docs colors`.
 - **tools** are scripts: put them in `~/.zel/bin` or `./.zel/bin` (both lead
   the agent's PATH) and describe them in `instructions`.
 

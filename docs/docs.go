@@ -22,12 +22,13 @@ var sections = map[string]Topic{
 	"zel.toml":           {"config", "zel.toml layers, keys, ${{ }}, hot reload, menus writing back"},
 	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},
+	"Colors":             {"colors", "[colors]: the TUI theme, key by key"},
 }
 
 var examples = Topic{"examples", "complete zel.toml files and a script tool"}
 
 // order is the order of the topics in the index.
-var order = []string{"The bash tool", "Commands", "zel.toml", "Hooks", "Prompt completions"}
+var order = []string{"The bash tool", "Commands", "zel.toml", "Hooks", "Prompt completions", "Colors"}
 
 // parse splits bash-api.md into its "## " sections; the text before the first one
 // is the intro and has no topic.

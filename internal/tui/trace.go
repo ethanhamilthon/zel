@@ -34,14 +34,8 @@ func traceContext(e core.TraceEntry) string {
 	return strings.Join(parts, " ")
 }
 
-var traceColors = map[string]lipgloss.Color{
-	"system": darkGray, "user": inputBlue, "assistant": lipgloss.Color("#ffffff"), "agent": lipgloss.Color("#ffffff"),
-	"bash": codeGray, "notice": lipgloss.Color("#808080"), "compaction": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
-	"output": lipgloss.Color("#404040"), "error": errorColor,
-}
-
 func traceColor(kind string) lipgloss.Color {
-	return cmp.Or(traceColors[kind], muted)
+	return cmp.Or(traceColors[kind], grayColor)
 }
 
 // traceDetail is the second column: when it happened and its first line, or the

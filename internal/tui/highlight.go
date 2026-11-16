@@ -18,15 +18,15 @@ func bashTokenColor(t chroma.TokenType) lipgloss.Color {
 	case t.InCategory(chroma.Comment):
 		return darkGray
 	case t.InCategory(chroma.Keyword), t == chroma.NameBuiltin:
-		return inputBlue
+		return accentColor
 	case t.InCategory(chroma.LiteralString):
 		return lipgloss.Color("#d4b483")
 	case t.InCategory(chroma.LiteralNumber):
 		return lipgloss.Color("#f5b041")
 	case t.InCategory(chroma.Operator), t.InCategory(chroma.Punctuation):
-		return muted
+		return grayColor
 	}
-	return codeGray
+	return traceColors["bash"]
 }
 
 // highlightBash lays out bash code for the trace view: tokens colored, lines
