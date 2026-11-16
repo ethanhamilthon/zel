@@ -746,6 +746,75 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	}
 }
 
+func TestFileBackedImagesAndLegacyHistory(t *testing.T) {
+	a := newTestAgent(t, okProvider(), Options{})
+	s := a.session()
+	original := Input{Text: "image", Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}
+	staged, err := s.stageInput(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staged.Images[0].URL == original.Images[0].URL || !strings.HasPrefix(staged.Images[0].URL, imageRefPrefix) {
+		t.Fatal("not staged")
+	}
+	s.commitInput(original) // immutable legacy record
+	legacy := append([]byte(nil), s.History[0]...)
+	s.commitInput(staged)
+	if strings.Contains(string(s.History[1]), "base64") {
+		t.Fatal("encoded preview retained")
+	}
+	hydrated, err := s.hydrateImages(s.requestInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hydrated) != 2 || !strings.Contains(string(hydrated[1]), "data:image/png;base64,aQ==") {
+		t.Fatalf("hydrate: %s", hydrated)
+	}
+	if string(s.History[0]) != string(legacy) {
+		t.Fatal("legacy was migrated")
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	id := s.id
+	a.Close()
+	resumed, err := New(s.dir, Options{Resume: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+	rs := resumed.session()
+	if _, err := rs.hydrateImages(rs.requestInput()); err != nil {
+		t.Fatal(err)
+	}
+	name := strings.TrimPrefix(staged.Images[0].URL, imageRefPrefix)
+	if err := os.Remove(filepath.Join(rs.sessionDir(), "attachments", name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.hydrateImages(rs.requestInput()); err == nil {
+		t.Fatal("missing preview silently omitted")
+	}
+	if _, err := rs.loadPreview("../escape.png"); err == nil {
+		t.Fatal("accepted path traversal")
+	}
+	rs.compacted = compaction{Drop: len(rs.History)}
+	if _, err := rs.hydrateImages(rs.requestInput()); err != nil {
+		t.Fatalf("compacted image was read: %v", err)
+	}
+}
+
+func TestFileBackedImageFailureDoesNotCommit(t *testing.T) {
+	a := newTestAgent(t, okProvider(), Options{})
+	s := a.session()
+	if err := os.WriteFile(filepath.Join(s.sessionDir(), "attachments"), []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := a.RunInput(context.Background(), Input{Text: "image", Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}, func(TurnEvent) {})
+	if err == nil || len(s.History) != 0 {
+		t.Fatalf("failed attachment committed: %v %d", err, len(s.History))
+	}
+}
+
 func TestSavedImageOriginalsRetainedAndMissingReported(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
 	path := filepath.Join(a.home, "attachments", "original.png")

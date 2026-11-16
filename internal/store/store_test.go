@@ -54,6 +54,38 @@ func TestSessionFile(t *testing.T) {
 	}
 }
 
+func TestUnchangedSavePreservesMetadataAndSuffixAppend(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Session{ID: "s", Project: "/project", First: "hello"}
+	items := []Item{{Data: json.RawMessage(`{"role":"user","content":"hello"}`)}}
+	if err := s.Save(v, items, 0); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Dir(v.Project, v.ID), "meta.json")
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(v, nil, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.ModTime().Equal(stamp) {
+		t.Fatal("no-change save rewrote meta", err)
+	}
+	next := Item{Data: json.RawMessage(`{"role":"assistant","content":"answer"}`)}
+	if err := s.Append(v, []Item{next}, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	_, loaded, err := s.Load(v.Project, v.ID)
+	if err != nil || len(loaded) != 2 || string(loaded[1].Data) != string(next.Data) {
+		t.Fatalf("suffix save: %v %+v", err, loaded)
+	}
+}
+
 func TestTasks(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	p := "/tmp/proj"

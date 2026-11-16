@@ -211,7 +211,12 @@ func (s *session) view(path string) error {
 	if !s.slots.reserve(1) {
 		return fmt.Errorf("at most %d new images per model request", MaxPendingImages)
 	}
-	if !s.queue.Push(withImages(notification("view: "+filepath.Base(path)+" attached"), image)) {
+	input, err := s.stageInput(withImages(notification("view: "+filepath.Base(path)+" attached"), image))
+	if err != nil {
+		s.slots.release(1)
+		return err
+	}
+	if !s.queue.Push(input) {
 		s.slots.release(1)
 		return fmt.Errorf("input queue is full")
 	}

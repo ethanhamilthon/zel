@@ -176,6 +176,11 @@ func (s *Store) Exists(project, id string) bool {
 // the title and model when they changed, and the items from saved on. When the
 // history is shorter than what was saved, a truncate line drops the rest.
 func (s *Store) Save(v Session, items []Item, saved int) error {
+	return s.Append(v, items[min(saved, len(items)):], saved, len(items))
+}
+
+// Append accepts only the changed suffix, avoiding full-history preparation.
+func (s *Store) Append(v Session, items []Item, saved, total int) error {
 	dir := s.Dir(v.Project, v.ID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -211,17 +216,22 @@ func (s *Store) Save(v Session, items []Item, saved int) error {
 	if v.Model != "" && (v.Provider != prev.Provider || v.Model != prev.Model || v.Effort != prev.Effort) {
 		_ = enc.Encode(line{T: "model", Provider: v.Provider, Model: v.Model, Effort: v.Effort})
 	}
-	if len(items) < saved {
-		n := len(items)
+	if total < saved {
+		n := total
 		_ = enc.Encode(line{T: "truncate", Seq: &n})
 	}
-	for i := min(saved, len(items)); i < len(items); i++ {
-		seq := i
+	for i := range items {
+		seq := min(saved, total) + i
 		_ = enc.Encode(line{T: "item", Seq: &seq, Data: items[i].Data, Meta: items[i].Meta})
 	}
 	if buf.Len() > 0 {
 		if err := appendFile(filepath.Join(dir, "session.jsonl"), buf.Bytes(), true); err != nil {
 			return err
+		}
+	}
+	if buf.Len() == 0 && known && v.First == prev.First && v.Parent == prev.Parent {
+		if _, err := os.Stat(filepath.Join(dir, "meta.json")); err == nil {
+			return nil
 		}
 	}
 	keep := v

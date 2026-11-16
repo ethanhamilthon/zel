@@ -29,6 +29,9 @@ const (
 		"tool calls, their outputs and reasoning before this point were removed; only user and assistant messages remain.\n</context-compacted>"
 )
 
+var compactionNoticeItem = raw(map[string]any{"role": "user", "content": compactionNotice})
+var compactionNoticeTokens = estimateTokens([]json.RawMessage{compactionNoticeItem})
+
 func compactionSnapshot(item json.RawMessage) (compaction, bool) {
 	var v struct {
 		Type string

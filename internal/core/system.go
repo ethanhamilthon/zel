@@ -102,15 +102,15 @@ func (s *session) requestInput() []json.RawMessage {
 func (s *session) requestInputLocked() []json.RawMessage {
 	input := make([]json.RawMessage, 0, len(s.History)+1)
 	marked := s.compacted.Drop == 0
-	for i, item := range s.History {
-		if sent, _ := historyItem(item); !sent {
+	for i := range s.History {
+		if !s.projection(i).sent {
 			continue
 		}
 		if !marked && i >= s.compacted.Drop {
-			input = append(input, raw(map[string]any{"role": "user", "content": compactionNotice}))
+			input = append(input, compactionNoticeItem)
 			marked = true
 		}
-		if item, ok := s.compactedInput(i, item); ok {
+		if item, ok, _ := s.compactedProjection(i); ok {
 			input = append(input, item)
 		}
 	}

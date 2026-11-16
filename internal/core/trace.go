@@ -59,11 +59,14 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 		if meta := s.itemMeta[seq]; meta != nil {
 			at = meta.At
 		}
-		if text, ok := instructionSnapshot(item); ok {
-			entries = append(entries, TraceEntry{Kind: "system", Text: text, At: at})
-			continue
+		p := s.projection(seq)
+		if !p.sent {
+			if text, ok := instructionSnapshot(item); ok {
+				entries = append(entries, TraceEntry{Kind: "system", Text: text, At: at})
+				continue
+			}
 		}
-		for _, r := range RecordsForItem(item) {
+		for _, r := range p.records {
 			if r.Kind == turnEndType {
 				continue // the TUI logs the error or stop separately
 			}

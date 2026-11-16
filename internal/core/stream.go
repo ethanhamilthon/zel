@@ -30,7 +30,11 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 		}
 	}
 	s.histMu.RUnlock()
-	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
+	input, err := s.hydrateImages(s.requestInput())
+	if err != nil {
+		return nil, err
+	}
+	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: input, Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
 		Tools: []provider.Tool{{Name: "bash", Description: BashToolDescription, Parameters: bashParameters(), Freeform: "command"}}}
 	started := time.Now()
 	s.histMu.Lock()

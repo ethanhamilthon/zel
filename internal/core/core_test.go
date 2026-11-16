@@ -20,6 +20,34 @@ import (
 
 // withLocal writes ./zel.toml of the session folder before the runtime starts.
 // Generated fixtures keep performance checks independent of private sessions.
+func TestContextProjectionInvalidation(t *testing.T) {
+	s := &session{History: []json.RawMessage{raw(map[string]any{"role": "user", "content": "first"})}}
+	initial := s.ContextTokens()
+	if again := s.ContextTokens(); again != initial {
+		t.Fatal("unstable cached context")
+	}
+	s.History[0] = raw(map[string]any{"role": "user", "content": strings.Repeat("longer ", 100)})
+	if got := s.ContextTokens(); got <= initial {
+		t.Fatal("replacement used stale cache")
+	}
+	s.History = append(s.History, callOutput("c", strings.Repeat("output\n", 100)))
+	s.compacted = compaction{Prune: 2, Drop: 1}
+	if got, want := s.ContextTokens(), estimateTokens(s.requestInput()); got != want {
+		t.Fatalf("compaction %d != %d", got, want)
+	}
+	s.History = s.History[:1]
+	if got, want := s.ContextTokens(), estimateTokens(s.requestInput()); got != want {
+		t.Fatalf("truncate %d != %d", got, want)
+	}
+	n := int64(42)
+	s.lastRequest.ContextInput = &n
+	s.requestedLen = 1
+	s.History = append(s.History, callOutput("c", "new output"))
+	if got, want := s.ContextTokens(), n+estimateTokens(s.History[1:]); got != want {
+		t.Fatalf("usage %d != %d", got, want)
+	}
+}
+
 func BenchmarkImageContext(b *testing.B) {
 	s := &session{}
 	for i := 0; i < 16; i++ {

@@ -10,9 +10,9 @@ func (s *session) Records() []Record {
 	s.histMu.RLock()
 	defer s.histMu.RUnlock()
 	var records []Record
-	for seq, item := range s.History {
+	for seq := range s.History {
 		meta := s.itemMeta[seq]
-		for _, r := range RecordsForItem(item) {
+		for _, r := range s.projection(seq).records {
 			if meta != nil {
 				m := *meta
 				if r.Kind == "assistant" {
@@ -37,7 +37,7 @@ func (s *session) answerMetadata(seq int) Metadata {
 	var total Usage
 	known := true
 	for i := m.TurnSeq; i <= seq; i++ {
-		for _, r := range RecordsForItem(s.History[i]) {
+		for _, r := range s.projection(i).records {
 			if r.Kind == "code" || r.Kind == "reasoning" {
 				m.Steps++
 			}
@@ -84,7 +84,7 @@ func (s *session) SessionUsage() (total Usage, requests int) {
 		if m.RequestSeq != 0 && m.RequestSeq != seq+1 {
 			continue
 		}
-		if m.RequestSeq == 0 && !slices.ContainsFunc(RecordsForItem(s.History[seq]), func(r Record) bool { return r.Kind == "assistant" }) {
+		if m.RequestSeq == 0 && !slices.ContainsFunc(s.projection(seq).records, func(r Record) bool { return r.Kind == "assistant" }) {
 			continue
 		}
 		requests++
@@ -105,8 +105,8 @@ func (a *Runtime) UserMessages() int { return a.session().UserMessages() }
 func (s *session) UserMessages() (n int) {
 	s.histMu.RLock()
 	defer s.histMu.RUnlock()
-	for _, item := range s.History {
-		for _, r := range RecordsForItem(item) {
+	for seq := range s.History {
+		for _, r := range s.projection(seq).records {
 			if r.Kind == "user" {
 				n++
 			}

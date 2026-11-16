@@ -100,6 +100,9 @@ func (s *session) readItems(items []store.Item) {
 	s.histMu.Lock()
 	defer s.histMu.Unlock()
 	s.History, s.itemMeta, s.imageWarnings, s.compacted = nil, nil, nil, compaction{}
+	s.cacheMu.Lock()
+	s.projections, s.firstLine = nil, ""
+	s.cacheMu.Unlock()
 	for _, item := range items {
 		s.History = append(s.History, item.Data)
 		s.imageWarnings = append(s.imageWarnings, missingOriginalImages(item.Data)...)
@@ -139,27 +142,33 @@ func (s *session) Save() error {
 	sel := s.cfg.sel
 	s.cfg.mu.Unlock()
 	s.histMu.RLock()
-	items := make([]store.Item, len(s.History))
-	for i, data := range s.History {
-		items[i].Data = data
+	saved, total := s.saved, len(s.History)
+	metaVersion := s.metaVersion
+	start := min(saved, total)
+	items := make([]store.Item, total-start)
+	for i := start; i < total; i++ {
+		items[i-start].Data = s.History[i]
 		if m := s.itemMeta[i]; m != nil {
-			items[i].Meta, _ = json.Marshal(m)
+			items[i-start].Meta, _ = json.Marshal(m)
 		}
 	}
-	saved := s.saved
 	title := s.title
-	first := firstUserLine(s.History)
+	first := s.firstUserLine()
 	s.histMu.RUnlock()
 	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
 		Mode: s.mode(), Depth: s.depth, Config: s.configPaths(), Created: s.created, BashCwd: s.bashCwdSet()}
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}
-	if err := s.db.Save(v, items, saved); err != nil {
+	if err := s.db.Append(v, items, saved, total); err != nil {
 		return err
 	}
 	s.histMu.Lock()
-	s.saved = len(items)
+	if s.metaVersion == metaVersion {
+		s.saved = total
+	} else {
+		s.saved = min(s.saved, start)
+	}
 	s.stored = true
 	s.histMu.Unlock()
 	return nil

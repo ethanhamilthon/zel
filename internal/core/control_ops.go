@@ -7,12 +7,20 @@ import (
 )
 
 func (c *Controller) Input(input Input) error {
+	session := c.a.session()
+	var stageErr error
+	input, stageErr = session.stageInput(input)
+	if stageErr != nil {
+		return fail(CodeFailed, "%s", stageErr)
+	}
 	if strings.TrimSpace(input.Text) == "" && len(input.Images) > 0 {
 		input.Text = "Describe this image."
 	}
 	var err error
 	c.view(func() {
 		switch {
+		case c.a.session() != session:
+			err = fail(CodeBusy, "Session changed while preparing the input; please retry.")
 		case c.shut:
 			err = fail(CodeFailed, "the session is closed")
 		case strings.TrimSpace(input.Text) == "":

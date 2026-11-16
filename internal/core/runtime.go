@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
+
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,6 +82,10 @@ type session struct {
 	saveMu        sync.Mutex
 	logMu         sync.Mutex
 	History       []json.RawMessage
+	cacheMu       sync.Mutex
+	projections   []historyProjection
+	firstLine     string
+	metaVersion   uint64
 	itemMeta      map[int]*Metadata
 	saved         int
 	stored        bool
@@ -221,6 +225,10 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 }
 
 func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
+	input, err = s.stageInput(input)
+	if err != nil {
+		return err
+	}
 	started, turnSeq := time.Now(), -1
 	s.turning.Store(true)
 	s.idleSent.Store(false)
@@ -392,8 +400,6 @@ const (
 	imageTokens = 1200
 )
 
-var dataURLPayload = regexp.MustCompile(`data:image/[^"]*`)
-
 func estimateTokens(history []json.RawMessage) int64 {
 	var total int64
 	for _, item := range history {
@@ -405,7 +411,7 @@ func estimateTokens(history []json.RawMessage) int64 {
 				}
 			}
 		}
-		total += int64(len(dataURLPayload.ReplaceAllString(string(item), "data:image"))) / tokenBytes
+		total += int64(textBytes(item)) / tokenBytes
 	}
 	return total
 }
@@ -417,13 +423,24 @@ func (s *session) ContextTokens() int64 {
 	defer s.histMu.RUnlock()
 	if s.lastRequest.ContextInput != nil {
 		// Items added since that request (tool outputs, steering) are estimated.
-		var added []json.RawMessage
-		if s.requestedLen <= len(s.History) {
-			added = s.History[s.requestedLen:]
-		}
-		return *s.lastRequest.ContextInput + estimateTokens(added)
+		return *s.lastRequest.ContextInput + s.tokensFrom(s.requestedLen)
 	}
-	return estimateTokens(s.requestInputLocked()) + int64(len(s.prompt))/tokenBytes
+	var total int64
+	marked := s.compacted.Drop == 0
+	for i := range s.History {
+		p := s.projection(i)
+		if !p.sent {
+			continue
+		}
+		if !marked && i >= s.compacted.Drop {
+			total += compactionNoticeTokens
+			marked = true
+		}
+		if _, ok, tokens := s.compactedProjection(i); ok {
+			total += tokens
+		}
+	}
+	return total + int64(len(s.prompt))/tokenBytes
 }
 
 func (a *Runtime) FinalText() string { return a.session().FinalText() }
@@ -468,4 +485,8 @@ func (s *session) setItemMeta(seq int, m Metadata) {
 		s.itemMeta = map[int]*Metadata{}
 	}
 	s.itemMeta[seq] = &m
+	s.metaVersion++
+	if seq < s.saved {
+		s.saved = seq
+	}
 }
