@@ -47,7 +47,7 @@ func zel(t *testing.T, stdin string, args ...string) (string, error) {
 
 func TestIsHelper(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"help"}, {"--help"}, {"-h"}, {"task", "list"}, {"choice"}, {"view"},
-		{"session"}, {"edit", "f"}, {"docs"}, {"models"}, {"config"}} {
+		{"session"}, {"cd"}, {"edit", "f"}, {"docs"}, {"models"}, {"config"}} {
 		if !IsHelper(args) {
 			t.Errorf("IsHelper(%v) = false", args)
 		}
@@ -155,14 +155,14 @@ func TestEdit(t *testing.T) {
 func TestSessionCommandsNeedASession(t *testing.T) {
 	noSession(t)
 	for _, args := range [][]string{{"task", "list"}, {"task", "run", "--", "echo", "hi"}, {"task", "wait", "t1"},
-		{"choice", "Q", "A"}, {"view", "x.png"}, {"session"}, {"session", "--json"}, {"session", "rename", "new name"}} {
+		{"choice", "Q", "A"}, {"view", "x.png"}, {"cd"}, {"cd", "sub"}, {"session"}, {"session", "--json"}, {"session", "rename", "new name"}} {
 		out, err := zel(t, "", args...)
 		if ExitCode(err) != 2 || !strings.Contains(fmt.Sprint(err), "not inside a zel session") || out != "" {
 			t.Errorf("%v: exit=%d err=%v out=%q", args, ExitCode(err), err, out)
 		}
 	}
 	// Bad usage is reported before the session is looked for.
-	for _, args := range [][]string{{"task"}, {"task", "frob"}, {"task", "get"}, {"task", "run"}, {"choice", "Q"}, {"view"}, {"session", "x"}} {
+	for _, args := range [][]string{{"task"}, {"task", "frob"}, {"task", "get"}, {"task", "run"}, {"choice", "Q"}, {"view"}, {"cd", "a", "b"}, {"cd", ""}, {"session", "x"}} {
 		if _, err := zel(t, "", args...); ExitCode(err) != 2 || !strings.Contains(fmt.Sprint(err), "usage: zel ") {
 			t.Errorf("%v: exit=%d err=%v", args, ExitCode(err), err)
 		}

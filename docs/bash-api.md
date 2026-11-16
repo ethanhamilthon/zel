@@ -8,7 +8,8 @@ instructions, hooks and prompt completions.
 ## The bash tool
 
 - Every call is a fresh `bash -c` in the session folder, in its own process
-  group: `cd` and variables do not carry over, so keep what must last in files.
+  group: `cd` and variables do not carry over (keep what must last in files, or
+  use `zel cd DIR` to change the folder for the next calls).
 - A call has `settings.bash_timeout` seconds (default 30). At the timeout the
   whole group is killed and the output ends with `[timeout after 30s]`. Longer
   work goes to `zel task run`.
@@ -59,13 +60,14 @@ There is no sandbox: bash runs with your user's permissions and network access.
 Inside a session (they talk to it through its socket):
 
 ```sh
-zel task run [--name N] [--timeout S] -- CMD...   # background task; the script may come on stdin; prints t1
+zel task run [--name N] [--timeout S] [--cwd DIR] -- CMD... # background task; the script may come on stdin; prints t1
 zel task list                                     # t1 running build 12s
 zel task get ID                                   # state, exit code, command, last 40 lines
 zel task tail ID [-n 20]
 zel task wait ID... [--timeout S]                 # exit 124 if some still run
 zel task stop ID                                  # SIGTERM to the group, SIGKILL after 2 s
 zel choice "Question" "A" "B" ...                 # prints c1 at once; the answer arrives as a notification
+zel cd [DIR]                                      # folder of the next bash calls and tasks; no DIR = start folder
 zel view IMG...                                   # attach images to the next model request
 zel session [--json] | zel session rename NAME
 ```
@@ -78,6 +80,20 @@ zel docs [topic] | zel models [--json] | zel config [--config FILE]...
 zel -p "prompt" [--model M --effort E --provider P --cwd DIR --timeout S --json --config FILE]
 zel -p --resume ID "more"                         # continue a session
 ```
+
+`zel cd DIR` sets the working folder of the session: every next bash call and
+`zel task run` (unless `--cwd DIR` is given) starts there, so the agent does not
+repeat `cd DIR && ...`. DIR is relative to the caller's folder, `~` works; no
+argument goes back to the folder zel was started in. It prints the new absolute
+path; a missing folder is ENOENT, a file EINVAL, and nothing changes. Running
+tasks keep their folder. Zel itself stays where it started: the project, config
+layers (`./zel.toml`), session list, hooks and `${{ }}` are not touched. A
+`zel -p` called from a bash call starts in that call's folder, so after
+`zel cd ~/some` a subagent works in `~/some` and loads `~/some/zel.toml`. The
+folder is saved with the session: a resumed session's bash calls start in it
+(if it is gone, in the start folder, with a notice). `zel session` shows it as
+`bash_cwd` when it differs from `cwd`. Each session, subagents too, has its
+own; a new subagent starts without it.
 
 `zel edit` reads blocks from stdin, markers on their own lines:
 

@@ -37,11 +37,11 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		return bad("EFAIL", "the session has ended")
 	}
 	var a struct {
-		ID, Name, Cmd, Cwd, Title, Session, Model, Effort, Prompt string
-		IDs, Options, Paths                                       []string
-		Timeout                                                   float64
-		N                                                         int
-		PID                                                       int
+		ID, Name, Cmd, Cwd, Dir, Title, Session, Model, Effort, Prompt string
+		IDs, Options, Paths                                            []string
+		Timeout                                                        float64
+		N                                                              int
+		PID                                                            int
 	}
 	if len(req.Args) > 0 {
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -138,6 +138,12 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 			}
 		}
 		return ok("")
+	case "cd":
+		path, err := s.changeDir(a.Dir, a.Cwd)
+		if err != nil {
+			return errResponse(err)
+		}
+		return ok(path + "\n")
 	case "session.get":
 		return s.sessionInfo()
 	case "session.rename":
@@ -177,10 +183,15 @@ func (s *session) sessionInfo() ipc.Response {
 	s.histMu.RUnlock()
 	info := map[string]any{"id": s.id, "cwd": s.dir, "parent": parent, "depth": s.depth, "mode": s.mode(),
 		"provider": st.Provider, "model": st.Model, "effort": st.Effort, "title": title, "dir": s.sessionDir(), "config": s.configPaths()}
+	if bash := s.bashCwd(); bash != s.dir {
+		info["bash_cwd"] = bash
+	}
 	data, _ := json.Marshal(info)
 	var b strings.Builder
-	for _, k := range []string{"id", "title", "cwd", "mode", "parent", "depth", "provider", "model", "effort", "dir"} {
-		fmt.Fprintf(&b, "%s: %v\n", k, info[k])
+	for _, k := range []string{"id", "title", "cwd", "bash_cwd", "mode", "parent", "depth", "provider", "model", "effort", "dir"} {
+		if v, has := info[k]; has {
+			fmt.Fprintf(&b, "%s: %v\n", k, v)
+		}
 	}
 	fmt.Fprintf(&b, "config: %s\n", strings.Join(s.configPaths(), ", "))
 	r := ok(b.String())

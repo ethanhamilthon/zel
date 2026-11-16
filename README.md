@@ -71,6 +71,9 @@ is a fresh `bash -c` in the session folder with a 30-second limit
 `settings.bash_output` bytes (default 8000, `0` = no cut): the agent gets the
 first and the last half, and a marker between them names a file in the session
 folder (`outputs/b<N>.txt`) with the full output. Longer work runs as a task.
+`zel cd DIR` sets the folder where the next bash calls, tasks and `zel -p`
+subagents start (no argument: back to the start folder); it is saved with the
+session, and zel itself, its config and its hooks stay where they started.
 
 ```sh
 zel task run --name build -- make test     # background task: prints t1
@@ -84,6 +87,7 @@ func main() { // start
 >>>>>>> new
 EOF
 zel -p "review the diff"                   # a subagent: its answer on stdout
+zel cd src                                 # the next bash calls start in src
 zel view shot.png                          # attach an image to the next request
 zel session | zel models | zel docs [topic]
 ```

@@ -49,6 +49,15 @@ func (s *session) openSession(id string) error {
 		return fail(CodeNotFound, "ENOENT: %s is not a zel -p session of this session", id)
 	}
 	s.id, s.created = id, v.Created
+	if v.BashCwd != "" {
+		if info, err := os.Stat(v.BashCwd); err == nil && info.IsDir() {
+			s.bashMu.Lock()
+			s.bashDir = v.BashCwd
+			s.bashMu.Unlock()
+		} else {
+			defer s.notify("Folder " + v.BashCwd + " (zel cd) is gone: bash starts in " + s.dir)
+		}
+	}
 	s.histMu.Lock()
 	s.title = v.Title
 	s.stored = true
@@ -142,7 +151,7 @@ func (s *session) Save() error {
 	first := firstUserLine(s.History)
 	s.histMu.RUnlock()
 	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
-		Mode: s.mode(), Depth: s.depth, Config: s.configPaths(), Created: s.created}
+		Mode: s.mode(), Depth: s.depth, Config: s.configPaths(), Created: s.created, BashCwd: s.bashCwdSet()}
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}

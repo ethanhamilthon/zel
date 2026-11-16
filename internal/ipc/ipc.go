@@ -1,5 +1,5 @@
 // Package ipc is the unix socket of a session: the zel subcommands an agent runs
-// (zel task, zel choice, zel view, zel session, and a child zel -p) send one JSON
+// (zel task, zel choice, zel view, zel cd, zel session, and a child zel -p) send one JSON
 // request per connection and read one JSON response.
 package ipc
 

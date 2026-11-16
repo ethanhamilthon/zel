@@ -19,6 +19,7 @@ INSIDE A SESSION (the agent's bash, tasks, hooks)
   zel task run|list|get|tail|wait|stop   background tasks
   zel choice "Question" "A" "B"          ask the user; the answer comes as a notification
   zel view IMG...                        attach images to the next model request
+  zel cd [DIR]                           the folder of the next bash calls (no DIR: the start folder)
   zel session [--json] | zel session rename NAME
 
 CONFIG

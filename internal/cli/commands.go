@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,7 +91,7 @@ func shellJoin(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-const taskUsage = "task run [--name N] [--timeout S] -- CMD... | list | get ID | tail ID [-n N] | wait ID... [--timeout S] | stop ID"
+const taskUsage = "task run [--name N] [--timeout S] [--cwd DIR] -- CMD... | list | get ID | tail ID [-n N] | wait ID... [--timeout S] | stop ID"
 
 func taskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
@@ -99,6 +100,7 @@ func taskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 	fs := flag.NewFlagSet("task", flag.ContinueOnError)
 	name := fs.String("name", "", "")
 	timeout := fs.Float64("timeout", 0, "")
+	dir := fs.String("cwd", "", "")
 	n := fs.Int("n", 20, "")
 	rest, err := parseFlags(fs, args[1:])
 	if err != nil {
@@ -118,7 +120,7 @@ func taskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 		if strings.TrimSpace(command) == "" {
 			return usageError("task", taskUsage)
 		}
-		_, err = call(ctx, "task", "task.run", map[string]any{"name": *name, "cmd": command, "timeout": *timeout, "cwd": cwdOrEmpty()}, out)
+		_, err = call(ctx, "task", "task.run", map[string]any{"name": *name, "cmd": command, "timeout": *timeout, "cwd": taskDir(*dir)}, out)
 	case op == "list" && len(rest) == 0:
 		_, err = call(ctx, "task", "task.list", nil, out)
 	case (op == "get" || op == "stop") && len(rest) == 1:
@@ -131,6 +133,16 @@ func taskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 		return usageError("task", taskUsage)
 	}
 	return err
+}
+
+// taskDir is the folder of a new task: --cwd (relative to the caller's folder),
+// else the caller's folder, which is where the agent's calls start.
+func taskDir(flag string) string {
+	cwd := cwdOrEmpty()
+	if flag == "" || filepath.IsAbs(flag) {
+		return cmp.Or(flag, cwd)
+	}
+	return filepath.Join(cwd, flag)
 }
 
 func cwdOrEmpty() string {
@@ -170,6 +182,20 @@ func sessionInfoCommand(ctx context.Context, args []string, out io.Writer) error
 		return err
 	}
 	return usageError("session", "session [--json] | session rename NAME")
+}
+
+func cdCommand(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) > 1 {
+		return usageError("cd", "cd [DIR]")
+	}
+	dir := ""
+	if len(args) == 1 {
+		if dir = args[0]; dir == "" {
+			return usageError("cd", "cd [DIR]")
+		}
+	}
+	_, err := call(ctx, "cd", "cd", map[string]any{"dir": dir, "cwd": cwdOrEmpty()}, out)
+	return err
 }
 
 func editCommand(args []string, in io.Reader, out io.Writer) error {

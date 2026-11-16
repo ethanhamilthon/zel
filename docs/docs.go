@@ -18,7 +18,7 @@ type Topic struct{ Name, Summary string }
 // is a bug, so the tests fail when bash-api.md gets a section that is not listed.
 var sections = map[string]Topic{
 	"The bash tool":      {"bash", "how a bash call runs: limits, output, environment"},
-	"Commands":           {"commands", "zel task, choice, view, session, edit, -p (subagents), exit codes"},
+	"Commands":           {"commands", "zel task, choice, view, cd, session, edit, -p (subagents), exit codes"},
 	"zel.toml":           {"config", "zel.toml layers, keys, ${{ }}, hot reload, menus writing back"},
 	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},

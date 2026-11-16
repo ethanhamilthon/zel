@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -50,7 +51,7 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 	if ctx.Err() != nil {
 		return "[cancelled]", 130, false, nil
 	}
-	cmd := shell.Command(context.Background(), s.dir, s.shellEnv(), command)
+	cmd := shell.Command(context.Background(), s.bashCwd(), s.shellEnv(), command)
 	capture = &bashCapture{buffer: shell.NewOutputBuffer(bashOutputLimit), limit: s.Settings().BashOutput, open: s.openOutputFile}
 	buffer := capture.buffer
 	w := &lockedWriter{w: capture}
@@ -280,4 +281,61 @@ func cutText(text string, total, limit int, path string) string {
 		fmt.Sprintf("======== [output cut: %d of %d bytes omitted]\n", omitted, total) +
 		"======== full output: " + path + "\n" +
 		"======== read it with sed -n '100,200p', rg, head or tail\n\n" + tail
+}
+
+// bashCwd is the folder bash calls and new tasks start in: the one set by
+// zel cd, else the folder the session started in.
+func (s *session) bashCwd() string {
+	s.bashMu.Lock()
+	defer s.bashMu.Unlock()
+	return cmp.Or(s.bashDir, s.dir)
+}
+
+// bashCwdSet is the folder set by zel cd, empty when none.
+func (s *session) bashCwdSet() string {
+	s.bashMu.Lock()
+	defer s.bashMu.Unlock()
+	return s.bashDir
+}
+
+// changeDir is zel cd: dir (relative to base, ~ allowed) becomes the folder of
+// the next bash calls; empty goes back to the start folder. It returns the new
+// absolute path. Nothing changes when dir is missing or not a folder.
+func (s *session) changeDir(dir, base string) (string, error) {
+	path := s.dir
+	if dir != "" {
+		if dir == "~" || strings.HasPrefix(dir, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fail(CodeInvalid, "EINVAL: %v", err)
+			}
+			dir = filepath.Join(home, dir[1:])
+		}
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cmp.Or(base, s.bashCwd()), dir)
+		}
+		path = filepath.Clean(dir)
+	}
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "", fail(CodeNotFound, "ENOENT: %s: no such folder", path)
+	case err != nil:
+		return "", fail(CodeInvalid, "EINVAL: %v", err)
+	case !info.IsDir():
+		return "", fail(CodeInvalid, "EINVAL: %s: not a folder", path)
+	}
+	s.bashMu.Lock()
+	if path == s.dir {
+		s.bashDir = ""
+	} else {
+		s.bashDir = path
+	}
+	s.bashMu.Unlock()
+	if s.HasSavedSession() {
+		if err := s.Save(); err != nil {
+			return path, nil
+		}
+	}
+	return path, nil
 }

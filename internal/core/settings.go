@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -93,7 +94,17 @@ func (s *session) configLayers(stored []string) []config.Layer {
 		}
 	}
 	if len(extra) == 0 && s.parent != nil && len(s.parent.config) > 0 {
-		return layersFromPaths(s.home, s.parent.config)
+		layers := layersFromPaths(s.home, s.parent.config)
+		// A child that works in another folder (after zel cd, or --cwd) also
+		// loads the zel.toml of that folder, last, so it wins.
+		local := filepath.Join(s.dir, "zel.toml")
+		if info, err := os.Stat(local); err == nil && !slices.ContainsFunc(layers, func(l config.Layer) bool {
+			other, err := os.Stat(l.Path)
+			return l.Path == local || (err == nil && os.SameFile(info, other))
+		}) {
+			layers = append(layers, config.Layer{Name: "local", Path: local})
+		}
+		return layers
 	}
 	return config.Layers(s.home, s.dir, extra)
 }

@@ -99,6 +99,8 @@ type session struct {
 	childPIDs     map[string]int
 	hookWG        sync.WaitGroup // async hooks
 	outputMu      sync.Mutex     // numbers the files of cut bash outputs
+	bashMu        sync.Mutex
+	bashDir       string // zel cd: where bash calls and tasks start; empty = dir
 	turning       atomic.Bool
 	idleSent      atomic.Bool
 	histMu        sync.RWMutex

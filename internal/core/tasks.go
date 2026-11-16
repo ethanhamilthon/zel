@@ -79,7 +79,7 @@ func (t *tasks) spawn(command string, o startOpts) (*job, error) {
 		j = jb
 		env := t.s.shellEnv()
 		env["ZEL_TASK"] = jb.id
-		cmd := shell.Command(context.Background(), cmp.Or(o.cwd, t.s.dir), env, command)
+		cmd := shell.Command(context.Background(), cmp.Or(o.cwd, t.s.bashCwd()), env, command)
 		cmd.Stdin = strings.NewReader("")
 		cmd.Stdout, cmd.Stderr = log, log
 		if err := cmd.Start(); err != nil {

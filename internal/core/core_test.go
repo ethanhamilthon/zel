@@ -809,3 +809,102 @@ func TestBashLabel(t *testing.T) {
 		t.Fatalf("label = %q", got)
 	}
 }
+
+func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+	a := newTestAgent(t, fp, Options{})
+	s, ctx := a.session(), context.Background()
+	start := s.dir
+	sub := filepath.Join(start, "sub")
+	if err := os.MkdirAll(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(start, "file.txt"), "x")
+	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
+	pwd := func() string { return strings.TrimSpace(s.runBash(ctx, "pwd -P")) }
+
+	if r := sock(t, a, "cd", map[string]any{"dir": "sub", "cwd": start}); !r.OK || r.Out != sub+"\n" {
+		t.Fatalf("cd: %+v", r)
+	}
+	if pwd() != real(sub) {
+		t.Fatalf("pwd = %s", pwd())
+	}
+	if r := sock(t, a, "task.run", map[string]any{"cmd": "pwd -P"}); !r.OK {
+		t.Fatalf("task: %+v", r)
+	}
+	if r := sock(t, a, "task.wait", map[string]any{"ids": []string{"t1"}, "timeout": 10}); !strings.Contains(r.Out, "\n"+real(sub)) {
+		t.Fatalf("task pwd: %s", r.Out)
+	}
+	// Failures change nothing.
+	if r := sock(t, a, "cd", map[string]any{"dir": "nope"}); r.Code != 3 || !strings.HasPrefix(r.Error, "ENOENT") {
+		t.Fatalf("missing: %+v", r)
+	}
+	if r := sock(t, a, "cd", map[string]any{"dir": filepath.Join(start, "file.txt")}); r.Code != 2 || !strings.HasPrefix(r.Error, "EINVAL") {
+		t.Fatalf("file: %+v", r)
+	}
+	if pwd() != real(sub) || s.dir != start {
+		t.Fatalf("changed after errors: %s", pwd())
+	}
+	if r := sock(t, a, "session.get", nil); !strings.Contains(r.Out, "bash_cwd: "+sub+"\n") {
+		t.Fatalf("session: %s", r.Out)
+	}
+	// Saved and restored by a resume.
+	if _, err := turn(t, a, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	id := a.SessionID()
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	s = a.session()
+	if pwd() != real(start) {
+		t.Fatalf("new session pwd = %s", pwd())
+	}
+	if err := a.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	s = a.session()
+	if pwd() != real(sub) {
+		t.Fatalf("resumed pwd = %s", pwd())
+	}
+	// No argument goes back to the start folder.
+	if r := sock(t, a, "cd", map[string]any{}); !r.OK || r.Out != start+"\n" || pwd() != real(start) {
+		t.Fatalf("back: %+v %s", r, pwd())
+	}
+	if r := sock(t, a, "session.get", nil); strings.Contains(r.Out, "bash_cwd") {
+		t.Fatalf("session: %s", r.Out)
+	}
+	// A folder that is gone falls back to the start folder.
+	sock(t, a, "cd", map[string]any{"dir": "sub", "cwd": start})
+	if err := a.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(sub)
+	if err := a.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+	s = a.session()
+	if pwd() != real(start) {
+		t.Fatalf("gone folder pwd = %s", pwd())
+	}
+}
+
+func TestChildInAnotherFolderLoadsItsProjectLayer(t *testing.T) {
+	parent := newTestAgent(t, okProvider(), Options{})
+	for k, v := range parent.session().baseEnv() {
+		if k != "PATH" {
+			t.Setenv(k, v)
+		}
+	}
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "zel.toml"), "[env]\nFROM_FOLDER = \"yes\"\n")
+	child, err := New(elsewhere, Options{Mode: "headless"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	files := child.ConfigFiles()
+	if child.Settings().Env["FROM_FOLDER"] != "yes" || files[len(files)-1] != filepath.Join(elsewhere, "zel.toml") {
+		t.Fatalf("layers %v, env %v", files, child.Settings().Env)
+	}
+}

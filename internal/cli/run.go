@@ -68,7 +68,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "task", "choice", "view", "session", "edit", "docs", "models", "config":
+	case "version", "help", "--help", "-h", "task", "choice", "view", "session", "cd", "edit", "docs", "models", "config":
 		return true
 	}
 	return false
@@ -145,6 +145,8 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 			return viewCommand(ctx, rest, out)
 		case "session":
 			return sessionInfoCommand(ctx, rest, out)
+		case "cd":
+			return cdCommand(ctx, rest, out)
 		case "edit":
 			return editCommand(rest, in, out)
 		case "docs":
