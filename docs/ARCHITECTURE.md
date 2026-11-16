@@ -12,7 +12,7 @@ subcommands (`zel task`, `zel choice`, ...), which only talk to a session socket
 | `entities` | Shared input, attachments, tool calls, records, usage, model choices and domain events | None |
 | `config` | zel.toml layers: discovery, parsing and validation, merge, `${{ }}` expansion, point edits that keep comments, file watching, `zel config` text; settings and paths | None |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
-| `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list, `tasks.jsonl` and task logs | None |
+| `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list, `tasks.jsonl`, task logs and `choices.jsonl` (answered questions) | None |
 | `shell` | `bash -c` in a process group, cancellation, bounded output and image capture | `entities` |
 | `ipc` | The session socket: one JSON request and response per connection, token check, cancellation when the client hangs up | None |
 | `edit` | The exact-text blocks of `zel edit` | None |

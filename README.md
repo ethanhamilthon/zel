@@ -50,6 +50,7 @@ See [configuration examples](docs/examples/) for a starting point.
   Also available in the terminal with `zel docs`.
 - [Examples](docs/examples/): complete configurations and a script tool.
 - [Architecture](docs/ARCHITECTURE.md): project structure and ownership.
+- [0.7.6 release](docs/RELEASE-0.7.6.md): choice answers in the chat, composer-grade custom answers, steadier updates, completed tokens.
 - [0.7.5 release](docs/RELEASE-0.7.5.md): improvements, compatibility and verification evidence.
 
 For non-interactive use: `zel -p "Review this project"`.

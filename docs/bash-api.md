@@ -119,9 +119,13 @@ finished</notification>` (or `failed`, `stopped`, `timed out`).
 
 `zel choice` does not wait. The UI shows the options instead of the input
 (several questions queue up); the user picks one, chooses **Write your own
-answer…**, or presses Esc. Custom answers accept up to 4096 characters; Enter
-sends a non-empty answer, and Esc returns to the options without losing the
-custom text. The normal composer draft is preserved. The agent gets
+answer…**, or presses Esc. The custom answer edits like the composer: it grows
+with its lines (Alt+Enter, Shift+Enter or Ctrl+J insert a newline), a click
+moves the cursor (mouse reporting is on only while it is open), and up to 4096
+characters fit; Enter sends a non-empty answer, and Esc returns to the options
+without losing the custom text. The normal composer draft is preserved. Each
+answer stays in the chat as `question: answer` (saved in the session's
+`choices.jsonl`, so it is shown again on resume). The agent gets
 `<notification>c1 Question: A</notification>` (or the custom text, or `cancelled`). It works
 in the main session, its tasks and hooks; `zel -p` has no user (EDENIED).
 
@@ -331,6 +335,10 @@ An empty or failing completion keeps your draft and shows why; Ctrl+D cancels
 one still running. Names are 1 to 64 letters, digits, `-` or `_`; unknown
 `#names` stay as typed, with no tag.
 
+A `#name` or `@path` picked from a completion list is one token in the
+composer: it shows in the accent color, the cursor jumps over it, and one
+Backspace (right after it) or Delete (right before it) removes it whole.
+
 ## Colors
 
 `[colors]` sets every color of the TUI. Values are `#rrggbb` hex; a missing
@@ -360,14 +368,15 @@ error   = "#e27878"
 
 - `bg`: the background of the whole screen (chat, composer, menus, Tracing,
   choice, onboarding).
-- `accent`: the composer rail, the `*` header over answers, choice and menu
+- `accent`: the composer rail, the `*` header over answers, completed `#name`
+  and `@path` tokens in the composer, answered choice questions, choice and menu
   markers, status icons, onboarding title, headings, inline code and links in
   answers, keywords in highlighted bash. Settings → Accent color picks one from
   a palette and writes `colors.accent` into the layer it comes from; a hex
   outside the palette shows as "Custom".
 - `agent`: the text of answers, the main text of menus, Info values, the
   choice title and the rail text of forms.
-- `user`: your messages in the chat and the composer text; `user_highlight`:
+- `user`: your messages and choice answers in the chat and the composer text; `user_highlight`:
   the composer line under the cursor.
 - `gray`: hints, time and steps, the working line, inactive menu rows, Info
   keys, the `+ N more` row, the composer placeholder, punctuation in bash.
