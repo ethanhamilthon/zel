@@ -1,25 +1,21 @@
-# Zel — Minimalist AI Coding Agent
+# Zel — An AI Coding Agent for Peace of Mind
 
-A focused terminal coding agent with one tool: bash. The model writes bash;
-background tasks, questions to you, images, edits and subagents are `zel`
-commands it runs. You configure Zel with `zel.toml`: providers, settings,
-instructions, hooks and prompt completions. Your own tools are scripts.
+Zel is built around one idea: making it simple and efficient to guide your
+agent's work. No complicated architecture, overengineered plugins, or entire
+system to learn before you can get started.
 
-> **0.7.0 is a breaking release.** The Lua tool and init.lua are gone: the
-> agent's tool is `bash`, the config is `~/.zel/zel.toml` (and `./zel.toml`,
-> `--config FILE`), and history is JSONL files instead of SQLite. Sessions,
-> providers and preferences of 0.6 are not migrated. See
-> [docs/bash-api.md](docs/bash-api.md).
+Zel is an agent that simply writes bash. Through that one tool, it can run
+background tasks and subagents, view images, work with files, and more.
+
+One file, `zel.toml`, lets you tailor Zel to yourself and your project,
+including the look of the terminal interface. The TUI is as minimal as it
+gets: just you and your agent.
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/install.sh | sh
 ```
-
-Installs the latest release for macOS or Linux (arm64/amd64) into
-`~/.local/bin` (override with `ZEL_BINDIR`; pin with `ZEL_VERSION=v0.7.0`).
-`zel update` later replaces the binary with the latest GitHub release.
 
 ## Build from source
 
@@ -167,7 +163,8 @@ line of its bash call (`$ go test ./...`) until the next one; configured API
 keys are hidden. Each running background task and each running `zel -p` child
 has a row with how long it runs.
 
-Bash calls, thoughts, errors, notices and hook runs belong in Tracing. Tracing
+Bash calls, thoughts, errors and notices belong in Tracing. Hook execution
+records stay in the session diagnostics but are hidden from this view. Tracing
 search accepts a leading type, optionally followed by text: `:user`,
 `:assistant fix tests`, `:bash go test`, `:error`. A turn that fails or is
 stopped with Ctrl+D ends in the chat with a red line of time and steps, then
