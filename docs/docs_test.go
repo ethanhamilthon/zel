@@ -1,12 +1,57 @@
 package docs
 
 import (
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // Every section of bash-api.md has a topic and every topic returns text, so the
 // agent can reach the whole reference through zel docs.
+func TestProductionPackageBoundaries(t *testing.T) {
+	allowed := map[string][]string{
+		"entities": {}, "config": {}, "store": {}, "edit": {}, "ipc": {},
+		"agent": {"entities"}, "shell": {"entities"}, "provider": {"entities"},
+		"tui": {"core", "config", "entities"},
+		"cli": {"core", "config", "ipc", "edit", "shell"},
+	}
+	for pkg, deps := range allowed {
+		paths, err := filepath.Glob(filepath.Join("..", "internal", pkg, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(paths) == 0 {
+			t.Fatalf("missing package %s", pkg)
+		}
+		for _, path := range paths {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, imp := range f.Imports {
+				name, err := strconv.Unquote(imp.Path.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if dependency, internal := strings.CutPrefix(name, "zel/internal/"); internal && !slices.Contains(deps, dependency) {
+					t.Errorf("%s imports forbidden package %s", path, dependency)
+				}
+			}
+		}
+	}
+	if _, err := os.Stat("ARCHITECTURE.md"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEverySectionIsReachable(t *testing.T) {
 	for _, h := range Sections() {
 		if h == "Examples" {

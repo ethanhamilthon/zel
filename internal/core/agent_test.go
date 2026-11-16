@@ -803,6 +803,60 @@ func TestFileBackedImagesAndLegacyHistory(t *testing.T) {
 	}
 }
 
+func TestFileImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
+	for _, api := range []string{APIResponses, APIChat} {
+		t.Run(api, func(t *testing.T) {
+			fp := &fakeProvider{reply: func(n int, body string) string {
+				if !strings.Contains(body, "data:image/png;base64,aQ==") || strings.Contains(body, imageRefPrefix) {
+					t.Error("image reference leaked to provider or preview missing")
+				}
+				if api == APIResponses {
+					if n == 1 {
+						return bashReply("c1", "printf 'готово' ")
+					}
+					return textReply("ok")
+				}
+				if n > 1 {
+					return sse(`{"choices":[{"delta":{"content":"ok"}}]}`, `[DONE]`)
+				}
+				args := `{"command":"printf '\u0433\u043e\u0442\u043e\u0432\u043e' "}`
+				events := []string{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"bash"}}]}}]}`}
+				// Split inside JSON Unicode escapes; each SSE frame is valid UTF-8.
+				for i := 0; i < len(args); i++ {
+					events = append(events, string(raw(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]string{"arguments": args[i : i+1]}}}}}}})))
+				}
+				events = append(events, `[DONE]`)
+				return sse(events...)
+			}}
+			a := newTestAgent(t, fp, Options{})
+			settings := a.Settings()
+			p := settings.Providers["p"]
+			p.API = api
+			settings.Providers["p"] = p
+			if err := a.UpdateSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			var events []TurnEvent
+			err := a.RunInput(context.Background(), Input{Text: "image", Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}, func(e TurnEvent) { events = append(events, e) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, e := range events {
+				if e.Kind == "code" {
+					count++
+					if e.Provisional || e.Text != "printf 'готово' " {
+						t.Fatalf("incomplete command: %+v", e)
+					}
+				}
+			}
+			if count != 1 || len(fp.requests()) != 2 {
+				t.Fatalf("commands %d requests %d", count, len(fp.requests()))
+			}
+		})
+	}
+}
+
 func TestAttachmentReferencesAreTypedAndConfined(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
 	s := a.session()
