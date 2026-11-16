@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +16,6 @@ import (
 	"zel/internal/config"
 	"zel/internal/entities"
 	"zel/internal/ipc"
-
 	"zel/internal/store"
 )
 
