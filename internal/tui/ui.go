@@ -81,7 +81,7 @@ type model struct {
 	choice                    *core.Choice // the agent's question; replaces the composer while set
 	choiceSel                 int
 	choiceWriting             bool
-	choiceInput               textarea.Model
+	choiceInput               *textarea.Model
 	tasks                     []core.ActiveTask // running background tasks, one chat row each
 	frameAt                   time.Time
 	dirty                     bool
@@ -564,7 +564,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.choice != nil && m.choiceWriting && m.menu == nil {
 		var cmd tea.Cmd
-		m.choiceInput, cmd = m.choiceInput.Update(msg)
+		input, updateCmd := m.choiceInput.Update(msg)
+		*m.choiceInput = input
+		cmd = updateCmd
 		m.refresh(true)
 		return m, cmd
 	}

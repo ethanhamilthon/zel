@@ -18,8 +18,7 @@ func (m *model) syncChoice() {
 	m.choice = m.ctl.PendingChoice()
 	if m.choice == nil || was == nil || was.ID != m.choice.ID {
 		m.choiceSel, m.choiceWriting = 0, false
-		m.choiceInput = newComposer()
-		m.choiceInput.CharLimit = 4096
+		m.choiceInput = nil
 	}
 	m.refresh(true)
 }
@@ -47,7 +46,9 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		default:
 			var cmd tea.Cmd
 			m.choiceInput.SetWidth(max(1, m.width-2))
-			m.choiceInput, cmd = m.choiceInput.Update(v)
+			input, updateCmd := m.choiceInput.Update(v)
+			*m.choiceInput = input
+			cmd = updateCmd
 			m.refresh(true)
 			return m, cmd, true
 		}
@@ -67,9 +68,10 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "enter":
 		if m.choiceSel == n-1 {
 			m.choiceWriting = true
-			if m.choiceInput.CharLimit == 0 {
-				m.choiceInput = newComposer()
-				m.choiceInput.CharLimit = 4096
+			if m.choiceInput == nil {
+				input := newComposer()
+				input.CharLimit = 4096
+				m.choiceInput = &input
 			}
 			m.choiceInput.SetWidth(max(1, m.width-2))
 			m.choiceInput.Placeholder = "Your answer"
