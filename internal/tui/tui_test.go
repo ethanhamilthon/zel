@@ -3257,3 +3257,20 @@ func TestPlainPathsUnderlinedAndWrapped(t *testing.T) {
 		t.Fatal("plain paths in tracing should not be linked")
 	}
 }
+
+func TestInlinePathWithSpacesAndUnderlineReset(t *testing.T) {
+	oldBase := linkBase
+	linkBase = t.TempDir()
+	t.Cleanup(func() { linkBase = oldBase })
+	if err := os.WriteFile(filepath.Join(linkBase, "my file.txt"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := renderMarkdown("`my file.txt:3`", 80, false)
+	if !strings.Contains(out, "my%20file.txt") {
+		t.Fatalf("space-containing path not linked: %q", out)
+	}
+	rows := linkedRows(terminalLink("https://example.com", "first\x1b[0m\nsecond", false), 80)
+	if !strings.Contains(rows[0], "\x1b[0m\x1b[4m") || !strings.Contains(rows[1], "\x1b[4msecond") || !strings.HasSuffix(rows[1], "\x1b[24m"+ansi.ResetHyperlink()) {
+		t.Fatalf("underline lost or leaked: %q", rows)
+	}
+}

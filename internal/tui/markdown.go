@@ -24,6 +24,7 @@ func terminalLink(target, text string, allowFile bool) string {
 	if err != nil || !(web || allowFile && u.Scheme == "file" && u.Path != "") || strings.ContainsFunc(target, unicode.IsControl) {
 		return text
 	}
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m\x1b[4m")
 	return ansi.SetHyperlink(u.String()) + "\x1b[4m" + text + "\x1b[24m" + ansi.ResetHyperlink()
 }
 
@@ -52,7 +53,11 @@ func markdownLinks(body string) string {
 	})
 	body = markedCode.ReplaceAllStringFunc(body, func(marked string) string {
 		label := strings.TrimSuffix(strings.TrimPrefix(marked, "\u2062"), "\u2061")
-		return terminalLink(codeTarget(strings.Join(strings.Fields(ansi.Strip(label)), "")), label, true)
+		target := codeTarget(strings.TrimSpace(ansi.Strip(label)))
+		if target == "" {
+			target = codeTarget(strings.Join(strings.Fields(ansi.Strip(label)), ""))
+		}
+		return terminalLink(target, label, true)
 	})
 	return strings.NewReplacer("\u2063", "", "\u2064", "", "\u2062", "", "\u2061", "").Replace(body)
 }
@@ -161,9 +166,12 @@ func linkedRows(body string, width int) []string {
 				active = seq
 			}
 		}
+		if prefix != "" {
+			prefix += "\x1b[4m"
+		}
 		rows[i] = ansi.Truncate(prefix+row, max(1, width), "…")
 		if prefix != "" || strings.Contains(row, "\x1b]8;") {
-			rows[i] += ansi.ResetHyperlink()
+			rows[i] += "\x1b[24m" + ansi.ResetHyperlink()
 		}
 	}
 	return rows
