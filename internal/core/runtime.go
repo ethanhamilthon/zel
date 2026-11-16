@@ -81,6 +81,10 @@ type session struct {
 	histMu        sync.RWMutex
 	saveMu        sync.Mutex
 	logMu         sync.Mutex
+	traceMu       sync.Mutex
+	traceSize     int64
+	traceMod      time.Time
+	traceCache    []TraceEntry
 	History       []json.RawMessage
 	cacheMu       sync.Mutex
 	projections   []historyProjection

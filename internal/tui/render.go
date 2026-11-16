@@ -195,15 +195,21 @@ func trimBlankTail(rows []string) []string {
 // completions. The history is concatenated only when an entry, the width or the
 // theme changed, so a loader tick or a keystroke costs nothing in its length.
 func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
-	if m.cache == nil {
+	changedFrom := len(m.entries)
+	if m.cache == nil || m.history == nil || m.historyStale {
+		changedFrom = 0
 		m.historyStale = true
 	}
 	if len(m.cache) > len(m.entries) {
+		clear(m.cache[len(m.entries):])
 		m.cache = m.cache[:len(m.entries)]
+		changedFrom = 0
 		m.historyStale = true
 	} else if diff := len(m.entries) - len(m.cache); diff > 0 {
+		changedFrom = min(changedFrom, len(m.cache))
+		oldCount := len(m.cache)
 		m.cache = append(m.cache, make([]renderedEntry, diff)...)
-		m.historyStale = true
+		m.cache[oldCount].startRow = max(0, len(m.history)-1)
 	}
 	started, rendered := time.Now(), 0
 	m.renderPending = false
@@ -227,14 +233,22 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 		cached.source, cached.width, cached.maxLines, cached.draft = e, m.width, limit, draft
 		cached.Text = renderEntryMode(e, m.width, limit, !draft)
 		cached.rows = strings.Split(cached.Text, "\n")
-		m.historyStale = true
+		changedFrom = min(changedFrom, i)
 		if e.Kind == "assistant" && !draft {
 			rendered++
 		}
 	}
-	if m.historyStale || m.history == nil {
+	if changedFrom < len(m.cache) || m.historyStale || m.history == nil {
 		var history screenRows
-		for _, cached := range m.cache {
+		if changedFrom > 0 && changedFrom < len(m.cache) && m.cache[changedFrom].startRow < len(m.history) {
+			history = m.history[:m.cache[changedFrom].startRow+1]
+			history[len(history)-1] = ""
+		} else {
+			changedFrom = 0
+		}
+		for i := changedFrom; i < len(m.cache); i++ {
+			cached := &m.cache[i]
+			cached.startRow = max(0, len(history)-1)
 			if cached.Text != "" {
 				history.addLines(cached.rows)
 				history.add("\n\n")

@@ -42,7 +42,7 @@ func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
 	if s.id != "" && s.db != nil {
 		path = s.eventsLog()
 	}
-	return history, func() []TraceEntry { return eventTrace(path) }
+	return history, func() []TraceEntry { return s.cachedEventTrace(path) }
 }
 
 func mergeTrace(history, rest []TraceEntry) []TraceEntry {
@@ -74,6 +74,23 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 		}
 	}
 	return entries
+}
+
+func (s *session) cachedEventTrace(path string) []TraceEntry {
+	if path == "" {
+		return nil
+	}
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	if s.traceCache == nil || info.Size() != s.traceSize || !info.ModTime().Equal(s.traceMod) {
+		s.traceCache = eventTrace(path)
+		s.traceSize, s.traceMod = info.Size(), info.ModTime()
+	}
+	return slices.Clone(s.traceCache)
 }
 
 // eventTrace parses the lines LogEvent appends: a timestamp, the kind and one or

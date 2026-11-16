@@ -25,6 +25,7 @@ type renderedEntry struct {
 	draft    bool
 	Text     string
 	rows     []string
+	startRow int
 }
 type model struct {
 	ctl                       *core.Controller
@@ -95,7 +96,7 @@ type model struct {
 
 const (
 	frameInterval = 33 * time.Millisecond
-	renderBudget  = 25 * time.Millisecond
+	renderBudget  = 4 * time.Millisecond
 )
 
 type redraw struct{}
@@ -142,6 +143,7 @@ func newModel(a *core.Runtime, cwd string) model {
 		m.entries, m.contextTokens = session.Records, session.Context
 	}
 	m.tasks = ctl.ActiveTasks()
+	m.releaseCommittedTrace()
 	m.refresh(true)
 	if len(ctl.Settings().Providers) == 0 {
 		m.menu = &menuState{}
@@ -186,7 +188,7 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 // syncTheme applies [colors] when they changed (a menu or hot reload); it
 // reports whether they did, so the caller redraws.
 func (m *model) syncTheme() bool {
-	colors := m.ctl.Settings().Colors
+	colors, _ := m.ctl.Appearance()
 	key := strings.Join(colors[:], " ")
 	if key == m.themeKey {
 		return false
@@ -232,7 +234,8 @@ func (m *model) add(kind, text string) {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	wasTraceEntry := m.traceEntryView()
-	if m.syncTheme() { // hot reload changed the colors: redraw everything with them
+	themeChanged := m.syncTheme()
+	if themeChanged { // hot reload changed the colors: redraw everything with them
 		m.refresh(m.viewport.AtBottom())
 	}
 	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
@@ -249,7 +252,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if pulse := n.ensureMenuPulse(); pulse != nil {
 		cmd = tea.Batch(cmd, pulse)
 	}
-	if n.display != nil {
+	draw := true
+	switch v := msg.(type) {
+	case core.Event:
+		draw = v.Kind != "agent" || n.menu != nil || n.frameAt != m.frameAt
+	case redraw:
+		draw = n.frameAt != m.frameAt
+	case workingTick:
+		draw = n.frameAt != m.frameAt
+	case menuTick:
+		draw = false // the asynchronous snapshot triggers its own draw
+	case tea.MouseMsg:
+		if v.Action == tea.MouseActionMotion {
+			draw = false
+		}
+	}
+	if n.display != nil && (draw || themeChanged) {
 		n.display.draw(n.render(), n.width, n.height)
 	}
 

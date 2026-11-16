@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -15,6 +16,8 @@ import (
 type display struct {
 	out           io.Writer
 	rows          []string
+	rawRows       []string
+	background    string
 	caret         string
 	width, height int
 }
@@ -36,6 +39,14 @@ func (d *display) draw(view string, width, height int) {
 		next = append(next, "")
 	}
 	bg := backgroundSGR()
+	if width == d.width && height == d.height && bg == d.background && slices.Equal(d.rawRows, next) {
+		if caret != d.caret {
+			io.WriteString(d.out, caret)
+			d.caret = caret
+		}
+		return
+	}
+	raw := slices.Clone(next)
 	for i, row := range next {
 		next[i] = withBackground(ansi.Truncate(row, width, ""), width, bg)
 	}
@@ -68,6 +79,7 @@ func (d *display) draw(view string, width, height int) {
 	}
 	out.WriteString(caret)
 	d.rows, d.caret, d.width, d.height = next, caret, width, height
+	d.rawRows, d.background = raw, bg
 	io.WriteString(d.out, out.String())
 }
 

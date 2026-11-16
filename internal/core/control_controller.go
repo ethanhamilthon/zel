@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"time"
+	"zel/internal/config"
 )
 
 // Controller is the single entry point for the TUI. One turn is
@@ -90,6 +91,14 @@ func (c *Controller) titleLocked() string {
 func (c *Controller) Sessions() (sessions []SessionSummary, err error) {
 	c.view(func() { sessions, err = c.a.Sessions() })
 	return sessions, err
+}
+
+// Appearance is an immutable, map-free snapshot for the hot UI path.
+func (c *Controller) Appearance() (config.Colors, UI) {
+	s := c.a.session()
+	s.cfg.mu.Lock()
+	defer s.cfg.mu.Unlock()
+	return s.cfg.s.Colors, s.cfg.s.UI
 }
 
 func (c *Controller) Settings() (s Settings) {

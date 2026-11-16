@@ -2656,6 +2656,34 @@ func (m *model) referenceTimelineRows(budget time.Duration) []string {
 	return screen
 }
 
+func TestTimelineTailUpdatesMatchFullLayout(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 60, 20
+	for _, n := range []int{1, 2, 5, 3, 0, 4} {
+		for len(m.entries) < n {
+			m.entries = append(m.entries, entry{Kind: "assistant", Text: fmt.Sprint("answer ", len(m.entries))})
+		}
+		m.entries = m.entries[:n]
+		if n > 0 {
+			m.entries[n-1].Text += "\n\nchanged tail"
+		}
+		got := m.timelineRows(0)
+		want := m.referenceTimelineRows(0)
+		if !slices.Equal(got, want) {
+			t.Fatalf("%d entries: got %q want %q", n, got, want)
+		}
+	}
+}
+
+func TestCommittedTraceReleasedButLivePreviewKept(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.entries = []entry{{Kind: "user", Text: "hi"}, {Kind: "output", Text: "large output"}, {Kind: "reasoning", Text: "live", Preview: true}, {Kind: "assistant", Text: "answer"}}
+	m.releaseCommittedTrace()
+	if len(m.entries) != 3 || m.entries[1].Kind != "reasoning" {
+		t.Fatalf("records %+v", m.entries)
+	}
+}
+
 func TestTimelineSegmentsMatchReference(t *testing.T) {
 	build := func(m model, n int) model {
 		m.entries = nil

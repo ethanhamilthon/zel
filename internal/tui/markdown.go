@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -65,7 +66,27 @@ func markdownLinks(body string) string {
 // codeTarget is the link for the text of an inline code span: an http(s) URL, or the
 // file:// URL of an existing file or directory (relative to linkBase, with an optional
 // :line:column suffix). It is empty for any other text.
+type pathResult struct {
+	target string
+	at     time.Time
+}
+
+var pathTargets = map[[2]string]pathResult{}
+
 func codeTarget(text string) string {
+	key := [2]string{linkBase, text}
+	if cached, ok := pathTargets[key]; ok && time.Since(cached.at) < 5*time.Second {
+		return cached.target
+	}
+	target := resolveCodeTarget(text)
+	if len(pathTargets) >= 4096 {
+		clear(pathTargets)
+	}
+	pathTargets[key] = pathResult{target, time.Now()}
+	return target
+}
+
+func resolveCodeTarget(text string) string {
 	if len(text) > 500 || !pathText.MatchString(text) {
 		return ""
 	}
@@ -188,7 +209,22 @@ var (
 )
 
 func renderMarkdown(text string, width int, streaming bool) (string, bool) {
-	return renderMarkdownStyle(markPlainTargets(cleanLinkMarkers(text)), width, streaming, markdownStyle)
+	render := func(body string) (string, bool) {
+		return renderMarkdownStyle(markPlainTargets(cleanLinkMarkers(body)), width, false, markdownStyle)
+	}
+	if split := stableSplit(text); streaming && split > 0 {
+		key := [5]any{width, lipgloss.ColorProfile(), markdownStyle, linkBase, text[:split]}
+		if mdStable.key != key {
+			out, ok := render(text[:split])
+			if !ok {
+				return "", false
+			}
+			mdStable.key, mdStable.out = key, out
+		}
+		tail, ok := render(text[split:])
+		return mdStable.out + "\n\n" + tail, ok
+	}
+	return render(text)
 }
 
 func renderMarkdownStyle(text string, width int, streaming bool, style string) (string, bool) {
@@ -201,20 +237,7 @@ func renderMarkdownStyle(text string, width int, streaming bool, style string) (
 		return "", false
 	}
 	text = markCodeTargets(text)
-	if split := stableSplit(text); streaming && split > 0 {
-		if key := [2]any{mdKey, text[:split]}; mdStable.key != key {
-			out, ok := renderGlamour(text[:split])
-			if !ok {
-				return "", false
-			}
-			mdStable.key, mdStable.out = key, out
-		}
-		tail, ok := renderGlamour(text[split:])
-		if !ok {
-			return "", false
-		}
-		return markdownLinks(mdStable.out + "\n\n" + tail), true
-	}
+
 	out, ok := renderGlamour(text)
 	return markdownLinks(out), ok
 }
@@ -239,15 +262,20 @@ func renderGlamour(text string) (string, bool) {
 
 func stableSplit(text string) int {
 	split, fence, offset := 0, false, 0
-	for _, line := range strings.SplitAfter(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~"):
-			fence = !fence
-		case trimmed == "" && !fence && strings.HasSuffix(line, "\n") && offset > 0:
-			split = offset + len(line)
+	for offset < len(text) {
+		end := strings.IndexByte(text[offset:], '\n')
+		if end < 0 {
+			break
 		}
-		offset += len(line)
+		end += offset + 1
+		line := strings.TrimSpace(text[offset:end])
+		switch {
+		case strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~"):
+			fence = !fence
+		case line == "" && !fence && offset > 0:
+			split = end
+		}
+		offset = end
 	}
 	if strings.TrimSpace(text[split:]) == "" {
 		return 0

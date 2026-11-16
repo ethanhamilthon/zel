@@ -106,7 +106,8 @@ func (m model) workingBlock() string {
 		}
 	}
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
-	text := ansi.Truncate(workingText(status, m.turnSteps(), m.ctl.Settings().UI.ShowBash), max(1, m.width-2), "…")
+	_, appearance := m.ctl.Appearance()
+	text := ansi.Truncate(workingText(status, m.turnSteps(), appearance.ShowBash), max(1, m.width-2), "…")
 	return lipgloss.NewStyle().Foreground(accentColor).Render(star) + " " + lipgloss.NewStyle().Foreground(grayColor).Render(text) + "\n\n"
 }
 
@@ -225,8 +226,12 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.ctl.LogEvent(e.Kind, e.Text)
 	case "session":
 		m.entries, m.contextTokens = slices.Clone(e.Session.Records), e.Session.Context
+		m.releaseCommittedTrace()
 		m.turnIndex = len(m.entries)
 		m.cache = nil
+		clear(pathTargets)
+		clear(painted)
+		mdStable.key, mdStable.out = nil, ""
 		m.tasks = m.ctl.ActiveTasks()
 		m.pasteGeneration++
 		m.pasting = false
@@ -234,6 +239,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.fileIndexCache = nil
 		m.refresh(true)
 	case "done":
+		m.releaseCommittedTrace()
 		m.contextTokens = e.Context
 		if len(e.Unsent) > 0 {
 			m.restoreUnsent(e.Unsent)
