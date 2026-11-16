@@ -108,19 +108,10 @@ func answerMetadata(e entry) string {
 	return formatDuration(e.Meta.Duration) + " · " + formatSteps(e.Meta.Steps)
 }
 
-// renderRail draws the composer rail, smoothly pulsing while its draft is queued.
-func renderRail(text string, width int, queued bool) string {
+// renderRail draws the rail used by menu and settings inputs.
+func renderRail(text string, width int) string {
 	lines := strings.Split(text, "\n")
-	color := accentColor
-	if queued {
-		from, e1 := colorful.Hex(string(accentColor))
-		to, e2 := colorful.Hex(string(darkGray))
-		if e1 == nil && e2 == nil {
-			phase := (1 - math.Cos(float64(time.Now().UnixMilli())*2*math.Pi/1600)) / 2
-			color = lipgloss.Color(from.BlendRgb(to, phase).Hex())
-		}
-	}
-	rail := lipgloss.NewStyle().Foreground(color).Render("▌")
+	rail := lipgloss.NewStyle().Foreground(accentColor).Render("▌")
 	for i, line := range lines {
 		body := paint(" "+line, max(1, width-1), lipgloss.NoColor{}, agentColor)
 		lines[i] = ansi.Truncate(rail+body, max(1, width), "")
@@ -130,7 +121,37 @@ func renderRail(text string, width int, queued bool) string {
 
 const composerCursorMarker = "\x1b]1337;ZelCursor\x07"
 
+// queuedColor fades to a darker shade and back over a 1.6-second cycle.
+func queuedColor(base lipgloss.Color, now time.Time) lipgloss.Color {
+	from, err := colorful.Hex(string(base))
+	if err != nil {
+		return base
+	}
+	phase := (1 - math.Cos(float64(now.UnixMilli()%1600)*2*math.Pi/1600)) / 2
+	return lipgloss.Color(from.BlendRgb(colorful.Color{}, 0.6*phase).Hex())
+}
+
 func (m model) inputBlock() string {
+	return m.inputBlockAt(time.Now())
+}
+
+func (m model) inputBlockAt(now time.Time) string {
+	// Rebind the textarea's style pointer on this copy, not the live composer.
+	if m.pendingSteer != 0 {
+		style := composerStyle()
+		style.Base = style.Base.Foreground(queuedColor(userColor, now))
+		style.Text = style.Text.Foreground(queuedColor(userColor, now))
+		style.CursorLine = style.CursorLine.Foreground(queuedColor(userHighlight, now))
+		m.input.FocusedStyle, m.input.BlurredStyle = style, style
+		if m.input.Focused() {
+			m.input.Focus()
+		} else {
+			m.input.Blur()
+		}
+		m.input.Cursor.Style = lipgloss.NewStyle().Transform(func(s string) string {
+			return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(queuedColor(userHighlight, now)).Render(s)
+		})
+	}
 	lines := strings.Split(m.input.View(), "\n")
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, max(1, m.width), "")

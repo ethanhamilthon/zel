@@ -25,7 +25,7 @@ func (m model) menuView() string {
 	lines = append(lines, header, "")
 	if searchableMenu(m.menu.page) {
 		// The search input sits one blank line below the header.
-		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w, false), "")
+		lines = append(lines, pad+renderRail(m.menuInput(max(1, w-2)).View(), w), "")
 	}
 	lines = append(lines, m.pageLines(pad, w)...)
 	hint := ""

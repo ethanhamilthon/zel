@@ -629,6 +629,34 @@ func TestCodeSpanLinksAndClicks(t *testing.T) {
 	}
 }
 
+func TestQueuedComposerPulse(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(profile)
+	m := bareModel(t, "/project")
+	m.input.SetValue("queued message\nsecond line")
+	bright, dim := time.UnixMilli(0), time.UnixMilli(800)
+	normal := m.inputBlockAt(bright)
+	if normal != m.inputBlockAt(dim) {
+		t.Fatal("unqueued composer animates")
+	}
+	m.pendingSteer = 1
+	a, b := m.inputBlockAt(bright), m.inputBlockAt(dim)
+	if a == b || ansi.Strip(a) != ansi.Strip(b) {
+		t.Fatal("queued composer must change color without changing content")
+	}
+	if a != m.inputBlockAt(time.UnixMilli(1600)) {
+		t.Fatal("pulse does not return to its initial color")
+	}
+	m.pendingSteer = 0
+	if got := m.inputBlockAt(dim); got != normal {
+		t.Fatal("composer style was not restored after leaving queue")
+	}
+	if queuedColor("invalid", dim) != "invalid" {
+		t.Fatal("invalid colors should remain unchanged")
+	}
+}
+
 func TestQueuedComposerEditWithdrawsUntilEnter(t *testing.T) {
 	m, release := busyModel(t)
 	m.input.SetValue("queued instruction")

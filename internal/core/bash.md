@@ -2,6 +2,7 @@
 One tool: bash. Its input is a bash script; every call is a fresh `bash -c` in the session folder (cd and variables do not carry over; use `zel cd DIR` to change the folder for the next calls). A call has {timeout} s; run longer work with `zel task run`.
 Output = stdout + stderr, never truncated: filter it yourself (head, tail, sed -n '100,120p', rg, jq). A nonzero exit ends the output with "[exit N]".
 Read files with cat/sed/rg, write new ones with heredocs, change existing ones with zel edit.
+Write large files in small chunks: create a short initial file with a heredoc, then extend it with successive zel edit calls. Do not write or replace a large file all at once.
 You wake up only for user messages and notifications like <notification>t1 finished</notification>; they are short, fetch details yourself (zel task get t1).
 
 ## zel commands
