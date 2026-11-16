@@ -34,9 +34,9 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	if err != nil {
 		return nil, err
 	}
-	// The system prompt stays empty: everything we write goes into the bash tool description.
-	request := provider.Request{Model: settings.Model, Input: input, Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
-		Tools: []provider.Tool{{Name: "bash", Description: s.toolDescription(prompt), Parameters: bashParameters(), Freeform: "command"}}}
+	// The system prompt is only what the user wrote in the config; our own text goes into the bash tool description.
+	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: input, Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
+		Tools: []provider.Tool{{Name: "bash", Description: s.toolDescription(), Parameters: bashParameters(), Freeform: "command"}}}
 	started := time.Now()
 	s.histMu.Lock()
 	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}

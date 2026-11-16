@@ -11,9 +11,6 @@ import (
 	"zel/internal/config"
 )
 
-// systemIntro opens every system prompt.
-const systemIntro = "You are Zel, a coding agent. Use the bash tool to help the user."
-
 //go:embed bash.md
 var bashMD string
 
@@ -45,9 +42,9 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 	return prompt, nil
 }
 
-// assemblePrompt renders the instructions of the config for this session mode.
-// Only this part is frozen in the history; the built-in text is added live by
-// toolDescription, so a new Zel version reaches resumed sessions too.
+// assemblePrompt renders the system prompt: only the instructions the user wrote
+// in the config for this session mode. Zel adds nothing of its own here.
+// It is frozen in the history; the built-in text lives in toolDescription.
 func (s *session) assemblePrompt() string {
 	var parts []string
 	if cfg := s.conf.get(); cfg != nil {
@@ -60,14 +57,10 @@ func (s *session) assemblePrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// toolDescription is the whole text the model gets: the system prompt is empty.
-// Order: the tool line, the intro, the frozen config instructions, bash.md.
-func (s *session) toolDescription(configPart string) string {
-	parts := []string{BashToolDescription, systemIntro}
-	if configPart != "" {
-		parts = append(parts, configPart)
-	}
-	return strings.Join(append(parts, s.builtin()), "\n\n")
+// toolDescription is everything Zel itself tells the model: how the bash tool
+// and the zel commands work. It is built live for every request.
+func (s *session) toolDescription() string {
+	return BashToolDescription + "\n\n" + s.builtin()
 }
 
 // builtin is bash.md for this session: headless sessions cannot ask the user,
