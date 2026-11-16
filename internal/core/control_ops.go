@@ -24,14 +24,14 @@ func (c *Controller) Input(input Input) error {
 			err = fail(CodeBusy, "Session changed while preparing the input; please retry.")
 		case c.shut:
 			err = fail(CodeFailed, "the session is closed")
+		case strings.TrimSpace(input.Text) == "":
+			err = fail(CodeInvalid, "input requires text or images")
 		case c.changing:
 			if c.switching {
 				err = fail(CodeBusy, "Session is changing; please retry.")
 			} else {
 				err = c.queueLocked(input)
 			}
-		case strings.TrimSpace(input.Text) == "":
-			err = fail(CodeInvalid, "input requires text or images")
 		case c.active != nil:
 			err = c.queueLocked(input)
 		default:

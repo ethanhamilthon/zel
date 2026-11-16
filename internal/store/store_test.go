@@ -86,6 +86,38 @@ func TestUnchangedSavePreservesMetadataAndSuffixAppend(t *testing.T) {
 	}
 }
 
+func TestMetadataFailureRemainsRetryable(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Session{ID: "retry", Project: "/project", Title: "old"}
+	if err := s.Save(v, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Dir(v.Project, v.ID), "meta.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	v.Title = "new"
+	if err := s.Save(v, nil, 0); err == nil {
+		t.Fatal("metadata failure ignored")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(v, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readMeta(filepath.Dir(path))
+	if err != nil || m.Title != "new" {
+		t.Fatalf("retry: %+v %v", m, err)
+	}
+}
+
 func TestTasks(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	p := "/tmp/proj"

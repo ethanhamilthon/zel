@@ -236,9 +236,12 @@ func (s *Store) Append(v Session, items []Item, saved, total int) error {
 	}
 	keep := v
 	keep.Created = time.Time{}
+	if err := writeJSON(filepath.Join(dir, "meta.json"), meta{ID: v.ID, Title: v.Title, First: v.First, Parent: v.Parent,
+		Provider: v.Provider, Model: v.Model, Effort: v.Effort, Updated: time.Now().UTC()}); err != nil {
+		return err
+	}
 	s.last[dir] = keep
-	return writeJSON(filepath.Join(dir, "meta.json"), meta{ID: v.ID, Title: v.Title, First: v.First, Parent: v.Parent,
-		Provider: v.Provider, Model: v.Model, Effort: v.Effort, Updated: time.Now().UTC()})
+	return nil
 }
 
 // Sessions lists the sessions of a project, newest first. Sessions started by
