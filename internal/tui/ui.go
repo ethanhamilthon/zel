@@ -180,12 +180,23 @@ func (m *model) updateInput(msg tea.Msg) tea.Cmd {
 	m.inputValue, m.inputWidth = "\x00", 0
 	return cmd
 }
-func (m *model) refresh(follow bool) {
-	if colors := m.ctl.Settings().Colors; strings.Join(colors[:], " ") != m.themeKey {
-		m.themeKey, m.cache = strings.Join(colors[:], " "), nil
-		applyTheme(colors)
-		m.input.FocusedStyle, m.input.BlurredStyle = composerStyle(), composerStyle()
+
+// syncTheme applies [colors] when they changed (a menu or hot reload); it
+// reports whether they did, so the caller redraws.
+func (m *model) syncTheme() bool {
+	colors := m.ctl.Settings().Colors
+	key := strings.Join(colors[:], " ")
+	if key == m.themeKey {
+		return false
 	}
+	m.themeKey, m.cache, m.menuDirty = key, nil, true
+	applyTheme(colors)
+	m.input.FocusedStyle, m.input.BlurredStyle = composerStyle(), composerStyle()
+	return true
+}
+
+func (m *model) refresh(follow bool) {
+	m.syncTheme()
 	m.resizeInput()
 	m.viewport.Width = max(1, m.width)
 	m.viewport.Height = max(1, m.height)
@@ -213,6 +224,9 @@ func (m *model) add(kind, text string) {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	wasTraceEntry := m.traceEntryView()
+	if m.syncTheme() { // hot reload changed the colors: redraw everything with them
+		m.refresh(m.viewport.AtBottom())
+	}
 	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
 		m.syncSteer()
 	}

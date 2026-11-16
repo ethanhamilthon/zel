@@ -3165,3 +3165,16 @@ func (m *model) applyAgent(e core.TurnEvent) {
 		m.contextTokens = *e.Meta.ContextInput
 	}
 }
+
+// Colors changed behind the UI's back (hot reload) apply on the next message, with no key press.
+func TestThemeFollowsReload(t *testing.T) {
+	defer applyTheme(config.DefaultColors())
+	m := bareModel(t, t.TempDir())
+	m.refresh(true)
+	setConfig(t, m.ctl, func(s *core.Settings) { s.Colors.Set("bg", "#102030"); s.Colors.Set("user", "#405060") })
+	next, _ := m.Update(redraw{})
+	m = next.(model)
+	if bgColor != "#102030" || userColor != "#405060" {
+		t.Fatalf("theme after reload: bg %q user %q", bgColor, userColor)
+	}
+}
