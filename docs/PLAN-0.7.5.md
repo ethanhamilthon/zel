@@ -1,6 +1,6 @@
 # Zel 0.7.5 — Performance and Simplification Plan
 
-Status: implemented and locally verified on 2026-11-16. Release publication and CI verification are authorized. See [release evidence](RELEASE-0.7.5.md).
+Status: implemented, verified and released as v0.7.5 on 2026-11-16. macOS/Linux CI and release jobs succeeded. See [release evidence](RELEASE-0.7.5.md).
 
 Based on [the performance and architecture audit](AUDIT-2026-11-16.md).
 

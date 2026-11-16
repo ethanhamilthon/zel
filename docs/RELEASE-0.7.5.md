@@ -130,7 +130,14 @@ successful guarded run.
 
 ## Publication
 
-Release tag: `v0.7.5`. GitHub's tag workflow runs macOS/Linux checks before
-publishing the four platform archives and checksums. Publication status and run
-links are reported after the remote workflows complete; local green tests are
-not presented as proof of remote CI success.
+Published [v0.7.5](https://github.com/ethanhamilthon/zel/releases/tag/v0.7.5)
+from commit `4fa798762200ab12a67b08a940e2dd9785985442`.
+
+- [Main CI](https://github.com/ethanhamilthon/zel/actions/runs/43826327836): success on macOS and Linux.
+- [Tag checks and release](https://github.com/ethanhamilthon/zel/actions/runs/43826386790): all three jobs succeeded.
+- Published macOS/Linux archives for arm64/amd64 and `checksums.txt`.
+- Downloaded assets and checksum/native-version verification are recorded in
+  [artifact checks](releases/0.7.5/published-artifacts.log).
+
+These are remote workflow results, not inferred from local tests. The release
+tag is immutable; this publication record is a documentation-only follow-up.

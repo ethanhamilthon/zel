@@ -1,0 +1,5 @@
+zel_darwin_amd64.tar.gz: OK
+zel_darwin_arm64.tar.gz: OK
+zel_linux_amd64.tar.gz: OK
+zel_linux_arm64.tar.gz: OK
+PASS downloaded macOS arm64 binary reports 0.7.5

@@ -14,7 +14,7 @@ Audit: [2026-11-16 findings and measurements](docs/AUDIT-2026-11-16.md).
 - [x] Verify old/new/mixed histories, cancellation, background tasks, durability, and measured improvements.
 - [x] Add custom written answers to choice cards.
 - [x] Update documentation, release notes, and version to 0.7.5.
-- [ ] Publish tag and verify GitHub CI/release artifacts.
+- [x] Publish v0.7.5 and verify macOS/Linux CI; published artifact checksums are recorded with the release evidence.
 
 Out of scope: Rex helpers, historical image migration, unapproved feature removals.
 
