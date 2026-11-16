@@ -98,6 +98,7 @@ type session struct {
 	children      map[string]SubagentRun // zel -p children that run now, by session ID
 	childPIDs     map[string]int
 	hookWG        sync.WaitGroup // async hooks
+	outputMu      sync.Mutex     // numbers the files of cut bash outputs
 	turning       atomic.Bool
 	idleSent      atomic.Bool
 	histMu        sync.RWMutex

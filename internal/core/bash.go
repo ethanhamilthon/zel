@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"zel/internal/shell"
 )
@@ -28,7 +32,7 @@ func (s *session) runBash(ctx context.Context, command string) string {
 	timeout := time.Duration(s.Settings().BashTimeout) * time.Second
 	end := s.beginActivity(bashLabel(Redact(s.Settings(), command)))
 	started := time.Now()
-	out, code, timedOut := s.execBash(ctx, command, timeout)
+	out, code, timedOut, capture := s.execBash(ctx, command, timeout)
 	end()
 	if s.hasHooks("bash_after") {
 		res := s.runHooks(ctx, "bash_after", map[string]any{"command": command, "out": out, "code": code,
@@ -37,22 +41,23 @@ func (s *session) runBash(ctx context.Context, command string) string {
 			out = strings.TrimRight(out, "\n") + "\n" + extra
 		}
 	}
-	return out
+	return s.cutOutput(out, capture)
 }
 
 // execBash runs the script with `bash -c` in the session folder; the whole
 // process group dies at the timeout or when ctx ends.
-func (s *session) execBash(ctx context.Context, command string, timeout time.Duration) (out string, code int, timedOut bool) {
+func (s *session) execBash(ctx context.Context, command string, timeout time.Duration) (out string, code int, timedOut bool, capture *bashCapture) {
 	if ctx.Err() != nil {
-		return "[cancelled]", 130, false
+		return "[cancelled]", 130, false, nil
 	}
 	cmd := shell.Command(context.Background(), s.dir, s.shellEnv(), command)
-	buffer := shell.NewOutputBuffer(bashOutputLimit)
-	w := &lockedWriter{w: buffer}
+	capture = &bashCapture{buffer: shell.NewOutputBuffer(bashOutputLimit), limit: s.Settings().BashOutput, open: s.openOutputFile}
+	buffer := capture.buffer
+	w := &lockedWriter{w: capture}
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = w, w
 	if err := cmd.Start(); err != nil {
-		return err.Error() + "\n[exit 127]", 127, false
+		return err.Error() + "\n[exit 127]", 127, false, nil
 	}
 	done := make(chan error, 1)
 	go func() { done <- shell.Reap(cmd) }()
@@ -77,6 +82,7 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 	}
 	w.mu.Lock()
 	out = buffer.Text()
+	capture.lost = max(0, capture.total-len(out))
 	w.mu.Unlock()
 	if suffix != "" {
 		if out != "" && !strings.HasSuffix(out, "\n") {
@@ -84,7 +90,7 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 		}
 		out += suffix
 	}
-	return out, code, timedOut
+	return out, code, timedOut, capture
 }
 
 // exitCode is the exit status of a finished command; a signal counts as 128+n.
@@ -125,4 +131,153 @@ func bashLabel(command string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// bashFileCap is the most bytes of one call's output written to its file.
+const bashFileCap = 64 << 20
+
+// bashCapture receives the output of one call: the bounded in-memory buffer
+// and, when the output may be cut, a copy as it streams. The copy stays in
+// memory until it passes the limit, then goes to a file, so a call whose
+// output fits writes none.
+type bashCapture struct {
+	buffer *shell.OutputBuffer
+	limit  int
+	open   func() (*os.File, error)
+	total  int // bytes streamed
+	lost   int // bytes streamed that the buffer no longer holds
+	pre    []byte
+	file   *os.File
+	err    error
+	capped bool
+	size   int
+}
+
+func (c *bashCapture) Write(p []byte) (int, error) {
+	_, _ = c.buffer.Write(p)
+	c.total += len(p)
+	if c.limit <= 0 || c.err != nil {
+		return len(p), nil
+	}
+	if c.file == nil {
+		if c.pre = append(c.pre, p...); len(c.pre) > c.limit {
+			c.spill()
+		}
+		return len(p), nil
+	}
+	c.put(p)
+	return len(p), nil
+}
+
+// spill opens the file and moves the held output into it.
+func (c *bashCapture) spill() {
+	if c.file, c.err = c.open(); c.err != nil {
+		return
+	}
+	pre := c.pre
+	c.pre = nil
+	c.put(pre)
+}
+
+func (c *bashCapture) put(p []byte) {
+	if c.capped {
+		return
+	}
+	if room := bashFileCap - c.size; len(p) > room {
+		p, c.capped = p[:room], true
+	}
+	c.size += len(p)
+	_, _ = c.file.Write(p)
+	if c.capped {
+		_, _ = c.file.WriteString("\n[output file stops here: 64 MiB limit]\n")
+	}
+}
+
+// finish closes the file and returns its path; with need set it writes the
+// file even if the output never passed the limit (the endings pushed it over).
+func (c *bashCapture) finish(need bool) string {
+	if c.file == nil && need && c.err == nil {
+		c.spill()
+	}
+	if c.file == nil {
+		return ""
+	}
+	path := c.file.Name()
+	_ = c.file.Close()
+	return path
+}
+
+// openOutputFile creates the next outputs/b<N>.txt of the session folder.
+func (s *session) openOutputFile() (*os.File, error) {
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	dir := filepath.Join(s.sessionDir(), "outputs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	last := 0
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		name := e.Name()
+		if n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "b"), ".txt")); err == nil && strings.HasPrefix(name, "b") {
+			last = max(last, n)
+		}
+	}
+	return os.OpenFile(filepath.Join(dir, "b"+strconv.Itoa(last+1)+".txt"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+}
+
+// cutOutput applies bash_output to the whole text the agent gets.
+func (s *session) cutOutput(text string, c *bashCapture) string {
+	if c == nil || c.limit <= 0 {
+		return text
+	}
+	total := len(text) + c.lost
+	if total <= c.limit {
+		c.finish(false)
+		return text
+	}
+	path := c.finish(true)
+	if path == "" {
+		path = "(not saved: " + errString(c.err) + ")"
+	}
+	return cutText(text, total, c.limit, path)
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "no file"
+	}
+	return err.Error()
+}
+
+// cutText keeps the first and last half of limit bytes of text, with the
+// marker between them. total is the size of the full output. A cut never
+// splits a UTF-8 character and moves to a line break within ~10% of the half.
+func cutText(text string, total, limit int, path string) string {
+	half := limit / 2
+	slack := half / 10
+	headEnd := min(half, len(text))
+	for headEnd > 0 && headEnd < len(text) && !utf8.RuneStart(text[headEnd]) {
+		headEnd--
+	}
+	if i := strings.LastIndexByte(text[max(0, headEnd-slack):headEnd], '\n'); i >= 0 {
+		headEnd = max(0, headEnd-slack) + i + 1
+	}
+	tailStart := max(headEnd, len(text)-(limit-half))
+	for tailStart < len(text) && !utf8.RuneStart(text[tailStart]) {
+		tailStart++
+	}
+	if i := strings.IndexByte(text[tailStart:min(len(text), tailStart+slack)], '\n'); i >= 0 {
+		tailStart += i + 1
+	}
+	head, tail := text[:headEnd], text[tailStart:]
+	gap := "\n\n"
+	if strings.HasSuffix(head, "\n") {
+		gap = "\n"
+	}
+	omitted := total - len(head) - len(tail)
+	return head + gap +
+		fmt.Sprintf("======== [output cut: %d of %d bytes omitted]\n", omitted, total) +
+		"======== full output: " + path + "\n" +
+		"======== read it with sed -n '100,200p', rg, head or tail\n\n" + tail
 }

@@ -50,7 +50,7 @@ var mainRows = []menuRow{
 	{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 	{"Info", "Tokens, Session, Ctrl+I"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Bash timeout, compaction, accent"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Bash timeout and output, compaction, accent"},
 }
 
 type menuListCache struct {

@@ -63,7 +63,7 @@ custom tool on Responses, JSON `{command}` elsewhere) so history always holds a
 function call with `{"command": ...}`. `core.runBash` runs it with `bash -c` in
 the session folder and its own process group, with the session environment
 (`ZEL_SESSION_ID`, `ZEL_MODE`, `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG`, ...),
-`bash_before`/`bash_after` hooks around it and the `settings.bash_timeout` limit.
+`bash_before`/`bash_after` hooks around it and the `settings.bash_timeout` and `settings.bash_output` limits.
 
 Every session (main or headless) listens on `~/.zel/run/<hash>.sock` with a
 random token. The `zel` subcommands its bash, tasks and hooks run send one

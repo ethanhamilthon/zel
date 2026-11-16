@@ -13,6 +13,8 @@ const (
 	CompactionThreshold = 400000
 	// BashTimeout is the default limit of one bash call of the agent, in seconds.
 	BashTimeout = 30
+	// BashOutput is the default byte limit of one bash call's output; 0 = no cut.
+	BashOutput = 8000
 )
 
 var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -41,6 +43,7 @@ type Settings struct {
 	ReasoningSummary        bool
 	CompactionThreshold     int
 	BashTimeout             int // seconds per bash call of the agent
+	BashOutput              int // bytes of one bash call's output the agent gets, 0 = no cut
 	UI                      UI
 	Colors                  Colors // [colors]: the TUI theme, defaults filled in
 	Providers               map[string]Provider
@@ -48,7 +51,7 @@ type Settings struct {
 }
 
 func DefaultSettings() Settings {
-	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout,
+	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
 		UI: UI{SlashMenu: true}, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
@@ -81,6 +84,9 @@ func Validate(s Settings) error {
 	}
 	if s.BashTimeout <= 0 {
 		return fmt.Errorf("bash_timeout must be > 0 seconds")
+	}
+	if s.BashOutput < 0 || (s.BashOutput > 0 && s.BashOutput < 1000) {
+		return fmt.Errorf("bash_output must be 0 (no cut) or >= 1000 bytes")
 	}
 	for i, key := range ColorKeys {
 		if err := CheckColor(key, s.Colors[i]); err != nil {

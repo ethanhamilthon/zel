@@ -53,8 +53,8 @@ reasoning effort (default `medium`).
 
 Ctrl+K opens the menu (typing `/` into an empty composer does too; Settings →
 Slash opens menu turns that off). Providers adds, edits or deletes providers;
-Settings controls auto compaction, reasoning summaries, the accent color and
-the bash timeout; every other color is in `[colors]` (`zel docs colors`).
+Settings controls auto compaction, reasoning summaries, the accent color, the
+bash timeout and the bash output limit; every other color is in `[colors]` (`zel docs colors`).
 The menus write into the zel.toml layer the value comes from: picking a model
 switches this session and updates the `model` line of the file that set it.
 API keys are stored as you type them; `${{ echo $VAR }}` reads one from the
@@ -65,8 +65,10 @@ Keychain.
 
 The model has exactly one tool, `bash`; its input is a bash script. Every call
 is a fresh `bash -c` in the session folder with a 30-second limit
-(`settings.bash_timeout`); output is stdout and stderr together, never
-truncated (a 1 MiB safety cap keeps head and tail). Longer work runs as a task.
+(`settings.bash_timeout`); output is stdout and stderr together, cut to
+`settings.bash_output` bytes (default 8000, `0` = no cut): the agent gets the
+first and the last half, and a marker between them names a file in the session
+folder (`outputs/b<N>.txt`) with the full output. Longer work runs as a task.
 
 ```sh
 zel task run --name build -- make test     # background task: prints t1

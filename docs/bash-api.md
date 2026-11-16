@@ -12,9 +12,31 @@ instructions, hooks and prompt completions.
 - A call has `settings.bash_timeout` seconds (default 30). At the timeout the
   whole group is killed and the output ends with `[timeout after 30s]`. Longer
   work goes to `zel task run`.
-- Output is stdout and stderr together, never truncated; only a 1 MiB safety
-  cap (head and tail kept) protects memory. A nonzero exit ends the output with
-  `[exit N]`.
+- Output is stdout and stderr together. A nonzero exit ends it with
+  `[exit N]`, a timeout with `[timeout after Ns]`.
+- The text the agent gets is cut to `settings.bash_output` bytes (default 8000;
+  `0` turns the cut off; values 1-999 are a config error). The limit counts the
+  whole text: the output, the endings and what `bash_after` hooks add. A longer
+  text becomes its first and last half of the limit, with a marker between
+  (not counted in the limit); the endings stay at the end:
+
+  ```
+  …first 4000 bytes…
+
+  ======== [output cut: 5000 of 13000 bytes omitted]
+  ======== full output: /Users/…/sessions/…/outputs/b12.txt
+  ======== read it with sed -n '100,200p', rg, head or tail
+
+  …last 4000 bytes…
+  ```
+
+  A cut never splits a UTF-8 character and moves to a line break that is close
+  (within ~10% of the half). The full output is written to
+  `outputs/b<N>.txt` in the session folder, only when it is cut (64 MiB cap,
+  with a note at its end when hit). `bash_after` hooks still get the full
+  output in `out`. Only the agent's bash calls are cut: task output, hook output
+  and `${{ }}` are not (a `zel -p` subagent runs through bash, so its answer is).
+  Behind it, a 1 MiB in-memory safety cap keeps head and tail.
 - stdin is empty; pagers are off (`PAGER=cat`, `GIT_PAGER=cat`).
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
@@ -110,6 +132,7 @@ compaction        = 400000     # tokens, 0 = off
 reasoning_summary = true
 slash_menu        = true
 bash_timeout      = 30         # seconds per bash call
+bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
 
 [colors]                       # the TUI theme; see `zel docs colors`
 accent = "#c3e88d"

@@ -85,6 +85,7 @@ model = "m2"
 instructions = [{ text = "local" }]
 [settings]
 bash_timeout = 5
+bash_output = 2000
 slash_menu = false
 [colors]
 user = "#222222"
@@ -112,7 +113,7 @@ fix = "local fix"
 		t.Fatalf("errors: %q", cfg.Errors)
 	}
 	s := cfg.Settings
-	if s.Provider != "openai" || s.Model != "m2" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 ||
+	if s.Provider != "openai" || s.Model != "m2" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 ||
 		s.UI.SlashMenu || !s.ReasoningSummary {
 		t.Fatalf("settings: %+v", s)
 	}
@@ -130,7 +131,7 @@ fix = "local fix"
 		t.Fatalf("env: %v", s.Env)
 	}
 	wantSrc := map[string]string{"provider": global, "model": local, "settings.compaction": global, "colors.accent": global,
-		"colors.user": local, "colors.trace.bash": local, "settings.bash_timeout": local, "settings.slash_menu": local, "providers.openai": local, "env.KEY": global, "env.OTHER": local}
+		"colors.user": local, "colors.trace.bash": local, "settings.bash_timeout": local, "settings.bash_output": local, "settings.slash_menu": local, "providers.openai": local, "env.KEY": global, "env.OTHER": local}
 	if !reflect.DeepEqual(cfg.Sources, wantSrc) {
 		t.Fatalf("sources = %v", cfg.Sources)
 	}

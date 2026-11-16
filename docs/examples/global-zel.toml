@@ -18,6 +18,7 @@ instructions = [
 [settings]
 compaction   = 400000
 bash_timeout = 30
+bash_output  = 8000     # bytes per bash call; longer output is cut, the full text goes to a file
 
 [colors]
 accent = "#c3e88d"

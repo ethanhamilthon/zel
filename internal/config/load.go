@@ -342,6 +342,12 @@ func (p parser) settings(lc *layerConf, v any) error {
 					s.BashTimeout = int(n)
 				}
 			}
+		case "bash_output":
+			n, ok := v.(int64)
+			if !ok || n < 0 || (n > 0 && n < 1000) {
+				return fmt.Errorf("%s: must be 0 (no cut) or an integer >= 1000 (bytes)", where)
+			}
+			apply = func(s *Settings) { s.BashOutput = int(n) }
 		case "reasoning_summary", "slash_menu":
 			b, ok := v.(bool)
 			if !ok {

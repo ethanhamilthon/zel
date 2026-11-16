@@ -4,8 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
+
+	"zel/internal/config"
 )
 
 // systemIntro opens every system prompt.
@@ -54,9 +57,9 @@ func (s *session) assemblePrompt() string {
 // builtin is bash.md for this session: headless sessions cannot ask the user,
 // and the deepest children cannot start more of them.
 func (s *session) builtin() string {
-	timeout := 30
+	timeout, limit := 30, config.BashOutput
 	if s.cfg != nil {
-		timeout = s.Settings().BashTimeout
+		timeout, limit = s.Settings().BashTimeout, s.Settings().BashOutput
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(bashMD), "\n") {
@@ -72,7 +75,11 @@ func (s *session) builtin() string {
 			}
 			line = strings.TrimPrefix(line, "[nest] ")
 		}
-		lines = append(lines, strings.ReplaceAll(line, "{timeout}", strconv.Itoa(timeout)))
+		line = strings.ReplaceAll(line, "{timeout}", strconv.Itoa(timeout))
+		if strings.HasPrefix(line, "Output = ") && limit > 0 {
+			line = strings.Replace(line, "never truncated", fmt.Sprintf("cut to %d bytes (head and tail; the marker gives a file with the full output)", limit), 1)
+		}
+		lines = append(lines, line)
 	}
 	text := strings.Join(lines, "\n")
 	if s.mode() == "headless" {

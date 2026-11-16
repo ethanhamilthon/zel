@@ -49,6 +49,7 @@ func (c *Config) Describe() string {
 		{"settings.reasoning_summary", strconv.FormatBool(s.ReasoningSummary)},
 		{"settings.slash_menu", strconv.FormatBool(s.UI.SlashMenu)},
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
+		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
 	} {
 		p("  %-26s = %-14s  %s", row[0], row[1], src(row[0]))
 	}

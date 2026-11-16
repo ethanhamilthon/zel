@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"zel/internal/config"
 	"zel/internal/ipc"
@@ -88,6 +90,63 @@ func TestBashOutputExitCodeAndEnvironment(t *testing.T) {
 	path := filepath.SplitList(lines[7])
 	if len(path) < 3 || path[1] != filepath.Join(s.dir, ".zel", "bin") || path[2] != filepath.Join(a.Home(), "bin") {
 		t.Fatalf("PATH = %s", lines[7])
+	}
+}
+
+func TestBashOutputCut(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, nil)
+	s, ctx := a.session(), context.Background()
+	if !strings.Contains(s.assemblePrompt(), "cut to 8000 bytes") {
+		t.Fatal("the prompt does not say the output limit")
+	}
+	// Under the limit: as is, no file.
+	if got := s.runBash(ctx, "head -c 7000 /dev/zero | tr '\\0' a"); got != strings.Repeat("a", 7000) {
+		t.Fatalf("short output changed: %d bytes", len(got))
+	}
+	if _, err := os.Stat(filepath.Join(s.sessionDir(), "outputs")); err == nil {
+		t.Fatal("a file was written for an output under the limit")
+	}
+	// 13000 bytes: 4000 + marker + 4000, the file holds everything.
+	got := s.runBash(ctx, "head -c 13000 /dev/zero | tr '\\0' a")
+	path := filepath.Join(s.sessionDir(), "outputs", "b1.txt")
+	want := strings.Repeat("a", 4000) + "\n\n======== [output cut: 5000 of 13000 bytes omitted]\n" +
+		"======== full output: " + path + "\n" +
+		"======== read it with sed -n '100,200p', rg, head or tail\n\n" + strings.Repeat("a", 4000)
+	if got != want {
+		t.Fatalf("cut output:\n%.200s ... %.300s", got, got[3900:])
+	}
+	if full, err := os.ReadFile(path); err != nil || len(full) != 13000 {
+		t.Fatalf("full output file: %d bytes, %v", len(full), err)
+	}
+	// The ending stays visible, and the cut keeps whole lines and characters.
+	got = s.runBash(ctx, "seq 1 3000; exit 3")
+	if !strings.HasSuffix(got, "3000\n[exit 3]") || !strings.HasPrefix(got, "1\n2\n") || !strings.Contains(got, "b2.txt") {
+		t.Fatalf("seq: %.80q ... %.80q", got, got[max(0, len(got)-80):])
+	}
+	got = s.runBash(ctx, "for i in $(seq 6000); do printf 'é'; done")
+	for _, part := range strings.Split(got, "========") {
+		if !utf8.ValidString(part) {
+			t.Fatal("a cut split a character")
+		}
+	}
+}
+
+func TestBashOutputOffAndInvalid(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_output = 0\n"))
+	s := a.session()
+	if got := s.runBash(context.Background(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) != 13000 {
+		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
+	}
+	if strings.Contains(s.assemblePrompt(), "cut to") || !strings.Contains(s.assemblePrompt(), "never truncated") {
+		t.Fatal("the prompt does not keep the old text when the cut is off")
+	}
+	for _, bad := range []string{"-1", "500"} {
+		s := config.DefaultSettings()
+		n, _ := strconv.Atoi(bad)
+		s.BashOutput = n
+		if config.Validate(s) == nil {
+			t.Fatalf("bash_output = %s accepted", bad)
+		}
 	}
 }
 

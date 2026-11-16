@@ -48,6 +48,10 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
+	if index == 5 {
+		m.startForm(&formState{kind: "setting", setting: index, fields: []string{"Bytes of one bash output the agent gets (off = no cut, min 1000)"}, values: []string{bashOutputLabel(s.BashOutput)}})
+		return
+	}
 	if index == 4 {
 		m.startForm(&formState{kind: "setting", setting: index, fields: []string{"Seconds per bash call of the agent"}, values: []string{strconv.Itoa(s.BashTimeout)}})
 		return
@@ -160,12 +164,22 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 		}
 		s.Providers[name] = core.Provider{BaseURL: f.values[1], APIKey: f.values[2], API: f.values[0]}
 	case "setting":
-		n, err := strconv.Atoi(f.values[0])
+		raw := strings.TrimSpace(f.values[0])
+		if f.setting == 5 && strings.EqualFold(raw, "off") {
+			raw = "0"
+		}
+		raw = strings.TrimSpace(strings.TrimSuffix(raw, " bytes"))
+		n, err := strconv.Atoi(raw)
 		if err != nil {
 			f.err = "Enter a whole number"
+			if f.setting == 5 {
+				f.err = "Enter a whole number or off"
+			}
 			return m, nil
 		}
-		if f.setting == 4 {
+		if f.setting == 5 {
+			s.BashOutput = n
+		} else if f.setting == 4 {
 			s.BashTimeout = n
 		} else {
 			s.CompactionThreshold = n

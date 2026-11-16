@@ -321,6 +321,7 @@ func (s *session) UpdateSettings(next Settings) error {
 	}
 	add("settings.slash_menu", next.UI.SlashMenu != cur.UI.SlashMenu, next.UI.SlashMenu)
 	add("settings.bash_timeout", next.BashTimeout != cur.BashTimeout, next.BashTimeout)
+	add("settings.bash_output", next.BashOutput != cur.BashOutput, next.BashOutput)
 	for _, c := range set {
 		if err := config.SetKey(s.target(c.key), c.key, c.value); err != nil {
 			return err

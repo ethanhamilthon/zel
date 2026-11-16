@@ -1253,6 +1253,23 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	if m.menu.page != menuSettings || m.ctl.Settings().BashTimeout != 90 || m.menuRows()[4] != (menuRow{"Bash timeout", "90 s"}) {
 		t.Fatalf("bash timeout not applied: %d %v", m.ctl.Settings().BashTimeout, m.menuRows())
 	}
+	m.menu = &menuState{page: menuSettings, selected: 5}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuForm || m.menu.form.input.Value() != "8000 bytes" {
+		t.Fatalf("Bash output form: page %v", m.menu.page)
+	}
+	m.menu.form.input.SetValue("off")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuSettings || m.ctl.Settings().BashOutput != 0 || m.menuRows()[5] != (menuRow{"Bash output", "off"}) {
+		t.Fatalf("bash output not applied: %d %v", m.ctl.Settings().BashOutput, m.menuRows())
+	}
+	m.openSettingForm(5)
+	m.menu.form.input.SetValue("500")
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.menu.page != menuForm || m.menu.form.err == "" || m.ctl.Settings().BashOutput != 0 {
+		t.Fatal("bash output below 1000 accepted")
+	}
+	m.menu = &menuState{page: menuSettings}
 	if saved := core.LoadConfig(f.a.Home(), f.project); saved.BashTimeout != 90 || saved.CompactionThreshold != 4096 {
 		t.Fatalf("settings not saved in zel.toml: %+v", saved)
 	}
@@ -1416,7 +1433,7 @@ func TestMainMenuLabelsMatchAcceptance(t *testing.T) {
 		{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
 		{"Info", "Tokens, Session, Ctrl+I"}, {"Help", "Keyboard shortcuts"},
 		{"Quit", "Exit, Ctrl+Q"}, {"Providers", "Add, edit, remove"},
-		{"Settings", "Bash timeout, compaction, accent"},
+		{"Settings", "Bash timeout and output, compaction, accent"},
 	}
 	if got := m.buildMenuRows(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main menu rows = %#v, want %#v", got, want)
