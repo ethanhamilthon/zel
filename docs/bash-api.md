@@ -118,8 +118,11 @@ ends while nobody waits for it wakes the agent with `<notification>t1
 finished</notification>` (or `failed`, `stopped`, `timed out`).
 
 `zel choice` does not wait. The UI shows the options instead of the input
-(several questions queue up); the user picks one or presses Esc, and the agent
-gets `<notification>c1 Question: A</notification>` (or `cancelled`). It works
+(several questions queue up); the user picks one, chooses **Write your own
+answer…**, or presses Esc. Custom answers accept up to 4096 characters; Enter
+sends a non-empty answer, and Esc returns to the options without losing the
+custom text. The normal composer draft is preserved. The agent gets
+`<notification>c1 Question: A</notification>` (or the custom text, or `cancelled`). It works
 in the main session, its tasks and hooks; `zel -p` has no user (EDENIED).
 
 A subagent is `zel -p` run from the agent's bash. It becomes a child of the

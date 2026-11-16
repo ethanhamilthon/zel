@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -56,10 +57,12 @@ func (c *chooser) ask(s *session, title string, options []string) (int, error) {
 
 // answer takes the user's pick (index) or cancel (-1) for question id and
 // sends it to the session that asked.
-func (c *chooser) answer(id, index int) {
+func (c *chooser) answer(id, index int) { c.resolve(id, index, "") }
+
+func (c *chooser) resolve(id, index int, custom string) {
 	c.mu.Lock()
 	i := slices.IndexFunc(c.queue, func(q *question) bool { return q.ID == id })
-	if i < 0 || index < -1 || index >= len(c.queue[i].Options) {
+	if i < 0 || (custom == "" && (index < -1 || index >= len(c.queue[i].Options))) {
 		c.mu.Unlock()
 		return
 	}
@@ -68,7 +71,9 @@ func (c *chooser) answer(id, index int) {
 	c.mu.Unlock()
 	c.notify()
 	picked := "cancelled"
-	if index >= 0 {
+	if custom != "" {
+		picked = custom
+	} else if index >= 0 {
 		picked = q.Options[index]
 	}
 	if !q.s.ended.Load() {
@@ -103,6 +108,13 @@ func (a *Runtime) PendingChoice() *Choice {
 
 // AnswerChoice answers the question id with the option at index, or cancels it with -1.
 func (a *Runtime) AnswerChoice(id, index int) { a.ask.answer(id, index) }
+
+// AnswerChoiceText delivers a non-empty custom answer without changing the options.
+func (a *Runtime) AnswerChoiceText(id int, text string) {
+	if text = strings.TrimSpace(text); text != "" && len([]rune(text)) <= 4096 {
+		a.ask.resolve(id, -1, text)
+	}
+}
 
 // OnChoiceChanged registers fn to run when the queue of questions changes; with
 // fn set, zel choice has a UI to ask in. fn must not block.

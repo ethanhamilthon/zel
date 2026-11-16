@@ -32,14 +32,19 @@ func TestChoiceReplacesComposerAndTakesKeys(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.timeline()), "Зелёный <") {
 		t.Fatalf("down does not move:\n%s", ansi.Strip(m.timeline()))
 	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown}) // custom answer
+	if m.choiceSel != 3 {
+		t.Fatal("missing custom answer")
+	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyDown}) // wraps around
 	if m.choiceSel != 0 {
 		t.Fatalf("selection %d", m.choiceSel)
 	}
 	m = key(m, tea.KeyMsg{Type: tea.KeyUp})
-	if m.choiceSel != 2 {
+	if m.choiceSel != 3 {
 		t.Fatalf("selection %d", m.choiceSel)
 	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyUp}) // back to the last preset
 	// Typing does not reach the composer while a question is open.
 	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if m.input.Value() != "draft text" || m.choice == nil {
@@ -49,6 +54,37 @@ func TestChoiceReplacesComposerAndTakesKeys(t *testing.T) {
 	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.choice != nil || !strings.Contains(ansi.Strip(m.timeline()), "draft text") {
 		t.Fatalf("answered question stays:\n%s", ansi.Strip(m.timeline()))
+	}
+}
+
+func TestChoiceCustomAnswerPreservesDraftAndQueue(t *testing.T) {
+	m, a := freshModel(t)
+	m.menu = nil
+	a.OnChoiceChanged(func() {})
+	m.input.SetValue("unfinished draft")
+
+	m.choice = &core.Choice{ID: 1, Title: "Question", Options: []string{"Preset"}}
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.choice == nil {
+		t.Fatal("empty custom answer submitted")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Свой ответ 123 kj")})
+	if m.choiceInput.Value() != "Свой ответ 123 kj" || m.input.Value() != "unfinished draft" {
+		t.Fatal("custom input corrupted")
+	}
+	if !strings.Contains(m.choiceBlock(), composerCursorMarker) {
+		t.Fatal("missing custom caret")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.choice == nil || m.choiceWriting {
+		t.Fatal("Esc should return to options")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.choice != nil || m.input.Value() != "unfinished draft" {
+		t.Fatal("answer lost composer draft")
 	}
 }
 
@@ -81,7 +117,7 @@ func TestChoiceListScrollsInASmallTerminal(t *testing.T) {
 	m.choice = &core.Choice{ID: 1, Title: "q", Options: options}
 	m.choiceSel = 9
 	block := ansi.Strip(m.choiceBlock())
-	if !strings.Contains(block, "oooooooooo <") || !strings.Contains(block, "10 of 12") || strings.Contains(block, "\no\n") {
+	if !strings.Contains(block, "oooooooooo <") || !strings.Contains(block, "10 of 13") || strings.Contains(block, "\no\n") {
 		t.Fatalf("window around the selection:\n%s", block)
 	}
 }
@@ -91,7 +127,7 @@ func TestChoiceHasNoNumbersOrFooterAndFitsNarrowScreens(t *testing.T) {
 	m.height = 20
 	m.choice = &core.Choice{ID: 1, Title: "q", Options: []string{"First", "Second", "Third"}, Waiting: 3}
 	m.width = 60
-	if block := ansi.Strip(m.choiceBlock()); block != "q\nFirst <\nSecond\nThird" {
+	if block := ansi.Strip(m.choiceBlock()); block != "q\nFirst <\nSecond\nThird\nWrite your own answer…" {
 		t.Fatalf("unexpected choice layout:\n%s", block)
 	}
 	for width := 1; width <= 15; width++ {

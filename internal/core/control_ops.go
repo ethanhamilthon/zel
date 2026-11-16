@@ -195,6 +195,8 @@ func (c *Controller) PendingChoice() *Choice { return c.a.PendingChoice() }
 // AnswerChoice answers the question id with the option at index, or cancels it with -1.
 func (c *Controller) AnswerChoice(id, index int) { c.a.AnswerChoice(id, index) }
 
+func (c *Controller) AnswerChoiceText(id int, text string) { c.a.AnswerChoiceText(id, text) }
+
 func (c *Controller) ActiveTasks() (list []ActiveTask) {
 	c.view(func() { list = c.a.ActiveTasks() })
 	return list

@@ -421,6 +421,18 @@ func TestChoiceDoesNotBlockAndAnswersByNotification(t *testing.T) {
 	if got := a.Queue().Take(); len(got) != 1 || got[0].Text != "<notification>c1 Color: Red</notification>" || !got[0].Notice {
 		t.Fatalf("answer: %+v", got)
 	}
+	if r := ask("Custom", "Preset"); r.Out != "c3\n" {
+		t.Fatalf("custom ask: %+v", r)
+	}
+	a.AnswerChoiceText(3, "  ")
+	if len(a.ask.queue) != 2 {
+		t.Fatal("blank answer consumed question")
+	}
+	a.AnswerChoiceText(3, "  Свой ответ 123  ")
+	a.AnswerChoiceText(3, "duplicate")
+	if got := a.Queue().Take(); len(got) != 1 || got[0].Text != "<notification>c3 Custom: Свой ответ 123</notification>" {
+		t.Fatalf("custom: %+v", got)
+	}
 	a.AnswerChoice(2, -1)
 	if got := a.Queue().Take(); len(got) != 1 || got[0].Text != "<notification>c2 Size: cancelled</notification>" {
 		t.Fatalf("cancel: %+v", got)

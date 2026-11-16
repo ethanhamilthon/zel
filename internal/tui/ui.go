@@ -79,6 +79,8 @@ type model struct {
 	promptCancel              context.CancelFunc
 	choice                    *core.Choice // the agent's question; replaces the composer while set
 	choiceSel                 int
+	choiceWriting             bool
+	choiceInput               textarea.Model
 	tasks                     []core.ActiveTask // running background tasks, one chat row each
 	frameAt                   time.Time
 	dirty                     bool
@@ -541,6 +543,12 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.sendInput(core.Input{Text: text})
 		}
 		return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
+	}
+	if m.choice != nil && m.choiceWriting && m.menu == nil {
+		var cmd tea.Cmd
+		m.choiceInput, cmd = m.choiceInput.Update(msg)
+		m.refresh(true)
+		return m, cmd
 	}
 	if m.menu != nil {
 		if m.menu.page == menuForm {
