@@ -11,7 +11,7 @@ import (
 // tool traffic or a notice, in the order the session produced it.
 
 // traceKinds names the record kinds that the chat hides and the Tracing menu shows.
-var traceKinds = map[string]string{"code": "lua", "reasoning": "thinking"}
+var traceKinds = map[string]string{"code": "bash", "reasoning": "thinking"}
 
 func traceKind(kind string) string {
 	if name, ok := traceKinds[kind]; ok {
@@ -38,8 +38,11 @@ func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
 // captures what it needs, so callers can run it without holding any lock.
 func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
 	history := s.historyTrace()
-	id, home := s.id, s.home
-	return history, func() []TraceEntry { return eventTrace(home, id) }
+	path := ""
+	if s.id != "" && s.db != nil {
+		path = s.eventsLog()
+	}
+	return history, func() []TraceEntry { return eventTrace(path) }
 }
 
 func mergeTrace(history, rest []TraceEntry) []TraceEntry {
@@ -72,11 +75,11 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 
 // eventTrace parses the lines LogEvent appends: a timestamp, the kind and one or
 // more lines of text.
-func eventTrace(home, session string) (entries []TraceEntry) {
-	if home == "" || session == "" {
+func eventTrace(path string) (entries []TraceEntry) {
+	if path == "" {
 		return nil
 	}
-	data, err := os.ReadFile(EventsLog(home, session))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}

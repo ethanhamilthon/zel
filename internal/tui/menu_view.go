@@ -269,8 +269,8 @@ func (m model) textBody(w int) []string {
 
 func (m model) traceViewLines(text, kind string, width int) []string {
 	color := traceColor(kind)
-	if (kind == "lua" || kind == "code") && len(text) <= maxMarkdownBytes {
-		if lines, ok := highlightLua(text, max(1, width-2)); ok {
+	if (kind == "bash" || kind == "code") && len(text) <= maxMarkdownBytes {
+		if lines, ok := highlightBash(text, max(1, width-2)); ok {
 			return lines
 		}
 	}

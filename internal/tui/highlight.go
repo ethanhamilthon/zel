@@ -9,11 +9,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var luaLexer = chroma.Coalesce(lexers.Get("lua"))
+var bashLexer = chroma.Coalesce(lexers.Get("bash"))
 
-// luaTokenColor maps a token to the theme: keywords in the accent, comments
+// bashTokenColor maps a token to the theme: keywords in the accent, comments
 // dim, literals in fixed warm tones, everything else in the code gray.
-func luaTokenColor(t chroma.TokenType) lipgloss.Color {
+func bashTokenColor(t chroma.TokenType) lipgloss.Color {
 	switch {
 	case t.InCategory(chroma.Comment):
 		return darkGray
@@ -29,17 +29,17 @@ func luaTokenColor(t chroma.TokenType) lipgloss.Color {
 	return codeGray
 }
 
-// highlightLua lays out Lua code for the trace view: tokens colored, lines
+// highlightBash lays out bash code for the trace view: tokens colored, lines
 // hard-wrapped to width (code is not word-wrapped). ok is false when the code
 // cannot be tokenized; the caller then falls back to plain text.
-func highlightLua(code string, width int) (lines []string, ok bool) {
-	if luaLexer == nil {
+func highlightBash(code string, width int) (lines []string, ok bool) {
+	if bashLexer == nil {
 		return nil, false
 	}
 	if strings.IndexByte(code, 0x1b) >= 0 {
 		code = ansi.Strip(code)
 	}
-	it, err := luaLexer.Tokenise(nil, code)
+	it, err := bashLexer.Tokenise(nil, code)
 	if err != nil {
 		return nil, false
 	}
@@ -68,7 +68,7 @@ func highlightLua(code string, width int) (lines []string, ok bool) {
 		used = 0
 	}
 	for tok := it(); tok != chroma.EOF; tok = it() {
-		color := luaTokenColor(tok.Type)
+		color := bashTokenColor(tok.Type)
 		if color != runColor {
 			flushRun()
 			runColor = color

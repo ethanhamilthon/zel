@@ -60,6 +60,3 @@ func ZelHome(cwd string) (string, error) {
 	}
 	return filepath.Abs(dir)
 }
-
-// DBPath is the SQLite state path for helper commands that run without an agent.
-func DBPath(home string) string { return filepath.Join(home, "zel.db") }

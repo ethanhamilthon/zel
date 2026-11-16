@@ -6,15 +6,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
-	"zel/internal/luart"
+	"zel/internal/config"
+	"zel/internal/ipc"
 )
 
-func (s *session) lockPath() string { return filepath.Join(s.home, "locks", s.id+".lock") }
+// MaxDepth is how deep zel -p children nest.
+const MaxDepth = 3
 
+func (s *session) sessionDir() string { return s.db.Dir(s.project, s.id) }
+
+func (s *session) lockPath() string { return filepath.Join(s.sessionDir(), "lock") }
+
+func (s *session) socketPath() string { return ipc.Path(filepath.Join(s.home, "run"), s.id) }
+
+// acquire takes the session lock, opens the session socket and starts the tasks.
 func (s *session) acquire() error {
-	if err := os.MkdirAll(filepath.Dir(s.lockPath()), 0700); err != nil {
+	if err := os.MkdirAll(s.sessionDir(), 0700); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0600)
@@ -32,19 +43,29 @@ func (s *session) acquire() error {
 	}
 	s.owner = file
 	s.tasks = s.newTasks()
+	if s.sock, err = ipc.Listen(s.socketPath(), s.token, s.serveSocket); err != nil {
+		s.release()
+		return fmt.Errorf("session socket: %w", err)
+	}
+	if s.opts.Mode != "headless" {
+		s.startWatch()
+	}
 	return nil
 }
 
-// release stops the jobs, drops the lock and removes the lock file of an unsaved session.
-// The database stays open: a session change hands it to the next session.
-// s.tasks is retained (already closed) so surviving environment work never races on nil.
+// release stops the jobs, closes the socket, drops the lock and removes the
+// folder of a session that was never saved.
 func (s *session) release() {
-	if s.vm != nil {
-		s.vm.Close()
-		s.vm = nil
+	if s.stopWatch != nil {
+		s.stopWatch()
+		s.stopWatch = nil
 	}
 	if s.tasks != nil {
 		s.tasks.close(nil)
+	}
+	if s.sock != nil {
+		s.sock.Close()
+		s.sock = nil
 	}
 	if s.owner != nil {
 		_ = syscall.Flock(int(s.owner.Fd()), syscall.LOCK_UN)
@@ -54,7 +75,7 @@ func (s *session) release() {
 		stored := s.stored
 		s.histMu.RUnlock()
 		if !stored {
-			_ = os.Remove(s.lockPath())
+			_ = os.RemoveAll(s.sessionDir())
 		}
 	}
 }
@@ -65,13 +86,11 @@ func (s *session) shutdown(reason string) {
 	if s.queue != nil {
 		s.queue.OnPush(nil)
 	}
-	if s.lua != nil {
-		s.lua.setNotice(nil)
-	}
+	s.ask.drop(s)
+	s.conf.setNotice(nil)
 	s.release()
-	if s.lua != nil {
-		s.lua.set(nil) // closes the config VM, or once the last subagent that owes hooks has ended
-	}
+	s.leaveParent()
+	s.hookWG.Wait()
 }
 
 func (a *Runtime) release() { a.session().release() }
@@ -97,42 +116,13 @@ func (a *Runtime) Close() {
 func (a *Runtime) NewSession() error      { return a.changeSession("") }
 func (a *Runtime) Resume(id string) error { return a.changeSession(id) }
 
-func (a *Runtime) Reload() error { return a.session().Reload() }
-
-func (s *session) Reload() error {
-	if err := s.loadConfig(s.dir); err != nil {
-		return err
-	}
-	s.reloadLua()
-	if s.tasks != nil {
-		s.tasks.cancelLua()
-	}
-	if s.vm != nil {
-		s.vm.Reset("init.lua was reloaded")
-	}
-	previous, frozen := s.prompt, s.promptFrozen
-	s.promptFrozen = false
-	if _, err := s.instructions(context.Background()); err != nil {
-		s.prompt, s.promptFrozen = previous, frozen
-		return err
-	}
-	return nil
-}
-
 func (a *Runtime) changeSession(id string) error {
 	old := a.session()
 	if id != "" && id == old.id {
-		if err := old.loadConfig(old.dir); err != nil {
-			return err
-		}
-		old.loadLua()
-		_, err := old.instructions(context.Background())
-		return err
+		return old.Reload()
 	}
-	next := a.newSessionState(old.dir, old.queue.wakeHandler(), old.lua.noticeHandler())
-	if err := next.loadConfig(next.dir); err != nil {
-		return err
-	}
+	next := a.newSessionState(old.dir, old.queue.wakeHandler(), old.conf.noticeHandler())
+	next.project = old.project
 	var err error
 	if id == "" {
 		err = next.createSession()
@@ -143,11 +133,9 @@ func (a *Runtime) changeSession(id string) error {
 		next.release()
 		return err
 	}
-	next.loadLua()
 	if old.HasSavedSession() {
 		if err = old.Save(); err != nil {
 			next.release()
-			next.lua.set(nil)
 			return err
 		}
 	}
@@ -159,43 +147,78 @@ func (a *Runtime) changeSession(id string) error {
 	a.mu.Lock()
 	a.cur = next
 	a.mu.Unlock()
-	if id != "" {
-		next.vm = &luart.Runner{Env: luaEnv{next}}
-		next.vm.Reset("the session was resumed")
-	}
 	if id == "" {
 		next.sessionCreated()
+	} else {
+		next.fireHooks("session_resumed", map[string]any{})
 	}
+	a.changes.notify()
 	return nil
 }
 
-// rootID is the root session of this session's agent tree: the session of the
-// top-level runtime, which agents started below it report to.
-func (s *session) rootID() string {
-	if s.parentRoot != "" {
-		return s.parentRoot
+// OnConfigChanged registers fn to run when a config file of the session changed
+// (hot reload); without it the session reloads at once. fn must not block.
+func (a *Runtime) OnConfigChanged(fn func()) { a.reloads.set(fn) }
+
+// startWatch follows the config files of the session for hot reload.
+func (s *session) startWatch() {
+	files := []string{filepath.Join(s.home, "zel.toml"), filepath.Join(s.dir, "zel.toml")}
+	for _, l := range s.layers {
+		files = append(files, l.Path)
 	}
-	return s.id
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stopWatch = cancel
+	go config.Watch(ctx, files, func() {
+		if s.ended.Load() {
+			return
+		}
+		if !s.reloads.call() {
+			if err := s.Reload(); err != nil {
+				s.notify(err.Error())
+			}
+		}
+	})
 }
 
-func (a *Runtime) shellEnv() map[string]string { return a.session().shellEnv() }
-
-// shellEnv is exported to every sh() call. API keys and settings are never exported.
-// ZEL_MODE is session.mode, so a nested `zel -p` of a subagent still honors the agent limit.
-func (s *session) shellEnv() map[string]string {
-	return map[string]string{
+// baseEnv is the environment of everything the session runs: the bash calls,
+// tasks, hooks and ${{ }}. API keys are never exported.
+func (s *session) baseEnv() map[string]string {
+	env := map[string]string{
 		"ZEL_SESSION_ID": s.id,
 		"ZEL_MODE":       s.mode(),
+		"ZEL_DEPTH":      strconv.Itoa(s.depth),
+		"ZEL_SOCKET":     s.socketPath(),
+		"ZEL_TOKEN":      s.token,
+		"ZEL_CONFIG":     strings.Join(s.configPaths(), string(os.PathListSeparator)),
+		"PATH":           strings.Join([]string{filepath.Join(s.dir, ".zel", "bin"), filepath.Join(s.home, "bin"), os.Getenv("PATH")}, string(os.PathListSeparator)),
 	}
+	if s.parent != nil {
+		env["ZEL_PARENT"] = s.parent.session
+	}
+	if s.cfg != nil {
+		st := s.Settings()
+		env["ZEL_PROVIDER"], env["ZEL_MODEL"], env["ZEL_EFFORT"] = st.Provider, st.Model, st.Effort
+	}
+	return env
 }
 
-// mode is how the session runs, as Lua sees it in session.mode: "agent" for a
-// subagent, "headless" for zel -p, "main" for the user's interactive session.
+// shellEnv is baseEnv with the [env] of the config.
+func (s *session) shellEnv() map[string]string {
+	env := map[string]string{}
+	if s.cfg != nil {
+		for k, v := range s.Settings().Env {
+			env[k] = v
+		}
+	}
+	for k, v := range s.baseEnv() {
+		env[k] = v
+	}
+	return env
+}
+
+// mode is how the session runs: "headless" for zel -p, "main" for the TUI.
 func (s *session) mode() string {
-	switch {
-	case s.depth > 0:
-		return "agent"
-	case s.opts.Mode == "headless":
+	if s.opts.Mode == "headless" {
 		return "headless"
 	}
 	return "main"

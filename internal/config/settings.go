@@ -11,6 +11,8 @@ const (
 	// CompactionThreshold is the default context size, in tokens, that triggers
 	// automatic compaction; zero disables it.
 	CompactionThreshold = 400000
+	// BashTimeout is the default limit of one bash call of the agent, in seconds.
+	BashTimeout = 30
 )
 
 var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -33,20 +35,21 @@ type UI struct {
 	Accent    string // accent color; empty selects the default
 }
 
-// Settings is the effective configuration: stored preferences plus the session's
-// model selection. Instructions and plugins live in init.lua layers (LuaLayers).
+// Settings is the effective configuration merged from the zel.toml layers
+// (see Load); instructions, hooks and completions live in Config.
 type Settings struct {
-	DBPath                  string `json:"-"`
 	Provider, Model, Effort string
 	ReasoningSummary        bool
 	CompactionThreshold     int
+	BashTimeout             int // seconds per bash call of the agent
 	UI                      UI
 	Providers               map[string]Provider
+	Env                     map[string]string // [env]: extra variables for bash, tasks, hooks and ${{ }}
 }
 
 func DefaultSettings() Settings {
-	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold,
-		UI: UI{SlashMenu: true}, Providers: map[string]Provider{}}
+	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout,
+		UI: UI{SlashMenu: true}, Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {
@@ -75,6 +78,9 @@ func (s Settings) SetupHint() string {
 func Validate(s Settings) error {
 	if s.CompactionThreshold < 0 {
 		return fmt.Errorf("compaction threshold must be >= 0 tokens (0 = off)")
+	}
+	if s.BashTimeout <= 0 {
+		return fmt.Errorf("bash_timeout must be > 0 seconds")
 	}
 	if !slices.Contains(Efforts, s.Effort) {
 		return fmt.Errorf("unsupported effort %q", s.Effort)

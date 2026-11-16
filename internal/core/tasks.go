@@ -11,13 +11,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
+	"syscall"
 	"time"
 
 	"zel/internal/entities"
-	"zel/internal/luart"
+	"zel/internal/shell"
 	"zel/internal/store"
 )
+
+// sessionClosedTimeout is the shutdown budget of a session: stopping its tasks
+// and running its session_closed hooks.
+const sessionClosedTimeout = 5 * time.Second
 
 const (
 	taskResultLines = 40
@@ -25,18 +29,19 @@ const (
 )
 
 type tasks struct {
-	db           *store.Store
-	session, log string
-	queue        *Steering
-	mu           sync.Mutex
-	running      map[string]*proc
-	stopped      map[string]bool
-	closed       bool
-	wg           sync.WaitGroup
-	report       func(string)
-	jobs         map[string]*job
-	changed      func() // called after a job started or ended; never nil
-	order        []string
+	db               *store.Store
+	project, session string
+	s                *session
+	queue            *Steering
+	mu               sync.Mutex
+	running          map[string]*proc
+	stopped          map[string]bool
+	closed           bool
+	wg               sync.WaitGroup
+	report           func(string)
+	jobs             map[string]*job
+	changed          func() // called after a job started or ended; never nil
+	order            []string
 	// life is the lifecycle context of the session; it ends with the session's
 	// shutdown budget (see startBudget).
 	life     context.Context
@@ -44,26 +49,16 @@ type tasks struct {
 	budget   sync.Once
 }
 
-// lifeParent is what the session's lifecycle context derives from. A subagent's
-// session ends within the shutdown budget of its parent, so its own session_closed
-// cannot outlast the parent's shutdown.
-func (s *session) lifeParent() context.Context {
-	if s.link != nil && s.link.budget != nil {
-		return s.link.budget
-	}
-	return context.Background()
-}
-
 func (s *session) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
-	_ = s.db.LoseTasks(s.id)
-	life, stopLife := context.WithCancel(s.lifeParent())
-	return &tasks{db: s.db, session: s.id, log: filepath.Join(s.home, "tasks"),
+	_ = s.db.LoseTasks(s.project, s.id)
+	life, stopLife := context.WithCancel(context.Background())
+	return &tasks{db: s.db, project: s.project, session: s.id, s: s,
 		queue: s.queue, report: func(text string) { s.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
-		life: life, stopLife: stopLife, changed: s.tree.notify}
+		life: life, stopLife: stopLife, changed: func() { s.changes.notify(); s.checkIdle() }}
 }
 
-// proc is one running job: a Lua task or an in-process agent.
+// proc is one running task: a bash command in its own process group.
 type proc struct {
 	cancel func()       // end it now
 	term   func()       // ask it to end; the caller cancels it later if it lingers
@@ -71,64 +66,37 @@ type proc struct {
 	exit   func() int   // exit code after wait; negative when unknown
 }
 
-// startOpts describe a background job: a Lua task or a subagent.
+// startOpts describe a background task.
 type startOpts struct {
-	kind, name, prompt, model string
-	timeout                   time.Duration
-	waited                    bool // the caller waits: no result message is queued
+	name, cwd string
+	timeout   time.Duration
 }
 
-// spawnProc starts a job whose process is created by launch.
-func (t *tasks) spawnProc(command string, o startOpts, launch func(io.Writer, *job) (*proc, error)) (*job, error) {
+// spawn starts command with `bash -c` as a background task.
+func (t *tasks) spawn(command string, o startOpts) (*job, error) {
 	var j *job
-	_, err := t.start(command, o, func(file io.Writer, jb *job) (*proc, error) {
+	_, err := t.start(command, o, func(log io.Writer, jb *job) (*proc, error) {
 		j = jb
-		return launch(file, jb)
+		env := t.s.shellEnv()
+		env["ZEL_TASK"] = jb.id
+		cmd := shell.Command(context.Background(), cmp.Or(o.cwd, t.s.dir), env, command)
+		cmd.Stdin = strings.NewReader("")
+		cmd.Stdout, cmd.Stderr = log, log
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		done := make(chan error, 1)
+		go func() { done <- shell.Reap(cmd) }()
+		var waitErr error
+		signal := func(sig syscall.Signal) { _ = syscall.Kill(-cmd.Process.Pid, sig) }
+		return &proc{cancel: func() { signal(syscall.SIGKILL) }, term: func() { signal(syscall.SIGTERM) },
+			wait: func() error { waitErr = <-done; return waitErr },
+			exit: func() int { return exitCode(waitErr) }}, nil
 	})
 	if err == nil {
 		t.changed()
 	}
 	return j, err
-}
-
-// spawnLua runs a Lua task body in the background as a task job.
-func (t *tasks) spawnLua(run luart.TaskFunc, o startOpts) (*job, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	label := cmp.Or(o.name, "lua function")
-	j, err := t.spawnProc(label, o, func(log io.Writer, j *job) (*proc, error) {
-		done := make(chan error, 1)
-		var failed atomic.Bool
-		go func() {
-			value, err := run(ctx, log)
-			j.setTaskOutcome(value, err)
-			failed.Store(err != nil)
-			done <- err
-		}()
-		return &proc{cancel: cancel, term: cancel, wait: func() error { return <-done },
-			exit: func() int {
-				if failed.Load() {
-					return 1
-				}
-				return 0
-			}}, nil
-	})
-	if err != nil {
-		cancel()
-	}
-	return j, err
-}
-
-// cancelLua stops the running Lua tasks; init.lua was reloaded, and they run
-// with the old snapshot.
-func (t *tasks) cancelLua() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for id, p := range t.running {
-		if j := t.jobs[id]; j != nil && j.kind == "task" {
-			t.stopped[id] = true
-			p.cancel()
-		}
-	}
 }
 
 func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) (*proc, error)) (string, error) {
@@ -140,32 +108,26 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 	if len(t.running)+t.queue.noticeCount() >= maxQueued {
 		return "", errors.New("too many unresolved task results; wait for the model to read them")
 	}
-	if err := os.MkdirAll(t.log, 0700); err != nil {
+	list, err := t.db.Tasks(t.project, t.session)
+	if err != nil {
 		return "", err
 	}
-	var n int
-	if err := t.db.TaskCount(t.session, &n); err != nil {
+	id := fmt.Sprintf("t%d", len(list)+1)
+	logPath := t.db.TaskLog(t.project, t.session, id)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
 		return "", err
 	}
-	if o.kind == "" {
-		o.kind = "task"
-	}
-	id := fmt.Sprintf("t%d", n+1)
-	if o.kind == "agent" {
-		id = fmt.Sprintf("a%d", n+1)
-	}
-	logPath := filepath.Join(t.log, t.session+"-"+id+".log")
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return "", err
 	}
 	started := time.Now()
-	if err := t.db.CreateTask(t.session, id, command, started, logPath); err != nil {
+	if err := t.db.CreateTask(t.project, t.session, id, o.name, command, started); err != nil {
 		file.Close()
 		return "", err
 	}
-	j := &job{t: t, id: id, kind: o.kind, name: o.name, cmd: command, prompt: o.prompt, model: o.model, log: logPath,
-		started: started, waited: o.waited, done: make(chan struct{}), status: "running"}
+	j := &job{t: t, id: id, name: o.name, cmd: command, log: logPath,
+		started: started, done: make(chan struct{}), status: "running"}
 	p, err := launch(&taskLog{file: file}, j)
 	if err != nil {
 		file.Close()
@@ -209,6 +171,9 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		}
 		persistErr := t.finish(id, status, exit)
 		took := time.Since(started)
+		if exit == nil {
+			code = -1
+		}
 		j.complete(status, code, took)
 		notice := notification(j.noticeText(status))
 		if persistErr != nil {
@@ -228,15 +193,12 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		t.mu.Unlock()
 		close(j.done)
 		t.changed()
-		if j.afterEnd != nil {
-			j.afterEnd()
-		}
 	}()
 	return id, nil
 }
 
 func (t *tasks) finish(id, status string, exit *int) error {
-	return t.db.FinishTask(t.session, id, status, exit)
+	return t.db.FinishTask(t.project, t.session, id, status, exit)
 }
 
 func (t *tasks) stop(id string) error {
@@ -258,10 +220,10 @@ func (t *tasks) Running() int {
 }
 
 // startBudget starts the session's shutdown budget, once: after
-// luart.SessionClosedTimeout the lifecycle context ends, so session_closed hooks still
+// sessionClosedTimeout the lifecycle context ends, so session_closed hooks still
 // pending are skipped and close stops waiting for jobs.
 func (t *tasks) startBudget() {
-	t.budget.Do(func() { time.AfterFunc(luart.SessionClosedTimeout, t.stopLife) })
+	t.budget.Do(func() { time.AfterFunc(sessionClosedTimeout, t.stopLife) })
 }
 
 // close ends the session's jobs and then runs its session_closed hooks (sessionClosed may
@@ -350,19 +312,17 @@ func (s *session) RunningTasks() int {
 	return s.tasks.Running()
 }
 
-// EventsLog is the per-session file that keeps the notices and errors the UI showed.
-func EventsLog(home, session string) string {
-	return filepath.Join(home, "events", session+".log")
-}
+// eventsLog is the file of the session that keeps the notices, errors and hook runs.
+func (s *session) eventsLog() string { return filepath.Join(s.sessionDir(), "trace.log") }
 
 func (a *Runtime) LogEvent(kind, text string) { a.session().LogEvent(kind, text) }
 
 // LogEvent appends one notice or error to the session's events log; failures are ignored.
 func (s *session) LogEvent(kind, text string) {
-	if s.home == "" || s.id == "" {
+	if s.home == "" || s.id == "" || s.db == nil {
 		return
 	}
-	path := EventsLog(s.home, s.id)
+	path := s.eventsLog()
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
@@ -419,8 +379,7 @@ type ActiveTask struct {
 	Started  time.Time
 }
 
-// ActiveTasks lists the running background tasks, oldest first. Subagents are
-// not tasks; a subagent started from a task shows as that task.
+// ActiveTasks lists the running background tasks, oldest first.
 func (a *Runtime) ActiveTasks() []ActiveTask { return a.session().ActiveTasks() }
 
 func (s *session) ActiveTasks() []ActiveTask {
@@ -432,7 +391,7 @@ func (s *session) ActiveTasks() []ActiveTask {
 	defer t.mu.Unlock()
 	var out []ActiveTask
 	for _, id := range t.order {
-		if j := t.jobs[id]; j != nil && j.kind == "task" && t.running[id] != nil {
+		if j := t.jobs[id]; j != nil && t.running[id] != nil {
 			out = append(out, ActiveTask{ID: j.id, Name: j.name, Started: j.started})
 		}
 	}

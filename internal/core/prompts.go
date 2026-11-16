@@ -2,86 +2,158 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
+	"unicode"
 
-	"zel/internal/luart"
+	"zel/internal/config"
 )
 
-// promptTimeout bounds one expansion; a completion waits for the config lock like any plugin call.
+// Prompt completions: [completions] name = "text" registers #name; the tokens
+// of a message are replaced by the text, ${{ }} expanded, when it is sent. They
+// exist only in the main session.
+
+// promptTimeout bounds one expansion.
 const promptTimeout = 10 * time.Second
 
-// PromptAt finds the #name token at the cursor; see luart.PromptAt.
+// PromptToken is a #name token; Start and End are rune offsets, [Start, End).
+type PromptToken struct {
+	Start, End int
+	Name       string
+}
+
+func isPromptChar(r rune) bool {
+	return r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// PromptTokens finds the #name tokens of text: a # at the start or after white
+// space, then name characters. A bare # is not a token.
+func PromptTokens(text string) []PromptToken {
+	runes := []rune(text)
+	var out []PromptToken
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '#' || (i > 0 && !unicode.IsSpace(runes[i-1])) {
+			continue
+		}
+		end := i + 1
+		for end < len(runes) && isPromptChar(runes[end]) {
+			end++
+		}
+		if end > i+1 {
+			out = append(out, PromptToken{Start: i, End: end, Name: string(runes[i+1 : end])})
+			i = end - 1
+		}
+	}
+	return out
+}
+
+// PromptAt finds the token the cursor (a rune offset) is in: query is the name
+// before the cursor, and [start, end) spans the whole token.
 func PromptAt(runes []rune, cursor int) (start, end int, query string, ok bool) {
-	return luart.PromptAt(runes, cursor)
+	i := min(max(cursor, 0), len(runes))
+	begin := i
+	for begin > 0 && isPromptChar(runes[begin-1]) {
+		begin--
+	}
+	if begin == 0 || runes[begin-1] != '#' || (begin > 1 && !unicode.IsSpace(runes[begin-2])) {
+		return 0, 0, "", false
+	}
+	end = i
+	for end < len(runes) && isPromptChar(runes[end]) {
+		end++
+	}
+	return begin - 1, end, string(runes[begin:i]), true
 }
 
-// promptSnapshot is the current init.lua snapshot, nil when none is loaded.
-func (c *Controller) promptSnapshot() (cfg *luart.Config) {
-	c.view(func() { cfg = c.a.session().lua.get() })
-	return cfg
-}
-
-// PromptNames lists the names registered with zel.complete in the current snapshot.
-func (c *Controller) PromptNames() []string {
-	if cfg := c.promptSnapshot(); cfg != nil {
-		return cfg.PromptNames()
+// completions of the session: none outside the main session.
+func (s *session) completions() map[string]string {
+	if cfg := s.conf.get(); cfg != nil && s.mode() == "main" {
+		return cfg.Completions
 	}
 	return nil
 }
 
-// HasPromptTokens reports whether text names a registered completion; only then does sending run callbacks.
+// PromptNames lists the completion names, sorted.
+func (c *Controller) PromptNames() []string {
+	var names []string
+	c.view(func() {
+		for name := range c.a.session().completions() {
+			names = append(names, name)
+		}
+	})
+	sort.Strings(names)
+	return names
+}
+
+// HasPromptTokens reports whether text names a completion; only then does sending expand.
 func (c *Controller) HasPromptTokens(text string) bool {
-	cfg := c.promptSnapshot()
-	for _, tok := range luart.PromptTokens(text) {
-		if cfg != nil && cfg.HasPrompt(tok.Name) {
+	var known map[string]string
+	c.view(func() { known = c.a.session().completions() })
+	for _, tok := range PromptTokens(text) {
+		if _, ok := known[tok.Name]; ok {
 			return true
 		}
 	}
 	return false
 }
 
-// ExpandPrompt expands the registered names of text outside the controller lock.
-// ctx is the caller's: when it ends first, the expansion stops and no text is
-// returned. The caller keeps its own text on any error.
+// ExpandPrompt expands the completions of text outside the controller lock.
+// ctx is the caller's: when it ends first, no text is returned. The caller
+// keeps its own text on any error.
 func (c *Controller) ExpandPrompt(ctx context.Context, text string) (string, error) {
-	return expandPrompt(ctx, c.promptSnapshot(), text)
+	var s *session
+	c.view(func() { s = c.a.session() })
+	return s.expandPrompt(ctx, text)
 }
 
-// ExpandPrompt is the headless variant, for prompts that run outside a controller.
+// ExpandPrompt is the variant without a controller.
 func (a *Runtime) ExpandPrompt(ctx context.Context, text string) (string, error) {
-	return expandPrompt(ctx, a.session().lua.get(), text)
+	return a.session().expandPrompt(ctx, text)
 }
 
-// expandPrompt runs the completions of one snapshot within promptTimeout, and no
-// longer than parent lasts.
-func expandPrompt(parent context.Context, cfg *luart.Config, text string) (string, error) {
+// expandPrompt replaces the known tokens in one pass: each name runs once, unknown
+// names stay as typed, and the result is not expanded again.
+func (s *session) expandPrompt(parent context.Context, text string) (string, error) {
 	if parent.Err() != nil {
 		return "", fail(CodeFailed, "the prompt expansion was cancelled")
 	}
-	if cfg == nil {
+	known := s.completions()
+	if len(known) == 0 {
 		return text, nil
 	}
 	ctx, cancel := context.WithTimeout(parent, promptTimeout)
 	defer cancel()
-	type result struct {
-		text string
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		out, err := cfg.Expand(ctx, text)
-		done <- result{out, err}
-	}()
-	select {
-	case r := <-done:
-		if ctx.Err() == nil {
-			return r.text, r.err
+	values := map[string]string{}
+	runes := []rune(text)
+	var b strings.Builder
+	pos := 0
+	for _, tok := range PromptTokens(text) {
+		def, ok := known[tok.Name]
+		if !ok {
+			continue
 		}
-	case <-ctx.Done():
+		value, done := values[tok.Name]
+		if !done {
+			out, err := config.Expand(ctx, def, s.expander(s.Settings().Env))
+			switch {
+			case parent.Err() != nil:
+				return "", fail(CodeFailed, "the prompt expansion was cancelled")
+			case ctx.Err() != nil:
+				return "", fail(CodeFailed, "#%s: timed out after %s", tok.Name, promptTimeout)
+			case err != nil:
+				return "", fail(CodeFailed, "#%s: %s", tok.Name, err)
+			case strings.TrimSpace(out) == "":
+				return "", fail(CodeFailed, "#%s: the completion is empty", tok.Name)
+			}
+			value, values[tok.Name] = out, out
+		}
+		b.WriteString(string(runes[pos:tok.Start]) + value)
+		pos = tok.End
 	}
-	// Once the expansion ended by cancellation or timeout, its text is never used.
-	if parent.Err() != nil {
-		return "", fail(CodeFailed, "the prompt expansion was cancelled")
-	}
-	return "", fail(CodeFailed, "the prompt completion timed out after %s", promptTimeout)
+	b.WriteString(string(runes[pos:]))
+	return b.String(), nil
 }
+
+var _ = fmt.Sprint

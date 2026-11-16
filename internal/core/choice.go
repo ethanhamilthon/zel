@@ -1,29 +1,33 @@
 package core
 
 import (
-	"context"
-	"errors"
+	"fmt"
+	"slices"
 	"sync"
 )
 
-// Choice is a question the agent asks the user with choice(name, options): the
-// UI shows the options instead of the composer until one is picked or the
-// question is cancelled.
+// Choice is a question the agent asks the user with zel choice: the UI shows
+// the options instead of the composer until one is picked or Esc cancels it.
+// Waiting is how many questions are queued, this one included.
 type Choice struct {
 	ID      int
 	Title   string
 	Options []string
+	Waiting int
 }
 
-// chooser holds the one question the UI shows at a time. Questions from
-// several callers wait for their turn.
+type question struct {
+	Choice
+	s *session // the session that asked; its answer goes there as a notification
+}
+
+// chooser queues the questions; the UI shows the first. Asking never blocks:
+// the answer arrives to the agent as <notification>c1 Title: Option</notification>.
 type chooser struct {
-	turn    sync.Mutex // held by the caller whose question is shown
 	mu      sync.Mutex
 	nextID  int
-	pending *Choice
-	reply   chan int
-	changed func() // called, outside the lock, when the pending question changes
+	queue   []*question
+	changed func() // called, outside the lock, when the queue changes
 }
 
 func (c *chooser) notify() {
@@ -35,53 +39,52 @@ func (c *chooser) notify() {
 	}
 }
 
-// ask shows the question and waits for the answer: the index of the picked
-// option, -1 when cancelled.
-func (c *chooser) ask(ctx context.Context, title string, options []string) (int, error) {
+// ask queues a question of s and returns its id.
+func (c *chooser) ask(s *session, title string, options []string) (int, error) {
 	c.mu.Lock()
-	ui := c.changed != nil
-	c.mu.Unlock()
-	if !ui {
-		return -1, errors.New("no UI to ask the user in")
+	if c.changed == nil {
+		c.mu.Unlock()
+		return 0, fail(CodeDenied, "EDENIED: no UI to ask the user in")
 	}
-	c.turn.Lock()
-	defer c.turn.Unlock()
-	if err := ctx.Err(); err != nil {
-		return -1, err
-	}
-	reply := make(chan int, 1)
-	c.mu.Lock()
 	c.nextID++
-	c.pending, c.reply = &Choice{ID: c.nextID, Title: title, Options: append([]string(nil), options...)}, reply
+	q := &question{Choice: Choice{ID: c.nextID, Title: title, Options: slices.Clone(options)}, s: s}
+	c.queue = append(c.queue, q)
 	c.mu.Unlock()
 	c.notify()
-	defer func() {
-		c.mu.Lock()
-		c.pending, c.reply = nil, nil
+	return q.ID, nil
+}
+
+// answer takes the user's pick (index) or cancel (-1) for question id and
+// sends it to the session that asked.
+func (c *chooser) answer(id, index int) {
+	c.mu.Lock()
+	i := slices.IndexFunc(c.queue, func(q *question) bool { return q.ID == id })
+	if i < 0 || index < -1 || index >= len(c.queue[i].Options) {
 		c.mu.Unlock()
-		c.notify()
-	}()
-	select {
-	case i := <-reply:
-		return i, nil
-	case <-ctx.Done():
-		return -1, ctx.Err()
+		return
+	}
+	q := c.queue[i]
+	c.queue = slices.Delete(c.queue, i, i+1)
+	c.mu.Unlock()
+	c.notify()
+	picked := "cancelled"
+	if index >= 0 {
+		picked = q.Options[index]
+	}
+	if !q.s.ended.Load() {
+		q.s.queue.PushNotice(notification(fmt.Sprintf("c%d %s: %s", q.ID, q.Title, picked)))
 	}
 }
 
-// answer delivers the user's pick (index) or cancel (-1) for question id; an
-// answer to a question that is gone is ignored.
-func (c *chooser) answer(id, index int) {
+// drop forgets the questions of a session that ends.
+func (c *chooser) drop(s *session) {
 	c.mu.Lock()
-	reply := c.reply
-	ok := c.pending != nil && c.pending.ID == id && (index == -1 || (index >= 0 && index < len(c.pending.Options)))
+	n := len(c.queue)
+	c.queue = slices.DeleteFunc(c.queue, func(q *question) bool { return q.s == s })
+	changed := n != len(c.queue)
 	c.mu.Unlock()
-	if !ok {
-		return
-	}
-	select {
-	case reply <- index:
-	default:
+	if changed {
+		c.notify()
 	}
 }
 
@@ -89,29 +92,22 @@ func (c *chooser) answer(id, index int) {
 func (a *Runtime) PendingChoice() *Choice {
 	a.ask.mu.Lock()
 	defer a.ask.mu.Unlock()
-	if a.ask.pending == nil {
+	if len(a.ask.queue) == 0 {
 		return nil
 	}
-	c := *a.ask.pending
+	c := a.ask.queue[0].Choice
+	c.Options = slices.Clone(c.Options)
+	c.Waiting = len(a.ask.queue)
 	return &c
 }
 
 // AnswerChoice answers the question id with the option at index, or cancels it with -1.
 func (a *Runtime) AnswerChoice(id, index int) { a.ask.answer(id, index) }
 
-// OnChoiceChanged registers fn to run when the pending question appears or goes
-// away; with fn set, choice() has a UI to ask in. fn must not block.
+// OnChoiceChanged registers fn to run when the queue of questions changes; with
+// fn set, zel choice has a UI to ask in. fn must not block.
 func (a *Runtime) OnChoiceChanged(fn func()) {
 	a.ask.mu.Lock()
 	a.ask.changed = fn
 	a.ask.mu.Unlock()
-}
-
-// Choose implements luart.Env: the question goes to the UI of the main session.
-func (e luaEnv) Choose(ctx context.Context, title string, options []string) (string, bool, error) {
-	i, err := e.s.ask.ask(ctx, title, options)
-	if err != nil || i < 0 {
-		return "", false, err
-	}
-	return options[i], true, nil
 }

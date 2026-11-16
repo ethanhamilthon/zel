@@ -17,7 +17,7 @@ import (
 func traceLabel(e core.TraceEntry) string { return traceKindLabel(e.Kind) }
 
 func traceKindLabel(kind string) string {
-	return cmp.Or(map[string]string{"assistant": "agent", "code": "lua", "reasoning": "thinking"}[kind], kind)
+	return cmp.Or(map[string]string{"assistant": "agent", "code": "bash", "reasoning": "thinking"}[kind], kind)
 }
 
 func traceKindMatches(kind, filter string) bool {
@@ -36,7 +36,7 @@ func traceContext(e core.TraceEntry) string {
 
 var traceColors = map[string]lipgloss.Color{
 	"system": darkGray, "user": inputBlue, "assistant": lipgloss.Color("#ffffff"), "agent": lipgloss.Color("#ffffff"),
-	"lua": codeGray, "notice": lipgloss.Color("#808080"), "compaction": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
+	"bash": codeGray, "notice": lipgloss.Color("#808080"), "compaction": lipgloss.Color("#808080"), "task": lipgloss.Color("#808080"),
 	"output": lipgloss.Color("#404040"), "error": errorColor,
 }
 
@@ -102,7 +102,7 @@ func (m model) liveTrace() []core.TraceEntry {
 		kind := record.Kind
 		switch kind {
 		case "code":
-			kind = "lua"
+			kind = "bash"
 		case "reasoning":
 			kind = "thinking"
 		}

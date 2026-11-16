@@ -94,6 +94,9 @@ func (m model) pasteClipboard() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	directory := m.attachments
+	if dir := m.ctl.AttachmentsDir(); dir != "" {
+		directory = dir
+	}
 	m.pasting = true
 	generation := m.pasteGeneration
 	return m, func() tea.Msg {
@@ -120,17 +123,4 @@ func (m *model) acceptClipboard(result clipboardResult) tea.Cmd {
 	}
 	m.input.InsertString(result.text)
 	return nil
-}
-
-func (m model) copyAnswer() (tea.Model, tea.Cmd) {
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		e := m.entries[i]
-		if e.Kind == "assistant" && strings.TrimSpace(e.Text) != "" {
-			m.setComposer(e.Text)
-			m.input.CursorEnd()
-			m.refresh(true)
-			return m, nil
-		}
-	}
-	return m, nil
 }

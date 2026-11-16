@@ -221,19 +221,13 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 			mu.info = infoRows(info)
 			open(menuInfo)
 		case 6:
-			m = m.closeMenu()
-			m.ctl.Reload()
-			m.refresh(true)
-		case 7:
 			m.openText("Menu/Help", help())
 			return m, nil
-		case 9:
-			m.openProviders()
-		case 10:
-			open(menuSettings)
-		case 11:
-			return m.closeMenu().copyAnswer()
 		case 8:
+			m.openProviders()
+		case 9:
+			open(menuSettings)
+		case 7:
 			m = m.closeMenu()
 			return m.quit()
 		}

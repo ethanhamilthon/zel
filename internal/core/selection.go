@@ -28,12 +28,13 @@ func (s *session) SelectSession(ctx context.Context, provider, model, effort str
 	}
 	c := s.cfg
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := SaveDefault(s.home, c.base, c.sel); err != nil {
-		return fmt.Errorf("model selected for this session, but the default was not saved: %w", err)
+	sel := c.sel
+	c.mu.Unlock()
+	if err := s.saveDefault(sel); err != nil {
+		return fmt.Errorf("model selected for this session, but zel.toml was not updated: %w", err)
 	}
-	if base, err := LoadConfig(s.home); err == nil {
-		_ = s.applyLocked(base)
+	if err := s.loadConfig(); err != nil {
+		return fmt.Errorf("model selected for this session, but zel.toml does not load: %w", err)
 	}
 	return nil
 }
@@ -55,24 +56,19 @@ func (s *session) ConfigureSession(ctx context.Context, provider, model, effort 
 	defer c.mu.Unlock()
 	previous := c.sel
 	c.sel = selection{provider, model, effort}
-	err := s.applyLocked(c.base)
-	if err == nil {
-		err = s.db.SelectModel(ctx, s.id, provider, model, effort)
-	}
-	if err != nil {
+	if err := s.applyLocked(c.base); err != nil {
 		c.sel = previous
 		_ = s.applyLocked(c.base)
 		return err
 	}
-
-	return nil
-}
-
-// SaveDefault persists the default model in SQLite.
-func SaveDefault(home string, base Settings, sel selection) error {
-	base.Provider, base.Model, base.Effort = sel.Provider, sel.Model, sel.Effort
-	if base.Effort == "" {
-		base.Effort = "medium"
+	changed := previous != c.sel
+	c.mu.Unlock()
+	defer c.mu.Lock()
+	if changed {
+		s.fireHooks("model_changed", map[string]any{"provider": provider, "model": model, "effort": effort})
 	}
-	return WriteConfig(home, base)
+	if s.HasSavedSession() {
+		return s.Save()
+	}
+	return nil
 }

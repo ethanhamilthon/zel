@@ -48,10 +48,9 @@ type menuRow struct{ label, detail string }
 var mainRows = []menuRow{
 	{"Resume", "View all sessions"}, {"New", "Or just Ctrl+N"}, {"Models", "And Efforts, Ctrl+M"},
 	{"Tracing", "Session Details, Ctrl+T"}, {"Rename", "Rename this session"},
-	{"Info", "Tokens, Session, Ctrl+I"}, {"Reload", "Reread init.lua and prompt"}, {"Help", "Keyboard shortcuts"},
+	{"Info", "Tokens, Session, Ctrl+I"}, {"Help", "Keyboard shortcuts"},
 	{"Quit", "Exit, Ctrl+Q"},
-	{"Providers", "Add, edit, remove"}, {"Settings", "Output, compaction, accent"},
-	{"Copy", "Agent answer to input, Ctrl+Y"},
+	{"Providers", "Add, edit, remove"}, {"Settings", "Bash timeout, compaction, accent"},
 }
 
 type menuListCache struct {

@@ -1,1 +1,0 @@
-Run Lua code. The input is the raw Lua source. Each call has a fixed 30-second timeout that cannot be changed. The VM keeps globals and functions between calls; keep what must outlive the session in files. The Lua API (sh, read, write, edit, tasks, new_agent, ...) is described in the system prompt.

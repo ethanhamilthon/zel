@@ -15,14 +15,14 @@ import (
 	"unicode/utf8"
 
 	"zel/internal/agent"
+	"zel/internal/config"
 	"zel/internal/entities"
-	"zel/internal/luart"
+	"zel/internal/ipc"
 	"zel/internal/provider"
-	"zel/internal/shell"
 	"zel/internal/store"
 )
 
-var codeField = regexp.MustCompile(`"code"\s*:\s*"`)
+var codeField = regexp.MustCompile(`"command"\s*:\s*"`)
 
 func partialCode(arguments string) string {
 	loc := codeField.FindStringIndex(arguments)
@@ -47,11 +47,12 @@ func partialCode(arguments string) string {
 }
 
 type Options struct {
-	Mode                    string               // tui or headless; see session.mode for what Lua sees
+	Mode                    string               // tui or headless; see session.mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
+	Configs                 []string             // --config files, layered over ~/.zel/zel.toml and ./zel.toml
+	Prompt                  string               // headless: the prompt, shown in the parent's row of a child
 	SessionReady            func(*Runtime) error // May persist and announce the session.
-	link                    *agentLink           // set for in-process agents
 }
 
 // Runtime is the stable application handle held by callers and the controller
@@ -59,17 +60,16 @@ type Options struct {
 // surviving background work (hooks, tasks, abandoned Lua calls) keeps its own
 // session identity and environment without racing with session replacement.
 type Runtime struct {
-	opts       Options
-	home       string
-	db         *store.Store
-	project    string
-	Shell      *shell.Runner
-	tree       *agentTree
-	ask        *chooser
-	parentRoot string
-	depth      int
-	link       *agentLink
-	closeOnce  sync.Once
+	opts      Options
+	home      string
+	db        *store.Store
+	project   string
+	ask       *chooser
+	changes   *notifier // running tasks or children changed
+	reloads   *notifier // a config file changed
+	parent    *parentLink
+	depth     int
+	closeOnce sync.Once
 
 	mu  sync.RWMutex
 	cur *session
@@ -84,7 +84,21 @@ type session struct {
 	db            *store.Store // shared handle; never cleared so late callers see closed DB cleanly
 	project       string
 	id            string
+	created       time.Time
 	cfg           *settingsState
+	conf          *confHolder
+	layers        []config.Layer
+	token         string      // key of the session socket
+	sock          *ipc.Server // nil until the session is acquired
+	stopWatch     func()
+	changes       *notifier
+	reloads       *notifier
+	parent        *parentLink // set when this is a zel -p started from another session
+	childMu       sync.Mutex
+	children      map[string]SubagentRun // zel -p children that run now, by session ID
+	hookWG        sync.WaitGroup         // async hooks
+	turning       atomic.Bool
+	idleSent      atomic.Bool
 	histMu        sync.RWMutex
 	saveMu        sync.Mutex
 	logMu         sync.Mutex
@@ -100,19 +114,12 @@ type session struct {
 	requestedLen  int        // History length when lastRequest was sent
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
-	tree          *agentTree // running agents of this session tree
-	ask           *chooser   // the question of choice() the UI shows
-	agentsMu      sync.Mutex
-	agents        map[string]*agentRec // subagents started from this session, by their session ID
-	parentRoot    string               // root session of the tree when this session is an agent
-	depth         int                  // agent nesting depth
-	link          *agentLink           // set when this session is an agent: its row in the tree
-	acts          *activities          // foreground host operations in progress
+	ask           *chooser    // the questions of zel choice the UI shows
+	depth         int         // zel -p nesting depth: 0 for a session you started
+	acts          *activities // foreground host operations in progress
 	queue         *Steering
 	slots         *imageSlots
 	tasks         *tasks
-	lua           *luaHolder
-	vm            *luart.Runner   // the session's main Lua VM, created on first use
 	liveSteps     map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
 	ended         atomic.Bool
 }
@@ -134,39 +141,34 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "tui"
 	}
-	a := &Runtime{
-		opts:  opts,
-		home:  home,
-		tree:  newAgentTree(),
-		ask:   &chooser{},
-		Shell: &shell.Runner{Dir: dir},
-	}
-	if opts.link != nil {
-		a.tree, a.parentRoot, a.depth, a.link = opts.link.tree, opts.link.root, opts.link.depth, opts.link
-	} else {
-		// A nested `zel -p` started by a subagent is a subagent too, so the limit holds.
-		if os.Getenv("ZEL_MODE") == "agent" {
-			a.depth = 1
+	a := &Runtime{opts: opts, home: home, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
+	if opts.Mode == "headless" {
+		// A zel -p started by the bash of another session is its child.
+		if a.parent, err = parentFromEnv(); err != nil {
+			return nil, err
+		}
+		if a.parent != nil {
+			a.depth = a.parent.depth + 1
+			if a.depth > MaxDepth {
+				return nil, fail(CodeDenied, "EDENIED: zel -p is nested too deeply (max depth %d)", MaxDepth)
+			}
 		}
 	}
-	a.Shell.Env = a.shellEnv
+	if a.db, err = openDB(home); err != nil {
+		return nil, err
+	}
 	s := a.newSessionState(dir, nil, nil)
 	a.cur = s
-	if err := s.loadConfig(dir); err != nil {
-		return nil, err
-	}
-	if a.db, err = openDB(s.Settings().DBPath); err != nil {
-		return nil, err
-	}
-	s.db = a.db
 	if err := s.openProject(dir, opts.Resume); err != nil {
 		a.Close()
 		return nil, err
 	}
-	a.project, a.Shell.Dir = s.project, s.dir
-	s.loadLua()
-	// Initial selection: CLI flags, then the stored preferences.
+	a.project = s.project
+	// Initial selection: CLI flags, then the parent's model for a child, then the config.
 	provider, model, effort := opts.Provider, opts.Model, opts.Effort
+	if a.parent != nil && opts.Resume == "" && provider == "" && model == "" {
+		provider, model, effort = a.parent.provider, a.parent.model, cmp.Or(effort, a.parent.effort)
+	}
 	if provider != "" || model != "" || effort != "" {
 		st := s.Settings()
 		if err := s.ConfigureSession(context.Background(), cmp.Or(provider, st.Provider), cmp.Or(model, st.Model), cmp.Or(effort, st.Effort)); err != nil {
@@ -182,55 +184,37 @@ func New(dir string, opts Options) (*Runtime, error) {
 			return nil, err
 		}
 	}
+	s.announceChild()
 	if opts.Resume == "" {
 		s.sessionCreated()
+	} else {
+		s.fireHooks("session_resumed", map[string]any{})
 	}
 	return a, nil
 }
 
 func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) *session {
 	return &session{
-		opts:       a.opts,
-		home:       a.home,
-		dir:        dir,
-		db:         a.db,
-		project:    a.project,
-		tree:       a.tree,
-		ask:        a.ask,
-		parentRoot: a.parentRoot,
-		depth:      a.depth,
-		link:       a.link,
-		slots:      &imageSlots{},
-		queue:      &Steering{wake: wake},
-		lua:        &luaHolder{notice: notice},
-		acts:       &activities{},
+		opts:    a.opts,
+		home:    a.home,
+		dir:     dir,
+		db:      a.db,
+		project: a.project,
+		ask:     a.ask,
+		changes: a.changes,
+		reloads: a.reloads,
+		parent:  a.parent,
+		depth:   a.depth,
+		token:   ipc.Token(),
+		slots:   &imageSlots{},
+		queue:   &Steering{wake: wake},
+		conf:    &confHolder{notice: notice},
+		acts:    &activities{},
 	}
 }
 
-// ReloadConfig reads preferences and init.lua; the session's model selection stays.
-func (a *Runtime) ReloadConfig() error { return a.session().ReloadConfig() }
-
-func (s *session) ReloadConfig() error {
-	return s.loadConfig(s.dir)
-}
-
-func (s *session) loadConfig(dir string) error {
-	if s.cfg == nil {
-		s.cfg = &settingsState{}
-	}
-	base, err := LoadConfig(s.home)
-	if err != nil {
-		return err
-	}
-	s.cfg.mu.Lock()
-	defer s.cfg.mu.Unlock()
-	if err := s.applyLocked(base); err != nil {
-		// A stale session model must not block a valid config.
-		s.cfg.sel = selection{}
-		return s.applyLocked(base)
-	}
-	return nil
-}
+// ReloadConfig reads the zel.toml layers again; the session's model selection stays.
+func (a *Runtime) ReloadConfig() error { return a.session().loadConfig() }
 
 func raw(v any) json.RawMessage { data, _ := json.Marshal(v); return data }
 
@@ -259,10 +243,14 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 
 func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
 	started, turnSeq := time.Now(), -1
+	s.turning.Store(true)
+	s.idleSent.Store(false)
+	defer s.turning.Store(false)
 	defer func() {
 		err = s.safeError(err)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			emit(TurnEvent{Kind: "error", Text: err.Error()})
+			s.fireHooks("error", map[string]any{"kind": "turn", "message": err.Error()})
 		}
 		if text, ok := turnEndText(ctx, err); ok && turnSeq >= 0 {
 			s.closeTurn(turnSeq, text, started, emit)
@@ -298,14 +286,21 @@ func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 		accepted := false
 		for _, instruction := range batch(s.queue.Take()) {
 			if strings.TrimSpace(instruction.Text) != "" || len(instruction.Images) > 0 {
-				s.addInput(s.hookInput(ctx, instruction), emit)
+				instruction, ok := s.hookInput(ctx, instruction, emit)
+				if !ok {
+					continue
+				}
+				s.addInput(instruction, emit)
 				accepted = true
 			}
 		}
 		return accepted
 	}
 
-	input = s.hookInput(ctx, input)
+	input, ok := s.hookInput(ctx, input, emit)
+	if !ok {
+		return nil
+	}
 	shown := inputEvent(input)
 	shown.ID = fmt.Sprintf("input-%d", time.Now().UnixNano())
 	s.commitInput(input)
@@ -314,6 +309,7 @@ func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 	shown.Meta = s.itemMeta[turnSeq]
 	s.histMu.RUnlock()
 	emit(shown)
+	s.fireHooks("turn_start", map[string]any{"text": input.Text})
 
 	return agent.Run(ctx, &turnHost{s: s, emit: emit, accept: acceptSteering, turnSeq: turnSeq})
 }
@@ -390,22 +386,22 @@ func callOutput(callID, output string) json.RawMessage {
 	return raw(map[string]any{"type": "function_call_output", "call_id": callID, "output": output})
 }
 
-// runTool executes a lua tool call and returns the text the model sees. Messages
+// runTool executes a bash tool call and returns the text the model sees. Messages
 // the user types meanwhile stay queued until the call ends.
 func (s *session) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) string {
 	if ctx.Err() != nil {
-		return "error: lua: " + luart.ECANCELED + ": the call was cancelled"
+		return "error: bash: ECANCELED: the call was cancelled"
 	}
-	if name != "lua" {
+	if name != "bash" {
 		return "error: unknown tool: " + name
 	}
 	var args struct {
-		Code string `json:"code"`
+		Command string `json:"command"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return "error: lua: " + luart.EINVAL + ": the tool input must be Lua code (" + err.Error() + ")"
+		return "error: bash: EINVAL: the tool input must be a bash script (" + err.Error() + ")"
 	}
-	return s.runLua(ctx, args.Code).Output
+	return s.runBash(ctx, args.Command)
 }
 
 func (s *session) itemID(index int64) string {
@@ -431,7 +427,7 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	}
 	s.histMu.RUnlock()
 	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort, ReasoningSummary: settings.ReasoningSummary,
-		Tools: []provider.Tool{{Name: "lua", Description: LuaToolDescription, Parameters: luaParameters(), Freeform: "code"}}}
+		Tools: []provider.Tool{{Name: "bash", Description: BashToolDescription, Parameters: bashParameters(), Freeform: "command"}}}
 	started := time.Now()
 	s.histMu.Lock()
 	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}
@@ -452,7 +448,7 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 			} else {
 				arguments[event.OutputIndex] = event.Arguments
 			}
-			if names[event.OutputIndex] == "lua" {
+			if names[event.OutputIndex] == "bash" {
 				emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
 			}
 		case "response.output_item.added", "response.output_item.done":
@@ -464,7 +460,7 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 				if item.Arguments != "" {
 					arguments[event.OutputIndex] = item.Arguments
 				}
-				if item.Name == "lua" {
+				if item.Name == "bash" {
 					emit(TurnEvent{Kind: "code", Text: partialCode(arguments[event.OutputIndex]), Provisional: true, ID: s.itemID(event.OutputIndex), Final: true})
 					return nil
 				}
@@ -572,11 +568,11 @@ func (s *session) FinalText() string {
 
 func (a *Runtime) SessionID() string { return a.session().id }
 
-func luaParameters() map[string]any {
+func bashParameters() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"properties":           map[string]any{"code": map[string]any{"type": "string", "description": "Lua source"}},
-		"required":             []string{"code"},
+		"properties":           map[string]any{"command": map[string]any{"type": "string", "description": "bash script"}},
+		"required":             []string{"command"},
 		"additionalProperties": false,
 	}
 }

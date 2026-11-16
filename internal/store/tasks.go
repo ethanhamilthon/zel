@@ -1,50 +1,103 @@
 package store
 
 import (
-	"database/sql"
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
-	"zel/internal/entities"
 )
 
-func (db *Store) Tasks(session string) ([]entities.Task, error) {
-	rows, err := db.Query(`SELECT id, command, status, log, exit_code, started, ended FROM tasks WHERE session = ? ORDER BY started`, session)
+// Task is one background task of a session, from tasks.jsonl.
+type Task struct {
+	ID, Name, Command, Status, Log string
+	ExitCode                       *int
+	Started, Ended                 time.Time
+}
+
+type taskLine struct {
+	T      string    `json:"t"` // start or end
+	ID     string    `json:"id"`
+	Name   string    `json:"name,omitempty"`
+	Cmd    string    `json:"cmd,omitempty"`
+	Status string    `json:"status,omitempty"`
+	Code   *int      `json:"code,omitempty"`
+	At     time.Time `json:"at"`
+}
+
+func (s *Store) tasksFile(project, session string) string {
+	return filepath.Join(s.Dir(project, session), "tasks.jsonl")
+}
+
+// TaskLog is the output file of a task.
+func (s *Store) TaskLog(project, session, id string) string {
+	return filepath.Join(s.Dir(project, session), "tasks", id+".log")
+}
+
+// Tasks lists the tasks of a session in start order.
+func (s *Store) Tasks(project, session string) ([]Task, error) {
+	file, err := os.Open(s.tasksFile(project, session))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var list []entities.Task
-	for rows.Next() {
-		var task entities.Task
-		var code, ended sql.NullInt64
-		var started int64
-		if err := rows.Scan(&task.ID, &task.Command, &task.Status, &task.Log, &code, &started, &ended); err != nil {
-			return nil, err
+	defer file.Close()
+	var list []Task
+	index := map[string]int{}
+	scan := bufio.NewScanner(file)
+	scan.Buffer(make([]byte, 64<<10), 4<<20)
+	for scan.Scan() {
+		var l taskLine
+		if json.Unmarshal(scan.Bytes(), &l) != nil {
+			continue
 		}
-		if code.Valid {
-			c := int(code.Int64)
-			task.ExitCode = &c
+		switch l.T {
+		case "start":
+			index[l.ID] = len(list)
+			list = append(list, Task{ID: l.ID, Name: l.Name, Command: l.Cmd, Status: "running", Started: l.At,
+				Log: s.TaskLog(project, session, l.ID)})
+		case "end":
+			if i, ok := index[l.ID]; ok {
+				list[i].Status, list[i].ExitCode, list[i].Ended = l.Status, l.Code, l.At
+			}
 		}
-		task.Started = time.Unix(0, started)
-		if ended.Valid {
-			task.Ended = time.Unix(0, ended.Int64)
-		}
-		list = append(list, task)
 	}
-	return list, rows.Err()
+	return list, scan.Err()
 }
 
-func (s *Store) LoseTasks(session string) error {
-	_, err := s.Exec(`UPDATE tasks SET status = 'lost', ended = ? WHERE session = ? AND status = 'running'`, time.Now().UnixNano(), session)
+// CreateTask records a task that starts now.
+func (s *Store) CreateTask(project, session, id, name, command string, started time.Time) error {
+	if err := os.MkdirAll(filepath.Join(s.Dir(project, session), "tasks"), 0700); err != nil {
+		return err
+	}
+	return s.appendTask(project, session, taskLine{T: "start", ID: id, Name: name, Cmd: command, At: started})
+}
+
+// FinishTask records how a task ended: done, failed, stopped, timeout or lost.
+func (s *Store) FinishTask(project, session, id, status string, exit *int) error {
+	return s.appendTask(project, session, taskLine{T: "end", ID: id, Status: status, Code: exit, At: time.Now().UTC()})
+}
+
+// LoseTasks marks the tasks of an earlier run that never ended as lost.
+func (s *Store) LoseTasks(project, session string) error {
+	list, err := s.Tasks(project, session)
+	for _, t := range list {
+		if err == nil && t.Status == "running" {
+			err = s.FinishTask(project, session, t.ID, "lost", nil)
+		}
+	}
 	return err
 }
-func (s *Store) TaskCount(session string, n *int) error {
-	return s.QueryRow(`SELECT COUNT(*) FROM tasks WHERE session = ?`, session).Scan(n)
-}
-func (s *Store) CreateTask(session, id, command string, started time.Time, log string) error {
-	_, err := s.Exec(`INSERT INTO tasks (session, id, command, status, started, log) VALUES (?, ?, ?, 'running', ?, ?)`, session, id, command, started.UnixNano(), log)
-	return err
-}
-func (s *Store) FinishTask(session, id, status string, exit *int) error {
-	_, err := s.Exec(`UPDATE tasks SET status = ?, exit_code = ?, ended = ? WHERE session = ? AND id = ?`, status, exit, time.Now().UnixNano(), session, id)
-	return err
+
+func (s *Store) appendTask(project, session string, l taskLine) error {
+	data, err := json.Marshal(l)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.Dir(project, session), 0700); err != nil {
+		return err
+	}
+	return appendFile(s.tasksFile(project, session), append(data, '\n'), false)
 }

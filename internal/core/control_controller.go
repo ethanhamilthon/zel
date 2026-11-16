@@ -40,6 +40,7 @@ func NewController(a *Runtime, emit func(Event)) *Controller {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a.Queue().OnPush(func() { go c.view(func() { c.deliverLocked() }) })
+	a.OnConfigChanged(func() { go c.Reload() })
 	c.deliverLocked()
 	return c
 }
@@ -205,6 +206,9 @@ func (c *Controller) settleLocked() {
 		return
 	}
 	c.deliverLocked()
+	if c.active == nil {
+		c.a.session().checkIdle()
+	}
 }
 
 // switchLocked changes the session. Callers guarantee that no operation runs.

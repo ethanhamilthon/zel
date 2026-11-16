@@ -188,9 +188,12 @@ func RecordsForItem(item json.RawMessage) []Record {
 	case v.Type == "turn_end":
 		return []Record{{Kind: "turn_end", Text: v.Text}}
 	case v.Type == "function_call":
-		var args struct{ Code string }
+		var args struct{ Command, Code string }
 		_ = json.Unmarshal([]byte(v.Arguments), &args)
-		if v.Name == "lua" {
+		switch v.Name {
+		case "bash":
+			return []Record{{Kind: "code", Text: args.Command}}
+		case "lua": // sessions of zel 0.6
 			return []Record{{Kind: "code", Text: args.Code}}
 		}
 		return []Record{{Kind: "code", Text: v.Name + "\n" + v.Arguments}}

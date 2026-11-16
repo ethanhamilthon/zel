@@ -2,56 +2,70 @@ package store
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
-	"zel/internal/entities"
+	"time"
 )
 
-func TestSessionRoundTripAndExistingDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "zel.db")
-	db, err := Open(path)
+func TestSessionFile(t *testing.T) {
+	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	history := []json.RawMessage{json.RawMessage(`{"role":"user","content":"hello"}`)}
-	metadata := map[int]*entities.Metadata{0: {Steps: 2}}
-	session := Session{ID: "s1", Project: "/project", Model: "m", Provider: "p", Effort: "medium"}
-	if err := db.SaveSession(session, history, metadata, 0); err != nil {
+	project := "/tmp/proj"
+	items := []Item{{Data: json.RawMessage(`{"role":"user","content":"hi"}`)}, {Data: json.RawMessage(`{"a":1}`), Meta: json.RawMessage(`{"Steps":2}`)}}
+	v := Session{ID: "s1", Project: project, First: "hi", Provider: "p", Model: "m", Effort: "low", Mode: "main"}
+	if err := s.Save(v, items, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetPreferences([]byte(`{"Model":"m"}`)); err != nil {
+	v.Title, v.Model = "named", "m2"
+	items = append(items[:1], Item{Data: json.RawMessage(`{"b":2}`)})
+	if err := s.Save(v, items, 2); err != nil { // the last item was replaced: truncate + new
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
+	items = items[:1]
+	if err := s.Save(v, items, 2); err != nil {
 		t.Fatal(err)
 	}
-	db, err = Open(path)
+	// A torn line at the end is ignored.
+	f, _ := os.OpenFile(filepath.Join(s.Dir(project, "s1"), "session.jsonl"), os.O_APPEND|os.O_WRONLY, 0600)
+	f.WriteString(`{"t":"item","seq":1,"data":{"x"`)
+	f.Close()
+
+	fresh, _ := Open(filepath.Dir(s.Root))
+	got, loaded, err := fresh.Load(project, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	items, err := db.Items("s1")
-	if err != nil {
+	if got.Title != "named" || got.Model != "m2" || got.Mode != "main" || len(loaded) != 1 || string(loaded[0].Data) != `{"role":"user","content":"hi"}` {
+		t.Fatalf("loaded %+v %d items", got, len(loaded))
+	}
+	if _, _, err := fresh.Load(project, "nope"); err != ErrNotFound {
+		t.Fatalf("missing session: %v", err)
+	}
+	child := Session{ID: "s2", Project: project, Parent: "s1"}
+	if err := s.Save(child, nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || string(items[0].Data) != string(history[0]) || items[0].Meta == nil || items[0].Meta.Steps != 2 {
-		t.Fatalf("items=%+v", items)
+	list, err := s.Sessions(project)
+	if err != nil || len(list) != 1 || list[0].ID != "s1" || list[0].Title != "named" {
+		t.Fatalf("sessions = %+v, %v", list, err)
 	}
-	loaded, err := db.Session("s1", "/project")
-	if err != nil || loaded.Model != "m" {
-		t.Fatalf("session=%+v err=%v", loaded, err)
-	}
-	if _, err := db.Session("s1", "/other"); err != ErrNotFound {
-		t.Fatalf("project isolation: %v", err)
-	}
-	if data, err := db.Preferences(); err != nil || string(data) != `{"Model":"m"}` {
-		t.Fatalf("preferences=%s err=%v", data, err)
-	}
-	history = append(history, json.RawMessage(`{"role":"assistant","content":"done"}`))
-	if err := db.SaveSession(session, history, metadata, 1); err != nil {
+}
+
+func TestTasks(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	p := "/tmp/proj"
+	s.CreateTask(p, "s", "t1", "build", "make", time.Now())
+	s.CreateTask(p, "s", "t2", "", "sleep 9", time.Now())
+	code := 2
+	s.FinishTask(p, "s", "t1", "failed", &code)
+	if err := s.LoseTasks(p, "s"); err != nil {
 		t.Fatal(err)
 	}
-	if items, err := db.Items("s1"); err != nil || len(items) != 2 {
-		t.Fatalf("appended items=%v err=%v", items, err)
+	list, err := s.Tasks(p, "s")
+	if err != nil || len(list) != 2 || list[0].Status != "failed" || *list[0].ExitCode != 2 || list[1].Status != "lost" || list[0].Name != "build" {
+		t.Fatalf("tasks = %+v, %v", list, err)
 	}
 }

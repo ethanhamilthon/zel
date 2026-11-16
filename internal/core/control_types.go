@@ -30,10 +30,12 @@ type Session struct {
 // Error codes: busy and setup_required are expected states a client shows as
 // notices; invalid and failed are errors.
 const (
-	CodeBusy    = "busy"
-	CodeSetup   = "setup_required"
-	CodeInvalid = "invalid"
-	CodeFailed  = "failed"
+	CodeBusy     = "busy"
+	CodeSetup    = "setup_required"
+	CodeInvalid  = "invalid"
+	CodeFailed   = "failed"
+	CodeNotFound = "not_found"
+	CodeDenied   = "denied"
 )
 
 // Error is a rejection. Code tells the interface how to show it; Message is user-facing and never contains credentials.

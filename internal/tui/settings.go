@@ -48,6 +48,10 @@ func (m *model) openProviders() {
 }
 func (m *model) openSettingForm(index int) {
 	s := m.ctl.Settings()
+	if index == 4 {
+		m.startForm(&formState{kind: "setting", setting: index, fields: []string{"Seconds per bash call of the agent"}, values: []string{strconv.Itoa(s.BashTimeout)}})
+		return
+	}
 	m.startForm(&formState{kind: "setting", setting: index, fields: []string{"Auto compaction threshold in tokens (0 = off)"}, values: []string{strconv.Itoa(s.CompactionThreshold)}})
 }
 func (m *model) openManualModel() {
@@ -161,7 +165,11 @@ func (m model) saveForm() (tea.Model, tea.Cmd) {
 			f.err = "Enter a whole number"
 			return m, nil
 		}
-		s.CompactionThreshold = n
+		if f.setting == 4 {
+			s.BashTimeout = n
+		} else {
+			s.CompactionThreshold = n
+		}
 	case "model":
 		if _, ok := s.Providers[f.values[0]]; !ok {
 			f.step = 0
@@ -201,7 +209,7 @@ func (m model) formView() string {
 		subtitle = "Let's add your first provider to get started"
 	}
 	if f.kind == "setting" {
-		title, subtitle = "Settings", "Changes are saved in the database"
+		title, subtitle = "Settings", "Changes are saved in zel.toml"
 	}
 	if f.kind == "model" {
 		title, subtitle = "Choose a model", "Enter a provider and model ID"

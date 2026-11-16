@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 )
 
@@ -94,11 +95,14 @@ func (c *Controller) switchRequest(kind, id string) error {
 	return err
 }
 
+// Reload applies a changed config (hot reload); during a turn it waits until the turn ends.
 func (c *Controller) Reload() {
 	c.view(func() {
+		if c.shut || c.closing {
+			return
+		}
 		if c.active != nil {
 			c.reload = true
-			c.emit(Event{Kind: "notice", Text: "Instructions will reload after the current turn."})
 			return
 		}
 		c.reloadLocked()
@@ -110,7 +114,7 @@ func (c *Controller) reloadLocked() {
 		c.emit(Event{Kind: "error", Text: err.Error()})
 		return
 	}
-	c.emit(Event{Kind: "notice", Text: "Settings and init.lua reloaded; the system prompt was rebuilt."})
+	c.emit(Event{Kind: "notice", Text: "zel.toml reloaded"})
 }
 
 func (c *Controller) Rename(title string) error {
@@ -215,7 +219,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	c.view(func() {
 		s := c.a.Settings()
-		info = Info{Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: s.DBPath,
+		info = Info{Session: c.a.SessionID(), Title: c.titleLocked(), Project: c.a.Project(), DB: c.a.session().sessionDir(),
 			Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: c.a.ConfigFiles(),
 			Messages: c.a.UserMessages(), Tasks: c.a.RunningTasks(), Context: c.a.ContextTokens()}
 		info.Usage, info.Requests = c.a.SessionUsage()
@@ -238,4 +242,14 @@ func (c *Controller) UpdateSettings(s Settings) (err error) {
 		err = c.a.UpdateSettings(s)
 	})
 	return err
+}
+
+// AttachmentsDir is the folder of the session's images (pasted ones too).
+func (c *Controller) AttachmentsDir() (dir string) {
+	c.view(func() {
+		if s := c.a.session(); s.id != "" {
+			dir = filepath.Join(s.sessionDir(), "attachments")
+		}
+	})
+	return dir
 }

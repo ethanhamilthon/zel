@@ -2,21 +2,28 @@ package core
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
-
-	"zel/internal/luart"
+	"strconv"
+	"strings"
 )
 
 // systemIntro opens every system prompt.
-const systemIntro = "You are Zel, a coding agent. Use the lua tool to help the user."
+const systemIntro = "You are Zel, a coding agent. Use the bash tool to help the user."
+
+//go:embed bash.md
+var bashMD string
+
+// BashToolDescription is the description of the one tool the model gets.
+const BashToolDescription = "Run a bash script: its input is the raw script. Output is stdout and stderr together."
 
 // instructions returns the session's system prompt. It is assembled once and stored
-// in the history, so a resumed session keeps its prompt until Reload or New session.
+// in the history, so a resumed session keeps its prompt until the config changes.
 func (s *session) instructions(ctx context.Context) (string, error) {
 	if s.promptFrozen {
 		return s.prompt, nil
 	}
-	prompt := s.assemblePrompt(ctx)
+	prompt := s.assemblePrompt()
 	s.histMu.Lock()
 	s.History = append(s.History, raw(map[string]string{"type": "instructions", "text": prompt}))
 	s.histMu.Unlock()
@@ -30,13 +37,48 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 	return prompt, nil
 }
 
-// assemblePrompt renders the intro, the instructions and dynamic pieces of every
-// init.lua layer, then the Lua API: the built-in part and the registered functions.
-func (s *session) assemblePrompt(ctx context.Context) string {
-	if cfg := s.lua.get(); cfg != nil {
-		return systemIntro + "\n\n" + cfg.SystemPrompt(ctx)
+// assemblePrompt renders the intro, the instructions of the config for this
+// session mode, then the built-in part about bash and the zel commands.
+func (s *session) assemblePrompt() string {
+	parts := []string{systemIntro}
+	if cfg := s.conf.get(); cfg != nil {
+		for _, in := range cfg.Instructions {
+			if (s.mode() == "main" && in.Main) || (s.mode() == "headless" && in.Headless) {
+				parts = append(parts, strings.TrimSpace(in.Text))
+			}
+		}
 	}
-	return systemIntro + "\n\n" + luart.Builtin(s.mode())
+	return strings.Join(append(parts, s.builtin()), "\n\n")
+}
+
+// builtin is bash.md for this session: headless sessions cannot ask the user,
+// and the deepest children cannot start more of them.
+func (s *session) builtin() string {
+	timeout := 30
+	if s.cfg != nil {
+		timeout = s.Settings().BashTimeout
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(bashMD), "\n") {
+		switch {
+		case strings.HasPrefix(line, "[main] "):
+			if s.mode() != "main" {
+				continue
+			}
+			line = strings.TrimPrefix(line, "[main] ")
+		case strings.HasPrefix(line, "[nest] "):
+			if s.depth >= MaxDepth {
+				continue
+			}
+			line = strings.TrimPrefix(line, "[nest] ")
+		}
+		lines = append(lines, strings.ReplaceAll(line, "{timeout}", strconv.Itoa(timeout)))
+	}
+	text := strings.Join(lines, "\n")
+	if s.mode() == "headless" {
+		text += "\nThis session is headless (zel -p): there is no user to ask, zel choice is not available."
+	}
+	return text
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {

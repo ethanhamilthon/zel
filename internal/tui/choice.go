@@ -76,6 +76,10 @@ func (m model) choiceBlock() string {
 	if count > visible {
 		rows = append(rows, dim.Render(fmt.Sprintf("  %d of %d", m.choiceSel+1, count)))
 	}
-	rows = append(rows, dim.Render(ansi.Truncate("↑↓ choose · enter confirm · esc cancel", width, "…")))
+	hint := "↑↓ choose · enter confirm · esc cancel"
+	if m.choice.Waiting > 1 {
+		hint = fmt.Sprintf("1/%d · ", m.choice.Waiting) + hint
+	}
+	rows = append(rows, dim.Render(ansi.Truncate(hint, width, "…")))
 	return strings.Join(rows, "\n")
 }

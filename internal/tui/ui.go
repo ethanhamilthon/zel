@@ -382,7 +382,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil // the composer is read-only while a prompt expands
 			}
 		}
-		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+y" && v.String() != "ctrl+q" {
+		if m.menu != nil && m.menu.page == menuForm && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
 			return m.formKey(v)
 		}
 		// Terminals paste only text: an image-only clipboard arrives as an
@@ -413,12 +413,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.openMenu()
 			return m, cmd
 		}
-		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+y" && v.String() != "ctrl+q" {
+		if m.menu != nil && v.String() != "ctrl+c" && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
 			return m.menuKey(v)
 		}
 		switch v.String() {
-		case "ctrl+y":
-			return m.copyAnswer()
 		case "ctrl+v":
 			return m.pasteClipboard()
 		case "ctrl+c":

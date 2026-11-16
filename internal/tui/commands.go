@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tracing, rename, info, reload, quit)\n" +
+const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tracing, rename, info, quit)\n" +
 	"Ctrl+N: new session · Ctrl+M: models · Ctrl+R: resume · Ctrl+I: info · Ctrl+T: tracing (Ctrl+M/I require Kitty keyboard protocol)\n" +
 	"Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline\n" +
 	"Sending while zel works: the message waits until the running call ends, then the model reads it\n" +
@@ -18,13 +18,13 @@ const keyboardHelp = "Ctrl+K: open the menu (sessions, model, tracing, rename, i
 	"Edit a queued message to withdraw it; Enter queues the edited draft again\n" +
 	"Up on empty input: recall a message the model has not read yet\n" +
 	"Select and copy with terminal shortcuts; use its gesture to open links\n" +
-	"PgUp/PgDn: scroll timeline · Ctrl+Y: copy last answer\n" +
+	"PgUp/PgDn: scroll timeline\n" +
 	"The chat shows only user messages and answers; the Tracing menu has the rest\n" +
 	"Tracing entry: Left/Right switch entries · Up/Down scroll · Esc returns to the list\n" +
 	"Esc: dismiss UI · Ctrl+D: cancel current turn · Ctrl+Q: save and quit"
 
 func help() string {
-	return keyboardHelp + "\n\nHost access: the lua tool runs code and shell commands with your permissions; not an OS security sandbox."
+	return keyboardHelp + "\n\nzel.toml changes apply by themselves (hot reload).\nHost access: the bash tool runs commands with your permissions; not an OS security sandbox."
 }
 
 func sessionTitle(s core.SessionSummary) string {

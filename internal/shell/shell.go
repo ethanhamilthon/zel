@@ -26,9 +26,9 @@ type Runner struct {
 }
 
 // Command builds `bash -c script` in its own process group in dir. extra
-// overrides the inherited environment; BASH_ENV and the session variables ZEL_MODE,
-// ZEL_SOURCE and ZEL_ENDPOINT are never inherited, pagers are disabled and the running
-// binary's directory leads PATH. Cancelling ctx kills the whole group. Start it with cmd.Start and finish it with Reap.
+// overrides the inherited environment (extra PATH replaces the inherited one);
+// BASH_ENV and the ZEL_ session variables (but ZEL_HOME) are never inherited,
+// pagers are disabled and the running binary's directory leads PATH. Cancelling ctx kills the whole group. Start it with cmd.Start and finish it with Reap.
 func Command(ctx context.Context, dir string, extra map[string]string, script string) *exec.Cmd {
 	bash := "/bin/bash"
 	if _, err := os.Stat(bash); err != nil {
@@ -47,19 +47,25 @@ func Command(ctx context.Context, dir string, extra map[string]string, script st
 	cmd.ExtraFiles = extraFiles
 	cmd.Dir = dir
 	path := os.Getenv("PATH")
+	if p, ok := extra["PATH"]; ok {
+		path = p
+	}
 	if exe, err := os.Executable(); err == nil {
 		path = filepath.Dir(exe) + string(os.PathListSeparator) + path
 	}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		// Session variables belong to this session: a sub-agent must not inherit its parent's endpoint.
-		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" || key == "ZEL_MODE" || key == "ZEL_SOURCE" {
+		// Session variables belong to this session: a child must not inherit its parent's socket.
+		if _, overridden := extra[key]; overridden || key == "BASH_ENV" || key == "PATH" || key == "PAGER" || key == "GIT_PAGER" ||
+			(strings.HasPrefix(key, "ZEL_") && key != "ZEL_HOME") {
 			continue
 		}
 		cmd.Env = append(cmd.Env, entry)
 	}
 	for key, value := range extra {
-		cmd.Env = append(cmd.Env, key+"="+value)
+		if key != "PATH" {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
 	}
 	cmd.Env = append(cmd.Env, "PATH="+path, "PAGER=cat", "GIT_PAGER=cat")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

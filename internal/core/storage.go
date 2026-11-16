@@ -7,10 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,35 +33,35 @@ func validSessionID(id string) bool {
 	return id != "" && filepath.Base(id) == id && !strings.ContainsAny(id, `/\\`)
 }
 
-func (a *Runtime) openSession(id string) error { return a.session().openSession(id) }
-
 func (s *session) openSession(id string) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID: %s", id)
 	}
-	v, err := s.db.Session(id, s.project)
-	sel := selection{v.Provider, v.Model, v.Effort}
-	s.histMu.Lock()
-	s.title = v.Title
-	s.histMu.Unlock()
+	v, items, err := s.db.Load(s.project, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("session not found in this project: %s", id)
 	}
 	if err != nil {
 		return err
 	}
-	s.id = id
+	// A child may only continue its own children.
+	if s.parent != nil && v.Parent != s.parent.session {
+		return fail(CodeNotFound, "ENOENT: %s is not a zel -p session of this session", id)
+	}
+	s.id, s.created = id, v.Created
 	s.histMu.Lock()
+	s.title = v.Title
 	s.stored = true
 	s.histMu.Unlock()
-	s.fixSelection(sel)
+	s.layers = s.configLayers(v.Config)
+	if err := s.loadConfig(); err != nil {
+		return err
+	}
+	s.fixSelection(selection{v.Provider, v.Model, v.Effort})
 	if err := s.acquire(); err != nil {
 		return err
 	}
-	if err := s.readSession(); err != nil {
-		s.release()
-		return err
-	}
+	s.readItems(items)
 	if _, err := s.instructions(context.Background()); err != nil {
 		s.release()
 		return err
@@ -76,22 +74,22 @@ func (s *session) createSession() error {
 	if _, err := rand.Read(id[:]); err != nil {
 		return err
 	}
-	s.id = time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(id[:])
+	s.created = time.Now().UTC()
+	s.id = s.created.Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(id[:])
 	s.histMu.Lock()
 	s.itemMeta = nil
 	s.histMu.Unlock()
+	s.layers = s.configLayers(nil)
+	if err := s.loadConfig(); err != nil {
+		return err
+	}
 	s.fixSelection(selection{})
 	return s.acquire()
 }
 
-func (a *Runtime) readSession() error { return a.session().readSession() }
-
-func (s *session) readSession() error {
-	items, err := s.db.Items(s.id)
-	if err != nil {
-		return err
-	}
+func (s *session) readItems(items []store.Item) {
 	s.histMu.Lock()
+	defer s.histMu.Unlock()
 	s.History, s.itemMeta, s.imageWarnings, s.compacted = nil, nil, nil, compaction{}
 	for _, item := range items {
 		s.History = append(s.History, item.Data)
@@ -102,17 +100,15 @@ func (s *session) readSession() error {
 		if c, ok := compactionSnapshot(item.Data); ok {
 			s.compacted = c
 		}
-		if item.Meta != nil {
+		var m Metadata
+		if len(item.Meta) > 0 && json.Unmarshal(item.Meta, &m) == nil {
 			if s.itemMeta == nil {
 				s.itemMeta = map[int]*Metadata{}
 			}
-			m := *item.Meta
 			s.itemMeta[len(s.History)-1] = &m
 		}
 	}
 	s.saved = len(s.History)
-	s.histMu.Unlock()
-	return nil
 }
 
 func (s *session) HasSavedSession() bool {
@@ -126,7 +122,6 @@ func (a *Runtime) Save() error { return a.session().Save() }
 func (s *session) Save() error {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	// Read before the transaction: update holds cfg.mu while it writes the database.
 	// A saved session pins the model it runs with, so a later default does not change it.
 	s.cfg.mu.Lock()
 	if s.cfg.sel.Model == "" && s.cfg.s.Model != "" {
@@ -135,19 +130,27 @@ func (s *session) Save() error {
 	sel := s.cfg.sel
 	s.cfg.mu.Unlock()
 	s.histMu.RLock()
-	history := slices.Clone(s.History)
-	meta := maps.Clone(s.itemMeta)
+	items := make([]store.Item, len(s.History))
+	for i, data := range s.History {
+		items[i].Data = data
+		if m := s.itemMeta[i]; m != nil {
+			items[i].Meta, _ = json.Marshal(m)
+		}
+	}
 	saved := s.saved
 	title := s.title
-	first := firstUserLine(history)
+	first := firstUserLine(s.History)
 	s.histMu.RUnlock()
-	if err := s.db.SaveSession(store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort}, history, meta, saved); err != nil {
+	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
+		Mode: s.mode(), Depth: s.depth, Config: s.configPaths(), Created: s.created}
+	if s.parent != nil {
+		v.Parent = s.parent.session
+	}
+	if err := s.db.Save(v, items, saved); err != nil {
 		return err
 	}
 	s.histMu.Lock()
-	if len(history) > s.saved {
-		s.saved = len(history)
-	}
+	s.saved = len(items)
 	s.stored = true
 	s.histMu.Unlock()
 	return nil
@@ -155,7 +158,14 @@ func (s *session) Save() error {
 
 func (a *Runtime) Sessions() ([]SessionSummary, error) { return a.session().Sessions() }
 
-func (s *session) Sessions() ([]SessionSummary, error) { return s.db.Sessions(s.project) }
+func (s *session) Sessions() ([]SessionSummary, error) {
+	list, err := s.db.Sessions(s.project)
+	out := make([]SessionSummary, 0, len(list))
+	for _, v := range list {
+		out = append(out, SessionSummary{ID: v.ID, Title: v.Title, Project: v.Project, Updated: v.Updated})
+	}
+	return out, err
+}
 
 func firstUserLine(history []json.RawMessage) string {
 	for _, item := range history {

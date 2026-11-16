@@ -87,10 +87,5 @@ func (a *Runtime) ResetActivity() {
 	}
 }
 
-// publishActivity gives a subagent's activity to its row in the agent tree; the
-// main session has no row, the working indicator reads Activity.
-func (s *session) publishActivity() {
-	if link := s.link; link != nil {
-		link.tree.setActivity(link.id, s.Activity())
-	}
-}
+// publishActivity is a no-op: the working indicator reads Activity.
+func (s *session) publishActivity() {}
