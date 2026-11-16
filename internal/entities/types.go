@@ -222,3 +222,11 @@ type ModelChoice struct {
 	Provider, Model string
 	ContextWindow   int64
 }
+
+// ChoiceSeparator splits the Text of a "choice" record into the question and the answer.
+const ChoiceSeparator = "\x1f"
+
+// ChoiceRecord is the chat record of an answered zel choice question.
+func ChoiceRecord(title, answer string) Record {
+	return Record{Kind: "choice", Text: title + ChoiceSeparator + answer}
+}

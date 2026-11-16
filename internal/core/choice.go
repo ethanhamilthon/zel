@@ -5,6 +5,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
+
+	"zel/internal/entities"
+	"zel/internal/store"
 )
 
 // Choice is a question the agent asks the user with zel choice: the UI shows
@@ -57,20 +61,23 @@ func (c *chooser) ask(s *session, title string, options []string) (int, error) {
 
 // answer takes the user's pick (index) or cancel (-1) for question id and
 // sends it to the session that asked.
-func (c *chooser) answer(id, index int) { c.resolve(id, index, "") }
+func (c *chooser) answer(id, index int) (title, picked string, ok bool) {
+	return c.resolve(id, index, "")
+}
 
-func (c *chooser) resolve(id, index int, custom string) {
+// resolve delivers the answer and reports the question and the answer text.
+func (c *chooser) resolve(id, index int, custom string) (title, picked string, ok bool) {
 	c.mu.Lock()
 	i := slices.IndexFunc(c.queue, func(q *question) bool { return q.ID == id })
 	if i < 0 || (custom == "" && (index < -1 || index >= len(c.queue[i].Options))) {
 		c.mu.Unlock()
-		return
+		return "", "", false
 	}
 	q := c.queue[i]
 	c.queue = slices.Delete(c.queue, i, i+1)
 	c.mu.Unlock()
 	c.notify()
-	picked := "cancelled"
+	picked = "cancelled"
 	if custom != "" {
 		picked = custom
 	} else if index >= 0 {
@@ -79,6 +86,7 @@ func (c *chooser) resolve(id, index int, custom string) {
 	if !q.s.ended.Load() {
 		q.s.queue.PushNotice(notification(fmt.Sprintf("c%d %s: %s", q.ID, q.Title, picked)))
 	}
+	return q.Title, picked, true
 }
 
 // drop forgets the questions of a session that ends.
@@ -107,13 +115,34 @@ func (a *Runtime) PendingChoice() *Choice {
 }
 
 // AnswerChoice answers the question id with the option at index, or cancels it with -1.
-func (a *Runtime) AnswerChoice(id, index int) { a.ask.answer(id, index) }
+// It reports the chat record of the answer; ok is false when id is not pending.
+func (a *Runtime) AnswerChoice(id, index int) (Record, bool) {
+	return a.session().recordChoice(a.ask.answer(id, index))
+}
 
 // AnswerChoiceText delivers a non-empty custom answer without changing the options.
-func (a *Runtime) AnswerChoiceText(id int, text string) {
+func (a *Runtime) AnswerChoiceText(id int, text string) (Record, bool) {
 	if text = strings.TrimSpace(text); text != "" && len([]rune(text)) <= 4096 {
-		a.ask.resolve(id, -1, text)
+		return a.session().recordChoice(a.ask.resolve(id, -1, text))
 	}
+	return Record{}, false
+}
+
+// recordChoice keeps an answered question in the chat of s and in its session folder.
+func (s *session) recordChoice(title, answer string, ok bool) (Record, bool) {
+	if !ok {
+		return Record{}, false
+	}
+	s.histMu.Lock()
+	c := store.Choice{Seq: len(s.History), Title: title, Answer: answer, At: time.Now().UTC()}
+	s.choices = append(s.choices, c)
+	s.histMu.Unlock()
+	if s.db != nil && s.id != "" {
+		if err := s.db.AppendChoice(s.project, s.id, c); err != nil {
+			s.LogEvent("error", "Could not save the answer: "+err.Error())
+		}
+	}
+	return entities.ChoiceRecord(title, answer), true
 }
 
 // OnChoiceChanged registers fn to run when the queue of questions changes; with
@@ -122,4 +151,10 @@ func (a *Runtime) OnChoiceChanged(fn func()) {
 	a.ask.mu.Lock()
 	a.ask.changed = fn
 	a.ask.mu.Unlock()
+}
+
+// Ask queues a question of the main session, as zel choice does.
+func (a *Runtime) Ask(title string, options []string) (int, error) {
+	s := a.session()
+	return s.ask.ask(s, title, options)
 }

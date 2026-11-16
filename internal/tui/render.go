@@ -63,6 +63,8 @@ func renderEntryMode(e entry, width, limit int, markdown bool) string {
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, userColor)
 	case "prompt_error":
 		return paint(ansi.Wrap(text, width, ""), width, lipgloss.NoColor{}, errorColor)
+	case "choice":
+		return renderChoiceRecord(text, width)
 	case "compaction":
 		label := " context compacted "
 		side := max(0, width-lipgloss.Width(label)) / 2
@@ -152,7 +154,7 @@ func (m model) inputBlockAt(now time.Time) string {
 			return "\x1b[0m" + composerCursorMarker + lipgloss.NewStyle().Foreground(queuedColor(userHighlight, now)).Render(s)
 		})
 	}
-	lines := strings.Split(m.input.View(), "\n")
+	lines := m.tokenColor(strings.Split(m.input.View(), "\n"))
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, max(1, m.width), "")
 	}
@@ -216,7 +218,7 @@ func (m *model) timelineSegments(budget time.Duration) (head, tail []string) {
 	for i := len(m.entries) - 1; i >= 0; i-- {
 		e := m.entries[i]
 		limit := 0
-		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "compaction" || e.Kind == "turn_end" {
+		if e.Kind == "assistant" || e.Kind == "user" || e.Kind == "choice" || e.Kind == "compaction" || e.Kind == "turn_end" {
 			limit = -1
 		}
 		cached := &m.cache[i]

@@ -102,9 +102,10 @@ type session struct {
 	requestedLen  int        // History length when lastRequest was sent
 	compacted     compaction // latest automatic compaction boundaries
 	imageWarnings []Record
-	ask           *chooser    // the questions of zel choice the UI shows
-	depth         int         // zel -p nesting depth: 0 for a session you started
-	acts          *activities // foreground host operations in progress
+	choices       []store.Choice // answered questions shown in the chat, by history position
+	ask           *chooser       // the questions of zel choice the UI shows
+	depth         int            // zel -p nesting depth: 0 for a session you started
+	acts          *activities    // foreground host operations in progress
 	queue         *Steering
 	slots         *imageSlots
 	tasks         *tasks

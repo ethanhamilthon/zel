@@ -7,7 +7,7 @@ func (m *model) releaseCommittedTrace() {
 	for i, e := range m.entries {
 		keep := e.Preview
 		switch e.Kind {
-		case "user", "assistant", "compaction", "turn_end":
+		case "user", "assistant", "choice", "compaction", "turn_end":
 			keep = true
 		}
 		if keep {

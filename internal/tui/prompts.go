@@ -66,6 +66,7 @@ func (m *model) acceptPromptCompletion() tea.Cmd {
 	start := max(0, min(m.promptStart, len(runes)))
 	end := max(start, min(m.promptEnd, len(runes)))
 	token := []rune("#" + m.promptItems[m.promptSelected])
+	m.rememberToken(string(token))
 	m.input.SetValue(string(runes[:start]) + string(token) + string(runes[end:]))
 	if m.input.Value() != before {
 		m.withdrawSteer()

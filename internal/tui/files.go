@@ -330,6 +330,9 @@ func (m *model) completeFile(descend bool) tea.Cmd {
 	}
 	selected := m.fileCompletions[m.fileSelected%len(m.fileCompletions)]
 	isDir, rep := strings.HasSuffix(selected, "/"), quotePath(selected)
+	if !isDir || !descend {
+		m.rememberToken(rep)
+	}
 	runes := []rune(m.input.Value())
 	start, end := max(0, min(m.fileTokenStart, len(runes))), max(0, min(m.fileTokenEnd, len(runes)))
 	m.input.SetValue(string(runes[:start]) + rep)

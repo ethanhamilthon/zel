@@ -2339,11 +2339,11 @@ func TestWorkingIndicatorDuringResponse(t *testing.T) {
 		visible bool
 	}{
 		{core.TurnEvent{Kind: "delta", ID: "answer", Text: " ", Provisional: true}, true},
-		{core.TurnEvent{Kind: "delta", ID: "answer", Text: "Hello", Provisional: true}, false},
-		{core.TurnEvent{Kind: "assistant", ID: "answer", Text: "Hello", Final: true}, false},
+		{core.TurnEvent{Kind: "delta", ID: "answer", Text: "Hello", Provisional: true}, true},
+		{core.TurnEvent{Kind: "assistant", ID: "answer", Text: "Hello", Final: true}, true},
 		{core.TurnEvent{Kind: "code", ID: "tool", Text: "ls", Provisional: true}, true},
 		{core.TurnEvent{Kind: "reasoning", ID: "thought", Text: "Thinking", Provisional: true}, true},
-		{core.TurnEvent{Kind: "delta", ID: "next", Text: "Done", Provisional: true}, false},
+		{core.TurnEvent{Kind: "delta", ID: "next", Text: "Done", Provisional: true}, true},
 	} {
 		m.entries = core.ApplyEvent(m.entries, tc.event)
 		if got := m.workingBlock() != ""; got != tc.visible {
@@ -3392,5 +3392,94 @@ func TestHookRecordsHiddenOnlyFromTracing(t *testing.T) {
 	}
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
 		t.Fatalf("hook searchable: %+v", rows)
+	}
+}
+
+// A sent message never leaves the screen: it shows the moment it leaves the
+// composer, and the agent's copy takes its place.
+func TestSentMessageStaysVisible(t *testing.T) {
+	m, _, release := heldModel(t)
+	defer release()
+	m.input.SetValue("hello there")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	count := func() int {
+		return strings.Count(ansi.Strip(m.timeline()), "hello there")
+	}
+	if m.input.Value() != "" || count() != 1 {
+		t.Fatalf("sent message missing right after Enter:\n%s", ansi.Strip(m.timeline()))
+	}
+	awaitRequest(t, m)
+	m = settle(m)
+	users := 0
+	for _, e := range m.entries {
+		if e.Kind == "user" {
+			users++
+			if e.Preview || e.ID == "" {
+				t.Fatalf("agent copy did not replace the shown message: %+v", e)
+			}
+		}
+	}
+	if users != 1 || count() != 1 || m.workingBlock() == "" {
+		t.Fatalf("%d user entries:\n%s", users, ansi.Strip(m.timeline()))
+	}
+}
+
+// Completed #names and @paths are one token: accent colored, skipped by the
+// cursor and deleted whole.
+func TestCompletedTokensActAsOneUnit(t *testing.T) {
+	m := bareModel(t, "/project")
+	m.width, m.height = 40, 10
+	m.rememberToken("#review")
+	m.rememberToken("@docs/a b.md")
+	m.setComposer("run #review on @docs/a b.md now")
+	m.input.CursorEnd()
+	m.refresh(true)
+	spans := m.tokenSpans(m.input.Value())
+	if len(spans) != 2 || spans[0] != (tokenSpan{4, 11}) || spans[1] != (tokenSpan{15, 27}) {
+		t.Fatalf("spans %+v", spans)
+	}
+	press := func(k tea.KeyMsg) { m = key(m, k) }
+	for range 4 { // " now"
+		press(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	press(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "run #review on " {
+		t.Fatalf("backspace: %q", m.input.Value())
+	}
+	for range 4 { // right after #review
+		press(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	press(tea.KeyMsg{Type: tea.KeyLeft}) // into #review: jumps to its start
+	if got := m.composerCursorOffset(); got != 4 {
+		t.Fatalf("left into token: cursor %d", got)
+	}
+	press(tea.KeyMsg{Type: tea.KeyRight})
+	if got := m.composerCursorOffset(); got != 11 {
+		t.Fatalf("right over token: cursor %d", got)
+	}
+	press(tea.KeyMsg{Type: tea.KeyLeft})
+	press(tea.KeyMsg{Type: tea.KeyDelete})
+	if m.input.Value() != "run  on " {
+		t.Fatalf("delete: %q", m.input.Value())
+	}
+}
+
+func TestTokenColorKeepsCursorMarkerOnce(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	m := bareModel(t, "/project")
+	m.width, m.height = 40, 10
+	m.rememberToken("#review")
+	m.setComposer("go #review")
+	m.input.SetCursor(3)
+	m.refresh(true)
+	block := m.inputBlock()
+	accent := sgrPrefix(lipgloss.NewStyle().Foreground(accentColor))
+	if strings.Count(block, composerCursorMarker) != 1 || !strings.Contains(block, accent) || ansi.Strip(block) != "go #review"+strings.Repeat(" ", 30) {
+		t.Fatalf("block %q", block)
+	}
+	if !strings.Contains(block, accent+"review") {
+		t.Fatalf("token not accent: %q", block)
 	}
 }

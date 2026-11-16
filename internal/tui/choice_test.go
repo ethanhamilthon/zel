@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"zel/internal/core"
 )
@@ -137,5 +139,70 @@ func TestChoiceHasNoNumbersOrFooterAndFitsNarrowScreens(t *testing.T) {
 				t.Fatalf("choice exceeds width %d: %q", width, row)
 			}
 		}
+	}
+}
+
+// An answer stays in the chat as "question: answer"; the custom answer edits
+// like the composer, without key hints, and takes mouse clicks.
+func TestChoiceAnswerRecordAndCustomEditor(t *testing.T) {
+	m, a := freshModel(t)
+	m.menu = nil
+	m.width, m.height = 30, 20
+	a.OnChoiceChanged(func() {})
+	if _, err := a.Ask("Color: pick", []string{"Blue"}); err != nil {
+		t.Fatal(err)
+	}
+	m.syncChoice()
+	m = key(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.wantsMouse() {
+		t.Fatal("custom answer does not take clicks")
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one")})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("two")})
+	block := ansi.Strip(m.choiceBlock())
+	if block != "Color: pick\none"+strings.Repeat(" ", 27)+"\ntwo"+strings.Repeat(" ", 27) || strings.Contains(block, "Esc") {
+		t.Fatalf("custom editor:\n%q", block)
+	}
+	// A click on the first line puts the cursor after "on".
+	m.refresh(true)
+	y := m.inputTop + 1 - m.viewport.YOffset
+	next, _ := m.Update(tea.MouseMsg{X: 2, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = next.(model)
+	if m.choiceInput.Line() != 0 || m.choiceInput.LineInfo().ColumnOffset != 2 {
+		t.Fatalf("click put the cursor at line %d col %d", m.choiceInput.Line(), m.choiceInput.LineInfo().ColumnOffset)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = settle(next.(model))
+	if m.choice != nil || m.wantsMouse() || cmd == nil {
+		t.Fatal("answer did not close the editor and release the mouse")
+	}
+	var last entry
+	for _, e := range m.entries {
+		if e.Kind == "choice" {
+			last = e
+		}
+	}
+	if last.Kind != "choice" || last.Text != "Color: pick\x1fone\ntwo" {
+		t.Fatalf("record %+v", last)
+	}
+	plain := ansi.Strip(renderEntry(last, 30, -1))
+	if plain != "Color: pick: one\ntwo" {
+		t.Fatalf("record view %q", plain)
+	}
+}
+
+func TestChoiceRecordColors(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	out := renderChoiceRecord("Question here\x1fan answer that wraps", 12)
+	accent, user := sgrPrefix(lipgloss.NewStyle().Foreground(accentColor)), sgrPrefix(lipgloss.NewStyle().Foreground(userColor))
+	if ansi.Strip(out) != "Question\nhere: an\nanswer that\nwraps" {
+		t.Fatalf("layout %q", ansi.Strip(out))
+	}
+	rows := strings.Split(out, "\n")
+	if !strings.HasPrefix(rows[0], accent) || !strings.Contains(rows[1], user+"an") || !strings.HasPrefix(rows[1], accent+"here:") || strings.Contains(rows[3], accent) {
+		t.Fatalf("colors %q", out)
 	}
 }

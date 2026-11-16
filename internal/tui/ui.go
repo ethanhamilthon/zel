@@ -38,6 +38,11 @@ type model struct {
 	entries                   []entry
 	contextTokens             int64
 	turnIndex                 int
+	completedTokens           map[string]bool // #names and @paths picked from completion lists
+	spans                     []tokenSpan     // the completed tokens of spansValue
+	spansValue                string
+	spansValid                bool
+	sentEntry                 int // 1 + the index of the sent message shown until the agent confirms it; 0 = none
 	statsKey, themeKey        string
 	attachments               string
 	pasteGeneration           int
@@ -163,25 +168,40 @@ func (m *model) resizeInput() {
 		return
 	}
 	m.inputWidth, m.inputHeight, m.inputValue = width, height, value
-	m.input.SetWidth(width)
-	lines := 0
-	for _, line := range strings.Split(value, "\n") {
-		lines += len(wrapRows([]rune(line), m.input.Width()))
-	}
-	m.input.SetHeight(min(height, max(1, lines)))
+	fitTextarea(&m.input, width, height)
 }
 
-// updateInput runs the textarea update with its maximum height. The textarea
+// fitTextarea sets the width of input and grows its height to its wrapped
+// lines, at most maxHeight.
+func fitTextarea(input *textarea.Model, width, maxHeight int) {
+	input.SetWidth(max(1, width))
+	lines := 0
+	for _, line := range strings.Split(input.Value(), "\n") {
+		lines += len(wrapRows([]rune(line), input.Width()))
+	}
+	input.SetHeight(min(max(1, maxHeight), max(1, lines)))
+}
+
+// updateInput runs the textarea update with its maximum height.
+// A cursor that lands inside a completed token moves to its edge.
+func (m *model) updateInput(msg tea.Msg) tea.Cmd {
+	before := m.composerCursorOffset()
+	cmd := updateTextarea(&m.input, msg, m.height-2)
+	m.snapCursor(before)
+	m.inputValue, m.inputWidth = "\x00", 0
+	return cmd
+}
+
+// updateTextarea runs the textarea update with its maximum height. The textarea
 // scrolls its viewport to the cursor during Update using its current height, so
 // with a stale smaller height an inserted newline would scroll earlier lines out
 // of view before the height is grown.
-func (m *model) updateInput(msg tea.Msg) tea.Cmd {
-	previous := m.input.Height()
-	m.input.SetHeight(max(1, m.height-2))
+func updateTextarea(input *textarea.Model, msg tea.Msg, maxHeight int) tea.Cmd {
+	previous := input.Height()
+	input.SetHeight(max(1, maxHeight))
 	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	m.input.SetHeight(previous)
-	m.inputValue, m.inputWidth = "\x00", 0
+	*input, cmd = input.Update(msg)
+	input.SetHeight(previous)
 	return cmd
 }
 
@@ -233,7 +253,7 @@ func (m *model) add(kind, text string) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	wasTraceEntry := m.traceEntryView()
+	hadMouse := m.wantsMouse()
 	themeChanged := m.syncTheme()
 	if themeChanged { // hot reload changed the colors: redraw everything with them
 		m.refresh(m.viewport.AtBottom())
@@ -246,8 +266,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return next, cmd
 	}
-	if wasTraceEntry && !n.traceEntryView() {
-		cmd = tea.Batch(cmd, tea.DisableMouse)
+	if wants := n.wantsMouse(); wants != hadMouse {
+		mouse := tea.DisableMouse
+		if wants {
+			mouse = tea.EnableMouseCellMotion
+		}
+		cmd = tea.Batch(cmd, mouse)
 	}
 	if pulse := n.ensureMenuPulse(); pulse != nil {
 		cmd = tea.Batch(cmd, pulse)
@@ -380,6 +404,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if m.menu != nil {
 			return m.menuMouse(v)
+		}
+		if m.choiceWriting && m.choice != nil && v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonLeft {
+			return m, m.clickChoiceInput(v.X, v.Y)
 		}
 		if v.Action == tea.MouseActionPress && v.Button == tea.MouseButtonWheelUp {
 			return m, m.scrollUp(3)
@@ -560,13 +587,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.sendInput(core.Input{Text: text})
 		}
-		return m, m.edit(follow, func() tea.Cmd { return m.updateInput(msg) })
+		return m, m.edit(follow, func() tea.Cmd {
+			if cmd, ok := m.tokenKey(v); ok {
+				return cmd
+			}
+			return m.updateInput(msg)
+		})
 	}
 	if m.choice != nil && m.choiceWriting && m.menu == nil {
-		var cmd tea.Cmd
-		input, updateCmd := m.choiceInput.Update(msg)
-		*m.choiceInput = input
-		cmd = updateCmd
+		cmd := m.updateChoiceInput(msg)
 		m.refresh(true)
 		return m, cmd
 	}
@@ -669,6 +698,7 @@ func (m model) deliver(input core.Input, draft string) (tea.Model, tea.Cmd) {
 		m.pendingSteer, m.pendingText = input.QueueID, draft
 	} else {
 		m.input.Reset()
+		m.showSent(input.Display())
 	}
 	m.hideCompletion = false
 	m.dismissFileCompletion()
@@ -695,8 +725,45 @@ func (m *model) syncSteer() {
 	if m.input.Value() == m.pendingText {
 		m.input.Reset()
 	}
+	if m.ctl.Status().Busy {
+		m.showSent(m.pendingText)
+	}
 	m.pendingText = ""
 	m.refresh(false)
+}
+
+// showSent keeps a sent message in the chat from the moment it leaves the
+// composer; the agent's own copy of it replaces this one when it arrives.
+func (m *model) showSent(text string) {
+	if text = strings.TrimSpace(text); text == "" {
+		return
+	}
+	m.dropSent()
+	m.entries = append(m.entries, entry{Kind: "user", Text: text, Preview: true})
+	m.sentEntry = len(m.entries)
+}
+
+// confirmSent puts the agent's copy of a sent message in its shown place; it
+// reports false when no sent message waits for it.
+func (m *model) confirmSent(e core.TurnEvent) bool {
+	i := m.sentEntry - 1
+	if i < 0 || i >= len(m.entries) || e.Kind != "user" {
+		return false
+	}
+	m.sentEntry = 0
+	m.entries[i] = entry{Kind: "user", Text: e.Text, ID: e.ID, Meta: e.Meta}
+	return true
+}
+
+// dropSent removes a sent message the agent never took (a hook blocked it).
+func (m *model) dropSent() {
+	if i := m.sentEntry - 1; i >= 0 && i < len(m.entries) && m.entries[i].Kind == "user" && m.entries[i].Preview {
+		m.entries = slices.Delete(m.entries, i, i+1)
+		if m.turnIndex > i {
+			m.turnIndex--
+		}
+	}
+	m.sentEntry = 0
 }
 
 func (m *model) withdrawSteer() {

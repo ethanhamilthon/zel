@@ -71,6 +71,10 @@ func (s *session) openSession(id string) error {
 		return err
 	}
 	s.readItems(items)
+	choices, _ := s.db.Choices(s.project, id)
+	s.histMu.Lock()
+	s.choices = choices
+	s.histMu.Unlock()
 	if _, err := s.instructions(context.Background()); err != nil {
 		s.release()
 		return err

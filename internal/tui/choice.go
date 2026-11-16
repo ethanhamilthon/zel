@@ -3,6 +3,10 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode"
+
+	"zel/internal/core"
+	"zel/internal/entities"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,9 +32,7 @@ func (m *model) syncChoice() {
 func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	n := len(m.choice.Options) + 1
 	answer := func(index int) (tea.Model, tea.Cmd, bool) {
-		m.ctl.AnswerChoice(m.choice.ID, index)
-		m.choice = nil
-		m.refresh(true)
+		m.keepChoice(m.ctl.AnswerChoice(m.choice.ID, index))
 		return m, nil, true
 	}
 	if m.choiceWriting && v.String() != "ctrl+d" && v.String() != "ctrl+q" {
@@ -40,15 +42,14 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "enter":
 			text := strings.TrimSpace(m.choiceInput.Value())
 			if text != "" {
-				m.ctl.AnswerChoiceText(m.choice.ID, text)
-				m.choice, m.choiceWriting = nil, false
+				m.keepChoice(m.ctl.AnswerChoiceText(m.choice.ID, text))
+				return m, nil, true
 			}
 		default:
-			var cmd tea.Cmd
-			m.choiceInput.SetWidth(max(1, m.width-2))
-			input, updateCmd := m.choiceInput.Update(v)
-			*m.choiceInput = input
-			cmd = updateCmd
+			if v.Paste && len(v.Runes) == 0 {
+				return m, nil, true // an image-only clipboard: answers are text
+			}
+			cmd := m.updateChoiceInput(v)
 			m.refresh(true)
 			return m, cmd, true
 		}
@@ -71,11 +72,11 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			if m.choiceInput == nil {
 				input := newComposer()
 				input.CharLimit = 4096
+				input.Placeholder = "Your answer"
 				m.choiceInput = &input
 			}
-			m.choiceInput.SetWidth(max(1, m.width-2))
-			m.choiceInput.Placeholder = "Your answer"
-			break
+			m.refresh(true)
+			return m, nil, true
 		}
 		return answer(m.choiceSel)
 	case "esc":
@@ -90,6 +91,27 @@ func (m model) choiceKey(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
+// keepChoice closes the answered question and keeps its record in the chat.
+func (m *model) keepChoice(record core.Record, ok bool) {
+	m.choice, m.choiceWriting = nil, false
+	if ok {
+		m.entries = append(m.entries, record)
+	}
+	m.refresh(true)
+}
+
+// choiceInputHeight is the most rows the custom answer may take: the screen
+// without the question title and the bottom margin.
+func (m model) choiceInputHeight() int { return max(1, m.height-3) }
+
+// updateChoiceInput edits the custom answer like the composer: it grows with
+// its lines, and Alt+Enter, Shift+Enter or Ctrl+J insert a newline.
+func (m *model) updateChoiceInput(msg tea.Msg) tea.Cmd {
+	cmd := updateTextarea(m.choiceInput, msg, m.choiceInputHeight())
+	fitTextarea(m.choiceInput, m.width, m.choiceInputHeight())
+	return cmd
+}
+
 // choiceBlock is the question and its options, drawn in the composer's place.
 func (m model) choiceBlock() string {
 	width := max(1, m.width)
@@ -97,8 +119,12 @@ func (m model) choiceBlock() string {
 	dim, accent := lipgloss.NewStyle().Foreground(grayColor), lipgloss.NewStyle().Foreground(accentColor)
 	rows := []string{title.Render(ansi.Truncate(sanitizeLabel(m.choice.Title), width, "…"))}
 	if m.choiceWriting {
-		m.choiceInput.SetWidth(max(1, width-2))
-		return strings.Join(append(rows, m.choiceInput.View(), dim.Render(ansi.Truncate("Enter to send · Esc to go back", width, "…"))), "\n")
+		fitTextarea(m.choiceInput, width, m.choiceInputHeight())
+		lines := strings.Split(m.choiceInput.View(), "\n")
+		for i, line := range lines {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+		return strings.Join(append(rows, lines...), "\n")
 	}
 	options := append(append([]string(nil), m.choice.Options...), "Write your own answer…")
 	count := len(options)
@@ -121,4 +147,71 @@ func (m model) choiceBlock() string {
 	}
 
 	return strings.Join(rows, "\n")
+}
+
+// renderChoiceRecord draws an answered question as "question: answer" with the
+// question in the accent color and the answer in the user message color.
+func renderChoiceRecord(text string, width int) string {
+	title, answer, _ := strings.Cut(text, entities.ChoiceSeparator)
+	head := []rune(sanitizeLabel(title) + ": ")
+	orig := append(head, []rune(answer)...)
+	rows := strings.Split(ansi.Wrap(string(orig), width, ""), "\n")
+	accent, user := lipgloss.NewStyle().Foreground(accentColor), lipgloss.NewStyle().Foreground(userColor)
+	pos := 0
+	for i, row := range rows {
+		var b strings.Builder
+		var run []rune
+		inHead := true
+		flush := func() {
+			if len(run) == 0 {
+				return
+			}
+			if inHead {
+				b.WriteString(accent.Render(string(run)))
+			} else {
+				b.WriteString(user.Render(string(run)))
+			}
+			run = run[:0]
+		}
+		for _, r := range row {
+			for pos < len(orig) && orig[pos] != r && unicode.IsSpace(orig[pos]) {
+				pos++
+			}
+			isHead := pos < len(head)
+			if isHead != inHead {
+				flush()
+				inHead = isHead
+			}
+			run = append(run, r)
+			pos++
+		}
+		flush()
+		rows[i] = b.String()
+	}
+	return strings.Join(rows, "\n")
+}
+
+// wantsMouse reports whether mouse reporting should be on. It stays off by
+// default so the terminal owns selection; the tracing entry view scrolls with
+// the wheel, and the custom answer moves its cursor with a click.
+func (m model) wantsMouse() bool {
+	return m.traceEntryView() || (m.menu == nil && m.choice != nil && m.choiceWriting)
+}
+
+// clickChoiceInput moves the cursor of the custom answer to the clicked cell.
+// The answer starts one row below the composer top, under the question title.
+func (m *model) clickChoiceInput(x, y int) tea.Cmd {
+	if y < m.viewport.topMargin() || y >= m.viewport.Height {
+		return nil
+	}
+	r := y - m.viewport.topMargin() + m.viewport.YOffset - m.inputTop - 1
+	rows := composerLayout(m.choiceInput.Value(), m.choiceInput.Width())
+	offset, ok := textareaOffset(m.choiceInput, rows, x, r)
+	if !ok {
+		return nil
+	}
+	moveCursor(m.choiceInput, offset, len(rows)+1)
+	cmd := m.updateChoiceInput(composerNoop{})
+	m.refresh(false)
+	return cmd
 }

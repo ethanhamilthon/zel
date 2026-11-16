@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -90,10 +91,13 @@ func (m *model) composerRows() []composerRow {
 	return m.layout
 }
 
-func (m *model) composerCursorRow(rows []composerRow) int {
-	lines := strings.Split(m.input.Value(), "\n")
+func (m *model) composerCursorRow(rows []composerRow) int { return cursorRow(&m.input, rows) }
+
+// cursorRow is the visual row of the cursor of input laid out as rows.
+func cursorRow(input *textarea.Model, rows []composerRow) int {
+	lines := strings.Split(input.Value(), "\n")
 	base := 0
-	for _, line := range lines[:min(m.input.Line(), len(lines))] {
+	for _, line := range lines[:min(input.Line(), len(lines))] {
 		base += len([]rune(line)) + 1
 	}
 	first := 0
@@ -102,25 +106,27 @@ func (m *model) composerCursorRow(rows []composerRow) int {
 			first++
 		}
 	}
-	return first + m.input.LineInfo().RowOffset
+	return first + input.LineInfo().RowOffset
 }
 
 // composerScroll returns the first visual row shown by the composer. The textarea keeps its
 // viewport offset private, so the offset is recovered by matching its rendered rows against
 // the layout. Offsets near the cursor are tried first.
-func (m *model) composerScroll(rows []composerRow) int {
-	height := m.input.Height()
+func (m *model) composerScroll(rows []composerRow) int { return scrollRow(&m.input, rows) }
+
+func scrollRow(input *textarea.Model, rows []composerRow) int {
+	height := input.Height()
 	if len(rows) <= height {
 		return 0
 	}
-	value := []rune(m.input.Value())
+	value := []rune(input.Value())
 	text := func(i int) string {
 		if i >= len(rows) {
 			return ""
 		}
 		return strings.TrimRight(string(value[rows[i].start:rows[i].end]), " ")
 	}
-	view := strings.Split(m.input.View(), "\n")
+	view := strings.Split(input.View(), "\n")
 	matches := func(offset int) bool {
 		for i := 0; i < height && i < len(view); i++ {
 			if strings.TrimRight(ansi.Strip(view[i]), " ") != text(offset+i) {
@@ -129,7 +135,7 @@ func (m *model) composerScroll(rows []composerRow) int {
 		}
 		return true
 	}
-	cursor := m.composerCursorRow(rows)
+	cursor := cursorRow(input, rows)
 	low := max(0, cursor-height+1)
 	for offset := low; offset <= min(cursor, len(rows)); offset++ {
 		if matches(offset) {
@@ -144,22 +150,21 @@ func (m *model) composerScroll(rows []composerRow) int {
 	return low
 }
 
+// composerOffset is the rune offset in the composer under the screen cell x, y.
 func (m *model) composerOffset(x, y int) (int, bool) {
 	if y < m.viewport.topMargin() || y >= m.viewport.Height {
 		return 0, false
 	}
-	value := m.input.Value()
-	if value == "" {
+	return textareaOffset(&m.input, m.composerRows(), x, y-m.viewport.topMargin()+m.viewport.YOffset-m.inputTop)
+}
+
+// textareaOffset is the rune offset in input under the cell x of its visible row r.
+func textareaOffset(input *textarea.Model, rows []composerRow, x, r int) (int, bool) {
+	if len(rows) == 0 || r < 0 || r >= input.Height() {
 		return 0, false
 	}
-	rows := m.composerRows()
-	height := m.input.Height()
-	r := y - m.viewport.topMargin() + m.viewport.YOffset - m.inputTop
-	if r < 0 || r >= height {
-		return 0, false
-	}
-	row := rows[min(len(rows)-1, m.composerScroll(rows)+r)]
-	runes := []rune(value)
+	row := rows[min(len(rows)-1, scrollRow(input, rows)+r)]
+	runes := []rune(input.Value())
 	cx := max(0, x)
 	offset, cells := row.start, 0
 	for offset < row.end && cells < cx {
@@ -170,7 +175,13 @@ func (m *model) composerOffset(x, y int) (int, bool) {
 }
 
 func (m *model) setCursorOffset(offset int) tea.Cmd {
-	lines := strings.Split(m.input.Value(), "\n")
+	moveCursor(&m.input, offset, len(m.composerRows())+1)
+	return m.updateInput(composerNoop{})
+}
+
+// moveCursor puts the cursor of input at the rune offset; guard bounds the row steps.
+func moveCursor(input *textarea.Model, offset, guard int) {
+	lines := strings.Split(input.Value(), "\n")
 	row, col := 0, offset
 	for row < len(lines)-1 && col > len([]rune(lines[row])) {
 		col -= len([]rune(lines[row])) + 1
@@ -178,15 +189,13 @@ func (m *model) setCursorOffset(offset int) tea.Cmd {
 	}
 	col = min(max(col, 0), len([]rune(lines[row])))
 	// Vertical movement works on visual rows, so step until the logical row matches.
-	guard := len(m.composerRows()) + 1
-	for ; m.input.Line() > row && guard > 0; guard-- {
-		m.input.CursorUp()
+	for ; input.Line() > row && guard > 0; guard-- {
+		input.CursorUp()
 	}
-	for ; m.input.Line() < row && guard > 0; guard-- {
-		m.input.CursorDown()
+	for ; input.Line() < row && guard > 0; guard-- {
+		input.CursorDown()
 	}
-	m.input.SetCursor(col)
-	return m.updateInput(composerNoop{})
+	input.SetCursor(col)
 }
 
 func (m *model) composerCursorOffset() int {

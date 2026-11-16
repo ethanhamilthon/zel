@@ -98,13 +98,7 @@ func (m model) workingBlock() string {
 	if !status.Busy {
 		return ""
 	}
-	// Visible assistant output replaces the indicator until work resumes.
-	if !status.Cancelling && len(m.entries) > m.turnIndex {
-		last := m.entries[len(m.entries)-1]
-		if last.Kind == "assistant" && strings.TrimSpace(last.Text) != "" {
-			return ""
-		}
-	}
+	// The indicator stays for the whole turn, below the streaming answer too.
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
 	_, appearance := m.ctl.Appearance()
 	text := ansi.Truncate(workingText(status, m.turnSteps(), appearance.ShowBash), max(1, m.width-2), "…")
@@ -208,7 +202,9 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.refresh(true)
 		cmd = m.pulse()
 	case "agent":
-		m.entries = core.ApplyEvent(m.entries, *e.Agent)
+		if !m.confirmSent(*e.Agent) {
+			m.entries = core.ApplyEvent(m.entries, *e.Agent)
+		}
 		if meta := e.Agent.Meta; meta != nil && meta.ContextInput != nil {
 			m.contextTokens = *meta.ContextInput
 		}
@@ -226,6 +222,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.ctl.LogEvent(e.Kind, e.Text)
 	case "session":
 		m.entries, m.contextTokens = slices.Clone(e.Session.Records), e.Session.Context
+		m.sentEntry = 0
 		m.releaseCommittedTrace()
 		m.turnIndex = len(m.entries)
 		m.cache = nil
@@ -239,6 +236,7 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 		m.fileIndexCache = nil
 		m.refresh(true)
 	case "done":
+		m.dropSent()
 		m.releaseCommittedTrace()
 		m.contextTokens = e.Context
 		if len(e.Unsent) > 0 {

@@ -1158,3 +1158,51 @@ func TestPromotedBashKeepsTimeoutAndCanBeStopped(t *testing.T) {
 		})
 	}
 }
+
+// Answered questions stay in the chat at their place and come back on resume.
+func TestChoiceAnswersStayInTheChat(t *testing.T) {
+	a := newTestAgent(t, okProvider(), Options{})
+	a.OnChoiceChanged(func() {})
+	if _, err := turn(t, a, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if r := sock(t, a, "choice.ask", map[string]any{"title": "Color: which?", "options": []string{"Blue"}}); !r.OK {
+		t.Fatalf("ask: %+v", r)
+	}
+	if rec, ok := a.AnswerChoice(1, 0); !ok || rec.Kind != "choice" || rec.Text != "Color: which?\x1fBlue" {
+		t.Fatalf("record: %+v %v", rec, ok)
+	}
+	if _, ok := a.AnswerChoice(1, 0); ok {
+		t.Fatal("answered twice")
+	}
+	a.Queue().Take()
+	if _, err := turn(t, a, "second"); err != nil {
+		t.Fatal(err)
+	}
+	kinds := func(records []Record) string {
+		var out []string
+		for _, r := range records {
+			if r.Kind == "user" || r.Kind == "choice" {
+				out = append(out, r.Kind+":"+r.Text)
+			}
+		}
+		return strings.Join(out, "|")
+	}
+	want := "user:first|choice:Color: which?\x1fBlue|user:second"
+	if got := kinds(a.Records()); got != want {
+		t.Fatalf("records %q", got)
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	id, dir := a.SessionID(), a.session().dir
+	a.Close()
+	again, err := New(dir, Options{Mode: "headless", Resume: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if got := kinds(again.Records()); got != want {
+		t.Fatalf("resumed records %q", got)
+	}
+}

@@ -2,6 +2,8 @@ package core
 
 import (
 	"slices"
+
+	"zel/internal/entities"
 )
 
 func (a *Runtime) Records() []Record { return a.session().Records() }
@@ -10,7 +12,14 @@ func (s *session) Records() []Record {
 	s.histMu.RLock()
 	defer s.histMu.RUnlock()
 	var records []Record
+	next := 0
+	choicesBefore := func(seq int) {
+		for ; next < len(s.choices) && s.choices[next].Seq <= seq; next++ {
+			records = append(records, entities.ChoiceRecord(s.choices[next].Title, s.choices[next].Answer))
+		}
+	}
 	for seq := range s.History {
+		choicesBefore(seq)
 		meta := s.itemMeta[seq]
 		for _, r := range s.projection(seq).records {
 			if meta != nil {
@@ -23,6 +32,7 @@ func (s *session) Records() []Record {
 			records = append(records, r)
 		}
 	}
+	choicesBefore(len(s.History))
 	return append(records, s.imageWarnings...)
 }
 
