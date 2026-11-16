@@ -88,7 +88,7 @@ func TestBashOutputExitCodeAndEnvironment(t *testing.T) {
 	}
 	// The folder of the zel binary comes first, so zel finds itself.
 	path := filepath.SplitList(lines[7])
-	if len(path) < 3 || path[1] != filepath.Join(s.dir, ".zel", "bin") || path[2] != filepath.Join(a.Home(), "bin") {
+	if len(path) < 2 || strings.Join(path[1:], string(os.PathListSeparator)) != os.Getenv("PATH") {
 		t.Fatalf("PATH = %s", lines[7])
 	}
 }

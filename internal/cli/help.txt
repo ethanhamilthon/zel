@@ -35,12 +35,12 @@ CONFIG
     api_key = "${{ echo $OPENAI_API_KEY }}"
 
     [hooks]
-    turn_end = ["~/.zel/bin/check-git"]
+    turn_end = ["./scripts/check-git"]
 
     [completions]
     plan = "${{ cat PLAN.md }}"
 
-  Scripts in ~/.zel/bin and ./.zel/bin are on the agent's PATH.
+  Scripts use your normal PATH, or can be invoked by their paths.
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info

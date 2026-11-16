@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-//go:embed bash-api.md examples/*.toml examples/bin/* examples/README.md
+//go:embed bash-api.md examples/*.toml examples/web-search examples/README.md
 var files embed.FS
 
 // Topic is one piece of the reference.
@@ -107,7 +107,7 @@ func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")
 	b.WriteString(strings.TrimSpace(string(readme)))
-	for _, name := range []string{"global-zel.toml", "project-zel.toml", "bin/web-search"} {
+	for _, name := range []string{"global-zel.toml", "project-zel.toml", "web-search"} {
 		data, _ := files.ReadFile("examples/" + name)
 		fmt.Fprintf(&b, "\n\n# --- %s\n%s", name, strings.TrimSpace(string(data)))
 	}

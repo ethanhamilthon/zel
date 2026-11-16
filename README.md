@@ -38,8 +38,8 @@ Zel reads `~/.zel/zel.toml`, then your project's `./zel.toml`, then any
 `--config FILE` layers. Later layers override earlier ones.
 
 Use these files to set instructions, providers, colors, hooks and prompt
-completions. Put your own tool scripts in `~/.zel/bin` or `./.zel/bin` and
-describe them in your instructions. No plugin framework needed.
+completions. Describe your own tools in your instructions and invoke scripts
+by their paths, or install them on your normal `PATH`. No plugin framework needed.
 
 Configuration reloads automatically. `zel config` shows the merged result.
 See [configuration examples](docs/examples/) for a starting point.

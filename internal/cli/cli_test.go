@@ -587,7 +587,7 @@ func TestUpdateReplacesBinaryWithVerifiedRelease(t *testing.T) {
 	}
 }
 
-// A parent `zel -p` whose bash runs a child `zel -p` and a script of ./.zel/bin:
+// A parent `zel -p` whose bash runs a child `zel -p` and an explicitly invoked script:
 // the whole path through the bash tool, the socket and the child's report.
 func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if testing.Short() {
@@ -636,7 +636,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 			if !strings.Contains(body.Instructions, "Project rule: be brief") {
 				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
 			}
-			args, _ := json.Marshal(map[string]string{"command": "zel -p 'child task'\nhello world"})
+			args, _ := json.Marshal(map[string]string{"command": "zel -p 'child task'\n./hello world"})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": string(args)})
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[%s]}}\n\n", item)
@@ -650,10 +650,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 		t.Fatal(err)
 	}
 	project := writeLocalConfig(t, `instructions = [{text = "Project rule: be brief", headless = true}]`)
-	if err := os.MkdirAll(filepath.Join(project, ".zel", "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(project, ".zel", "bin", "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(project, "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out, stderr strings.Builder

@@ -190,7 +190,6 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_SOCKET":     s.socketPath(),
 		"ZEL_TOKEN":      s.token,
 		"ZEL_CONFIG":     strings.Join(s.configPaths(), string(os.PathListSeparator)),
-		"PATH":           strings.Join([]string{filepath.Join(s.dir, ".zel", "bin"), filepath.Join(s.home, "bin"), os.Getenv("PATH")}, string(os.PathListSeparator)),
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session

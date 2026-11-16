@@ -50,8 +50,9 @@ instructions, hooks and prompt completions.
   `ZEL_MODE` (`main` or `headless`), `ZEL_DEPTH`, `ZEL_PARENT` (for a child),
   `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG` (the config layers, `:`-separated),
   `ZEL_PROVIDER`, `ZEL_MODEL`, `ZEL_EFFORT`, `ZEL_TASK` inside a task,
-  `ZEL_HOOK` inside a hook, the `[env]` of the config, and `PATH` with
-  `./.zel/bin` and `~/.zel/bin` in front. API keys are never exported.
+  `ZEL_HOOK` inside a hook, the `[env]` of the config, and the inherited `PATH`
+  with the running Zel binary's directory in front so `zel` finds itself.
+  No special script folders are added. API keys are never exported.
 
 There is no sandbox: bash runs with your user's permissions and network access.
 
@@ -196,8 +197,8 @@ plan = "${{ cat PLAN.md }}"
 - `settings.accent` of 0.7.0 is read as `colors.accent`, with a notice;
   picking an accent in Settings moves it there.
 
-Your own tools are scripts in `~/.zel/bin` or `./.zel/bin`, which lead PATH;
-tell the agent about them in `instructions`.
+Tell the agent about your own tools in `instructions`. Invoke scripts by their
+paths, or install them on your normal `PATH`; Zel does not manage script folders.
 
 ## Hooks
 
@@ -367,5 +368,5 @@ Strings and numbers in highlighted bash keep fixed tones.
 
 ## Examples
 
-See the examples topic: a global zel.toml, a project zel.toml and a script
-tool for `~/.zel/bin`.
+See the examples topic: a global zel.toml, a project zel.toml and a standalone
+web-search script.
