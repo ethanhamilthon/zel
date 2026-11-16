@@ -19,12 +19,12 @@ func TestFreeformRoundTrip(t *testing.T) {
 		_ = json.Unmarshal(data, &sent)
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, ev := range []string{
-			`{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","call_id":"c1","name":"lua","input":""}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","call_id":"c1","name":"script","input":""}}`,
 			`{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"print(\"a"}`,
 			`{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"\"\n)"}`,
 			`{"type":"response.custom_tool_call_input.done","output_index":0,"input":"print(\"a\"\n)"}`,
-			`{"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","call_id":"c1","name":"lua","input":"print(\"a\"\n)"}}`,
-			`{"type":"response.completed","response":{"output":[{"type":"custom_tool_call","call_id":"c1","name":"lua","input":"print(\"a\"\n)"}]}}`,
+			`{"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","call_id":"c1","name":"script","input":"print(\"a\"\n)"}}`,
+			`{"type":"response.completed","response":{"output":[{"type":"custom_tool_call","call_id":"c1","name":"script","input":"print(\"a\"\n)"}]}}`,
 		} {
 			fmt.Fprintf(w, "data: %s\n\n", ev)
 		}
@@ -36,10 +36,10 @@ func TestFreeformRoundTrip(t *testing.T) {
 	}
 	history := []json.RawMessage{
 		json.RawMessage(`{"role":"user","content":"hi"}`),
-		json.RawMessage(`{"type":"function_call","call_id":"p1","name":"lua","arguments":"{\"code\":\"x = 1\"}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"p1","name":"script","arguments":"{\"code\":\"x = 1\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"p1","output":"ok"}`),
 	}
-	tools := []Tool{{Name: "lua", Description: "d", Freeform: "code", Parameters: map[string]any{"type": "object"}}}
+	tools := []Tool{{Name: "script", Description: "d", Freeform: "code", Parameters: map[string]any{"type": "object"}}}
 	var args string
 	var done json.RawMessage
 	err := client.Stream(context.Background(), Request{Model: "m", Input: history, Tools: tools}, func(e StreamEvent) error {

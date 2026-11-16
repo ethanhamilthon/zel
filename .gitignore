@@ -1,7 +1,6 @@
 /zel
 /dist/
 .zeldev
-.orch/
+
 *.test
-TODO.md
-.prompts/
+
