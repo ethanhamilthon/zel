@@ -185,6 +185,10 @@ rewriting hooks chain.
 `session_closed` runs within what is left of the 5 s shutdown budget, after
 the session's tasks were stopped.
 
+zel writes no window title or progress to the terminal. A hook can, by writing
+to `/dev/tty`; the global example shows the terminal progress bar (OSC 9;4)
+on `turn_start`, `turn_end`, `error` and `session_closed`.
+
 ## Prompt completions
 
 `[completions] name = "text"` registers `#name` in the main session. Typing

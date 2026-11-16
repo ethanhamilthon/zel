@@ -28,7 +28,6 @@ type renderedEntry struct {
 }
 type model struct {
 	ctl                       *core.Controller
-	term                      termState
 	display                   *display
 	events                    *eventQueue
 	input                     textarea.Model
@@ -209,9 +208,6 @@ func (m *model) add(kind, text string) {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	wasTraceEntry := m.traceEntryView()
-	if _, ok := msg.(tea.KeyMsg); ok {
-		m.term.seen()
-	}
 	if e, ok := msg.(core.Event); !ok || e.Kind != "done" {
 		m.syncSteer()
 	}
@@ -318,7 +314,6 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refresh(follow)
 			return m, nil
 		}
-		m.term.tick()
 		m.refresh(follow)
 		return m, m.pulse()
 	case subagentsChanged:

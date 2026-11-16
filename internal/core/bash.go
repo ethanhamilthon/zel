@@ -102,25 +102,27 @@ func exitCode(err error) int {
 	return 1
 }
 
-// bashLabel is what the working indicator shows for a call: its first command line.
+// Bounds of the working indicator label: the indicator cuts lines to its width
+// and cycles through them, so longer ones are not needed.
+const (
+	labelLines    = 100
+	labelLineRune = 200
+)
+
+// bashLabel is what the working indicator shows for a call: the command as is,
+// its lines without empty ones and # comments, one per row.
 func bashLabel(command string) string {
-	line := ""
+	var lines []string
 	for _, l := range strings.Split(command, "\n") {
-		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
-			line = l
+		if l = strings.TrimSpace(l); l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if r := []rune(l); len(r) > labelLineRune {
+			l = string(r[:labelLineRune-1]) + "…"
+		}
+		if lines = append(lines, l); len(lines) == labelLines {
 			break
 		}
 	}
-	switch {
-	case strings.HasPrefix(line, "zel choice"):
-		return "asking you"
-	case strings.HasPrefix(line, "zel task run"):
-		return "starting a task"
-	case strings.HasPrefix(line, "zel -p"):
-		return "running a subagent"
-	}
-	if r := []rune(line); len(r) > 80 {
-		line = string(r[:79]) + "…"
-	}
-	return "$ " + line
+	return strings.Join(lines, "\n")
 }

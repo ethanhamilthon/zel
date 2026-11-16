@@ -3,12 +3,14 @@ package core
 import (
 	"slices"
 	"sync"
+	"time"
 )
 
 // activity is one foreground host operation of a session that is in progress.
 type activity struct {
 	id    uint64
 	label string
+	at    time.Time // when it began
 }
 
 // activities holds the foreground operations of one session. They overlap, so each
@@ -34,7 +36,7 @@ func (s *session) beginActivity(label string) (end func()) {
 	acts.mu.Lock()
 	acts.seq++
 	id := acts.seq
-	acts.list = append(acts.list, activity{id: id, label: label})
+	acts.list = append(acts.list, activity{id: id, label: label, at: time.Now()})
 	acts.last = label
 	acts.mu.Unlock()
 	s.publishActivity()
@@ -53,16 +55,24 @@ func (s *session) beginActivity(label string) (end func()) {
 func (a *Runtime) Activity() string { return a.session().Activity() }
 
 func (s *session) Activity() string {
+	label, _ := s.liveActivity()
+	return label
+}
+
+// LiveActivity is the operation the session waits on and when it began; "" when none runs.
+func (a *Runtime) LiveActivity() (string, time.Time) { return a.session().liveActivity() }
+
+func (s *session) liveActivity() (string, time.Time) {
 	acts := s.acts
 	if acts == nil {
-		return ""
+		return "", time.Time{}
 	}
 	acts.mu.Lock()
 	defer acts.mu.Unlock()
 	if n := len(acts.list); n > 0 {
-		return acts.list[n-1].label
+		return acts.list[n-1].label, acts.list[n-1].at
 	}
-	return ""
+	return "", time.Time{}
 }
 
 // LastActivity is the label of the newest foreground operation of the turn, also

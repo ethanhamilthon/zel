@@ -731,3 +731,10 @@ func TestPromptTokens(t *testing.T) {
 		}
 	}
 }
+
+// The working indicator gets the command as is: no "$ ", no special labels, no comments.
+func TestBashLabel(t *testing.T) {
+	if got := bashLabel("# look\n\nzel choice \"Q\" \"A\"\n  ls -la  \n"); got != "zel choice \"Q\" \"A\"\nls -la" {
+		t.Fatalf("label = %q", got)
+	}
+}

@@ -25,7 +25,6 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	defer keyboard.close()
 	m := newModel(a, cwd)
 	defer m.events.Close()
-	termOut = os.Stdout
 	output := &cursorOutput{ReadWriteCloser: os.Stdout}
 	// Keep mouse reporting off by default so the terminal owns selection and copying.
 	// The tracing entry view enables it temporarily for wheel scrolling.
@@ -47,7 +46,6 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	keyboard.close()
 	stop()
 	if m, ok := final.(model); ok {
-		m.term.reset()
 		err = errors.Join(err, m.failure)
 		m.ctl.Close()
 		if m.fileScanCancel != nil {
@@ -129,9 +127,22 @@ func workingText(status core.Status, steps int) string {
 		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
 	if !status.Cancelling {
-		parts = append(parts, cmp.Or(status.Activity, "thinking..."))
+		parts = append(parts, cmp.Or(activityLine(status, time.Now()), "thinking..."))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// activityStep is how long each line of a multi-line command stays in the indicator.
+const activityStep = 150 * time.Millisecond
+
+// activityLine is the row of the activity to show now: a running multi-line
+// command cycles through its lines, anything else shows its first line.
+func activityLine(status core.Status, now time.Time) string {
+	lines := strings.Split(status.Activity, "\n")
+	if !status.Live || len(lines) < 2 {
+		return lines[0]
+	}
+	return lines[int(max(0, now.Sub(status.LiveSince))/activityStep)%len(lines)]
 }
 
 // turnSteps counts the tool calls and thinking blocks of the running turn. The
@@ -190,19 +201,6 @@ func (m model) handleControl(e core.Event) (tea.Model, tea.Cmd) {
 	m.menuDirty = true // anything the session did may show on a live page
 	follow := m.viewport.AtBottom()
 	var cmd tea.Cmd
-	switch e.Kind {
-	case "started":
-		m.term.start(e.Title)
-	case "done":
-		m.term.finish(e.Status, e.Title)
-	case "session":
-		m.term.state = "idle"
-		m.term.rename(e.Session.Title)
-	default:
-		if e.Title != "" {
-			m.term.rename(e.Title)
-		}
-	}
 	switch e.Kind {
 	case "started":
 		m.turnIndex = len(m.entries)

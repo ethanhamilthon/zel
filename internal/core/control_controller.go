@@ -60,7 +60,8 @@ func (c *Controller) Status() (s Status) {
 			s.Busy, s.Cancelling = true, c.active.cancelled
 			s.Started = c.active.started
 			s.Queued = c.a.Queue().Pending()
-			s.Activity = cmp.Or(c.a.Activity(), c.a.LastActivity())
+			live, since := c.a.LiveActivity()
+			s.Activity, s.Live, s.LiveSince = cmp.Or(live, c.a.LastActivity()), live != "", since
 		}
 	})
 	return s

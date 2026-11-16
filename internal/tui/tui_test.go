@@ -543,51 +543,6 @@ func TestTimelineCacheAndResize(t *testing.T) {
 	}
 }
 
-func TestTermStateTurn(t *testing.T) {
-	out := captureTerm(t)
-	var ts termState
-	ts.start("")
-	if got := out.String(); got != "\x1b]9;4;3\x07\x1b]2;⠋ zel\x07" {
-		t.Fatalf("start = %q", got)
-	}
-	out.Reset()
-	ts.rename("fix\nthe; bug")
-	ts.rename("fix\nthe; bug")
-	ts.tick()
-	if got := out.String(); got != "\x1b]2;⠋ fix the bug\x07\x1b]2;⠙ fix the bug\x07" {
-		t.Fatalf("rename/tick = %q", got)
-	}
-	out.Reset()
-	ts.finish("ok", "fix the bug")
-	if got := out.String(); got != "\x1b]9;4;0\x07\x1b]2;✓ fix the bug\x07" {
-		t.Fatalf("done = %q", got)
-	}
-	out.Reset()
-	ts.seen()
-	ts.seen()
-	if got := out.String(); got != "\x1b]2;fix the bug\x07" {
-		t.Fatalf("seen = %q", got)
-	}
-	out.Reset()
-	ts.start("fix the bug")
-	out.Reset()
-	ts.finish("error", "fix the bug")
-	got := out.String()
-	for _, want := range []string{"\x1b]9;4;2;100\x07", "✗ fix the bug"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("error finish missing %q in %q", want, got)
-		}
-	}
-	if strings.Contains(got, "777;notify") {
-		t.Fatalf("desktop notification sent: %q", got)
-	}
-	out.Reset()
-	ts.reset()
-	if got := out.String(); got != "\x1b]9;4;0\x07\x1b]2;\x07" {
-		t.Fatalf("reset = %q", got)
-	}
-}
-
 func TestCancelledTurnRestoresUnsentSteeringIntoComposer(t *testing.T) {
 	m, _ := busyModel(t)
 	m.input.SetValue("not accepted")
@@ -2695,6 +2650,23 @@ func TestWorkingIndicatorShowsActivity(t *testing.T) {
 	}
 }
 
+// A running multi-line command cycles through its lines; a finished one rests on its first.
+func TestWorkingIndicatorCyclesLines(t *testing.T) {
+	since := time.Now()
+	status := core.Status{Busy: true, Activity: "cd x\nmake\nls", Live: true, LiveSince: since}
+	var got []string
+	for i := range 4 {
+		got = append(got, activityLine(status, since.Add(time.Duration(i)*activityStep+time.Millisecond)))
+	}
+	if strings.Join(got, "|") != "cd x|make|ls|cd x" {
+		t.Fatalf("cycle = %q", got)
+	}
+	status.Live = false
+	if got := activityLine(status, since.Add(activityStep)); got != "cd x" {
+		t.Fatalf("finished command = %q", got)
+	}
+}
+
 // The # list filters the registered names, Tab writes the token, and Enter expands
 // it outside the UI loop: the composer is read-only meanwhile and takes the
 // expanded text. A failing completion keeps the draft.
@@ -3168,12 +3140,4 @@ func (m *model) applyAgent(e core.TurnEvent) {
 	if e.Meta != nil && e.Meta.ContextInput != nil {
 		m.contextTokens = *e.Meta.ContextInput
 	}
-}
-
-func captureTerm(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var out bytes.Buffer
-	termOut = &out
-	t.Cleanup(func() { termOut = nil })
-	return &out
 }
