@@ -10,7 +10,7 @@ zel edit FILE <<'EOF' ... EOF   -- exact replacements, all or none; prints the c
 zel task run [--name N] [--timeout S] [--cwd DIR] -- CMD...   -- a background task (or the script on stdin); prints t1. Tasks stop when the session ends. Give tasks clear names in the form "[type] [detail]", e.g. "worker-agent gemini-3.8-flash/high" or "install GitHub CLI".
 zel task list | get ID | tail ID [-n 20] | wait ID... [--timeout S] | stop ID
 [main] zel choice "Question" "A" "B" ...   -- the user picks one in the UI; prints c1 at once. End your turn: the answer arrives as <notification>c1 Question: A</notification>
-[nest] zel -p "prompt" [--model M --effort E --provider P --cwd DIR --json]   -- a subagent: prints its answer, stderr gets "zel: session ID". It has your call's limit, so longer: zel task run --name review -- zel -p "..."
+[nest] zel -p "prompt" [--model M --effort E --provider P --cwd DIR --json]   -- a subagent: prints its answer, stderr gets "zel: session ID". Ask the user for approval before launching subagents, unless the system prompt or the user's request explicitly allows you to launch them on your own. It has your call's limit, so longer: zel task run --name review -- zel -p "..."
 [nest] zel -p --resume ID "more"   -- another message to your subagent ID; it keeps its context
 zel cd [DIR]   -- the folder where your next bash calls and tasks start; prints the path; no DIR = back to the start folder
 zel view IMG...   -- attach images to your next request
