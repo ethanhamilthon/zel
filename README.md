@@ -54,7 +54,9 @@ reasoning effort (default `medium`).
 Ctrl+K opens the menu (typing `/` into an empty composer does too; Settings →
 Slash opens menu turns that off). Providers adds, edits or deletes providers;
 Settings controls auto compaction, reasoning summaries, the accent color, the
-bash timeout and the bash output limit; every other color is in `[colors]` (`zel docs colors`).
+bash timeout, the bash output limit and whether the running command shows in the
+working line (`settings.show_bash`, default on; off leaves only time, steps and
+queued input, e.g. `12s · 3 steps`; Tracing still shows every call); every other color is in `[colors]` (`zel docs colors`).
 The menus write into the zel.toml layer the value comes from: picking a model
 switches this session and updates the `model` line of the file that set it.
 API keys are stored as you type them; `${{ echo $VAR }}` reads one from the

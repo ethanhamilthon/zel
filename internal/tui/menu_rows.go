@@ -48,7 +48,7 @@ func (m model) buildMenuRows() []menuRow {
 		rows = []menuRow{{"Edit provider", mu.provider}, {"Delete provider", ""}}
 	case menuSettings:
 		s := m.ctl.Settings()
-		rows = []menuRow{{"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentName(s.Colors.Get("accent"))}, {"Bash timeout", fmt.Sprintf("%d s", s.BashTimeout)}, {"Bash output", bashOutputLabel(s.BashOutput)}}
+		rows = []menuRow{{"Auto compaction", compactionLabel(s.CompactionThreshold)}, {"Reasoning summary", fmt.Sprint(s.ReasoningSummary)}, {"Slash opens menu", fmt.Sprint(s.UI.SlashMenu)}, {"Accent color", accentName(s.Colors.Get("accent"))}, {"Bash timeout", fmt.Sprintf("%d s", s.BashTimeout)}, {"Bash output", bashOutputLabel(s.BashOutput)}, {"Show bash", onOff(s.UI.ShowBash)}}
 	case menuResume:
 		for _, s := range mu.sessions {
 			rows = append(rows, menuRow{sessionTitle(s), sessionTime(s.Updated)})
@@ -211,6 +211,13 @@ func (m model) menuRows() []menuRow {
 		c.query, c.indices, c.filtered = m.menu.query, indices, found
 	}
 	return found
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 func bashOutputLabel(n int) string {

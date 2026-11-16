@@ -1269,6 +1269,15 @@ func TestProviderAndSettingsMenusValidateAndPersist(t *testing.T) {
 	if m.menu.page != menuForm || m.menu.form.err == "" || m.ctl.Settings().BashOutput != 0 {
 		t.Fatal("bash output below 1000 accepted")
 	}
+	m.menu = &menuState{page: menuSettings, selected: 6}
+	if m.menuRows()[6] != (menuRow{"Show bash", "on"}) {
+		t.Fatalf("show bash row: %v", m.menuRows())
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.ctl.Settings().UI.ShowBash || m.menuRows()[6] != (menuRow{"Show bash", "off"}) {
+		t.Fatalf("show bash not toggled: %v", m.menuRows())
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m.menu = &menuState{page: menuSettings}
 	if saved := core.LoadConfig(f.a.Home(), f.project); saved.BashTimeout != 90 || saved.CompactionThreshold != 4096 {
 		t.Fatalf("settings not saved in zel.toml: %+v", saved)
@@ -2675,18 +2684,24 @@ func TestHighlightBashWrapsAndKeepsText(t *testing.T) {
 
 func TestWorkingIndicatorShowsActivity(t *testing.T) {
 	status := core.Status{Busy: true, Started: time.Now().Add(-69*time.Second - 300*time.Millisecond), Activity: "go test ./..."}
-	if got := workingText(status, 4); got != "1m9s · 4 steps · go test ./..." {
+	if got := workingText(status, 4, true); got != "1m9s · 4 steps · go test ./..." {
 		t.Fatalf("working text = %q", got)
 	}
-	if got := ansi.Truncate(workingText(status, 4), 20, "…"); !strings.HasPrefix(got, "1m9s · 4 steps") {
+	if got := ansi.Truncate(workingText(status, 4, true), 20, "…"); !strings.HasPrefix(got, "1m9s · 4 steps") {
 		t.Fatalf("narrow indicator lost time or steps: %q", got)
 	}
 	status.Activity = ""
-	if got := workingText(status, 4); got != "1m9s · 4 steps · thinking..." {
+	if got := workingText(status, 4, true); got != "1m9s · 4 steps · thinking..." {
 		t.Fatalf("indicator without an action = %q", got)
 	}
+	for _, activity := range []string{"", "go test ./..."} {
+		status.Activity = activity
+		if got := workingText(status, 4, false); got != "1m9s · 4 steps" {
+			t.Fatalf("show_bash=false leaves %q (activity %q)", got, activity)
+		}
+	}
 	status.Activity, status.Cancelling = "go test ./...", true
-	if got := workingText(status, 4); got != "1m9s · cancelling" {
+	if got := workingText(status, 4, true); got != "1m9s · cancelling" {
 		t.Fatalf("cancelling indicator = %q", got)
 	}
 }

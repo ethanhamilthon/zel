@@ -106,14 +106,14 @@ func (m model) workingBlock() string {
 		}
 	}
 	star := workingStars[int(max(0, time.Since(status.Started))/workingFrame)%len(workingStars)]
-	text := ansi.Truncate(workingText(status, m.turnSteps()), max(1, m.width-2), "…")
+	text := ansi.Truncate(workingText(status, m.turnSteps(), m.ctl.Settings().UI.ShowBash), max(1, m.width-2), "…")
 	return lipgloss.NewStyle().Foreground(accentColor).Render(star) + " " + lipgloss.NewStyle().Foreground(grayColor).Render(text) + "\n\n"
 }
 
 // workingText is the text of the working indicator: elapsed time, steps (or
 // cancelling), queued input, then the activity of the foreground host operation.
 // The activity goes last, so a narrow terminal cuts it before time and steps.
-func workingText(status core.Status, steps int) string {
+func workingText(status core.Status, steps int, showBash bool) string {
 	parts := []string{formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
 		parts = append(parts, "cancelling")
@@ -126,7 +126,7 @@ func workingText(status core.Status, steps int) string {
 	case queued > 1:
 		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
-	if !status.Cancelling {
+	if !status.Cancelling && showBash {
 		parts = append(parts, cmp.Or(activityLine(status, time.Now()), "thinking..."))
 	}
 	return strings.Join(parts, " · ")

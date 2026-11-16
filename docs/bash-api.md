@@ -37,6 +37,11 @@ instructions, hooks and prompt completions.
   output in `out`. Only the agent's bash calls are cut: task output, hook output
   and `${{ }}` are not (a `zel -p` subagent runs through bash, so its answer is).
   Behind it, a 1 MiB in-memory safety cap keeps head and tail.
+- `settings.show_bash` (default `true`) shows the running command in the working
+  line. With `false` the line keeps only time, steps and queued input
+  (`12s · 3 steps`), with no command and no `thinking...`, also after a call
+  ends. Tracing and task rows are unchanged. The Settings menu has a "Show bash"
+  row for it.
 - stdin is empty; pagers are off (`PAGER=cat`, `GIT_PAGER=cat`).
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
@@ -133,6 +138,7 @@ reasoning_summary = true
 slash_menu        = true
 bash_timeout      = 30         # seconds per bash call
 bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
+show_bash         = true       # false: the working line has no command and no `thinking...`
 
 [colors]                       # the TUI theme; see `zel docs colors`
 accent = "#c3e88d"

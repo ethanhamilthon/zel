@@ -48,6 +48,7 @@ func (c *Config) Describe() string {
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
 		{"settings.reasoning_summary", strconv.FormatBool(s.ReasoningSummary)},
 		{"settings.slash_menu", strconv.FormatBool(s.UI.SlashMenu)},
+		{"settings.show_bash", strconv.FormatBool(s.UI.ShowBash)},
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
 		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
 	} {

@@ -320,6 +320,7 @@ func (s *session) UpdateSettings(next Settings) error {
 		add("colors."+key, next.Colors[i] != cur.Colors[i], next.Colors[i])
 	}
 	add("settings.slash_menu", next.UI.SlashMenu != cur.UI.SlashMenu, next.UI.SlashMenu)
+	add("settings.show_bash", next.UI.ShowBash != cur.UI.ShowBash, next.UI.ShowBash)
 	add("settings.bash_timeout", next.BashTimeout != cur.BashTimeout, next.BashTimeout)
 	add("settings.bash_output", next.BashOutput != cur.BashOutput, next.BashOutput)
 	for _, c := range set {

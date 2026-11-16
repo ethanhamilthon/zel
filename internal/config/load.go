@@ -348,7 +348,7 @@ func (p parser) settings(lc *layerConf, v any) error {
 				return fmt.Errorf("%s: must be 0 (no cut) or an integer >= 1000 (bytes)", where)
 			}
 			apply = func(s *Settings) { s.BashOutput = int(n) }
-		case "reasoning_summary", "slash_menu":
+		case "reasoning_summary", "slash_menu", "show_bash":
 			b, ok := v.(bool)
 			if !ok {
 				return fmt.Errorf("%s: must be true or false", where)
@@ -356,6 +356,8 @@ func (p parser) settings(lc *layerConf, v any) error {
 			apply = func(s *Settings) {
 				if k == "slash_menu" {
 					s.UI.SlashMenu = b
+				} else if k == "show_bash" {
+					s.UI.ShowBash = b
 				} else {
 					s.ReasoningSummary = b
 				}

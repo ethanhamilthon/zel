@@ -268,10 +268,12 @@ func (m model) menuActivate() (tea.Model, tea.Cmd) {
 		if index == 3 {
 			open(menuAccent)
 			mu.selected = max(0, accentIndex(m.ctl.Settings().Colors.Get("accent")))
-		} else if index == 1 || index == 2 {
+		} else if index == 1 || index == 2 || index == 6 {
 			settings := m.ctl.Settings()
 			if index == 1 {
 				settings.ReasoningSummary = !settings.ReasoningSummary
+			} else if index == 6 {
+				settings.UI.ShowBash = !settings.UI.ShowBash
 			} else {
 				settings.UI.SlashMenu = !settings.UI.SlashMenu
 			}

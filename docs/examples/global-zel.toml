@@ -18,6 +18,7 @@ instructions = [
 [settings]
 compaction   = 400000
 bash_timeout = 30
+show_bash    = true     # false hides the running command in the working line (time and steps stay)
 bash_output  = 8000     # bytes per bash call; longer output is cut, the full text goes to a file
 
 [colors]

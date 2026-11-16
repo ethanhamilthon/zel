@@ -34,6 +34,7 @@ type Provider struct {
 // UI holds application display preferences.
 type UI struct {
 	SlashMenu bool
+	ShowBash  bool // show the running command in the working line
 }
 
 // Settings is the effective configuration merged from the zel.toml layers
@@ -52,7 +53,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
-		UI: UI{SlashMenu: true}, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
+		UI: UI{SlashMenu: true, ShowBash: true}, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {
