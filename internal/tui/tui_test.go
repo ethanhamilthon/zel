@@ -2684,6 +2684,22 @@ func TestCommittedTraceReleasedButLivePreviewKept(t *testing.T) {
 	}
 }
 
+func TestTraceReleasePreservesRenderedChatCache(t *testing.T) {
+	m := bareModel(t, t.TempDir())
+	m.width, m.height = 60, 20
+	m.entries = []entry{{Kind: "user", Text: "hello"}, {Kind: "output", Text: "hidden"}, {Kind: "assistant", Text: "**answer**"}}
+	before := m.timelineRows(0)
+	cached := m.cache[2].Text
+	m.releaseCommittedTrace()
+	if len(m.cache) != 2 || m.cache[1].Text != cached || m.cache[1].source.Kind != "assistant" {
+		t.Fatal("release invalidated chat cache")
+	}
+	after := m.timelineRows(0)
+	if !slices.Equal(before, after) {
+		t.Fatalf("release changed layout: %q != %q", before, after)
+	}
+}
+
 func TestTimelineSegmentsMatchReference(t *testing.T) {
 	build := func(m model, n int) model {
 		m.entries = nil

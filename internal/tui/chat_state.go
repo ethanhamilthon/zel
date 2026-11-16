@@ -3,21 +3,23 @@ package tui
 // Committed hidden records are reconstructed from the runtime trace. Only live
 // previews need a UI copy; keep chat history and turn summaries for scrollback.
 func (m *model) releaseCommittedTrace() {
-	kept := m.entries[:0]
-	for _, e := range m.entries {
+	kept, cached := m.entries[:0], m.cache[:0]
+	for i, e := range m.entries {
+		keep := e.Preview
 		switch e.Kind {
 		case "user", "assistant", "compaction", "turn_end":
+			keep = true
+		}
+		if keep {
 			kept = append(kept, e)
-		default:
-			if e.Preview {
-				kept = append(kept, e)
+			if i < len(m.cache) {
+				cached = append(cached, m.cache[i])
 			}
 		}
 	}
-	if len(kept) != len(m.entries) {
-		clear(m.entries[len(kept):])
-		m.entries = kept
-		m.cache = nil
-		m.historyStale = true
-	}
+	clear(m.entries[len(kept):])
+	clear(m.cache[len(cached):])
+	m.entries, m.cache = kept, cached
+	// Removed records had no chat rows. Preserve rendered chat and its index
+	// instead of invalidating every old answer at the end of each tool turn.
 }
