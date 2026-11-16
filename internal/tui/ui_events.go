@@ -356,9 +356,7 @@ func (r menuRequest) load(ctl *core.Controller) menuSnapshot {
 			snap.info = infoRows(info)
 		}
 	case menuTracing:
-		trace := append(ctl.Trace(), r.live...)
-		slices.SortStableFunc(trace, func(a, b core.TraceEntry) int { return a.At.Compare(b.At) })
-		snap.trace = trace
+		snap.trace = visibleTrace(append(ctl.Trace(), r.live...))
 	case menuResume:
 		if sessions, err := ctl.Sessions(); err == nil {
 			snap.sessions = sessions

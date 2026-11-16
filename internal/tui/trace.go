@@ -112,7 +112,10 @@ func (m model) liveTrace() []core.TraceEntry {
 // sessionTrace is the visible session trace. Hook execution records stay in
 // storage for diagnostics but are not displayed or searched in the TUI.
 func (m model) sessionTrace() []core.TraceEntry {
-	trace := append(m.ctl.Trace(), m.liveTrace()...)
+	return visibleTrace(append(m.ctl.Trace(), m.liveTrace()...))
+}
+
+func visibleTrace(trace []core.TraceEntry) []core.TraceEntry {
 	trace = slices.DeleteFunc(trace, func(e core.TraceEntry) bool { return e.Kind == "hook" })
 	slices.SortStableFunc(trace, func(a, b core.TraceEntry) int { return a.At.Compare(b.At) })
 	return trace

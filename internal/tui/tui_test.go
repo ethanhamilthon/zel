@@ -3292,6 +3292,16 @@ func TestHookRecordsHiddenOnlyFromTracing(t *testing.T) {
 		t.Fatal("UI filtering removed the stored diagnostic")
 	}
 	m.menu = &menuState{page: menuTracing, trace: m.sessionTrace(), query: "private hook output"}
+	req, ok := m.menuRequest()
+	if !ok {
+		t.Fatal("no live tracing request")
+	}
+	m.applyMenuSnapshot(req.load(m.ctl))
+	for _, e := range m.menu.trace {
+		if e.Kind == "hook" {
+			t.Fatal("live refresh restored a hidden hook")
+		}
+	}
 	if rows := m.menuRows(); len(rows) != 1 || rows[0].label != "No matches" {
 		t.Fatalf("hook searchable: %+v", rows)
 	}
