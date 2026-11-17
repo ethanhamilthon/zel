@@ -33,25 +33,25 @@ type app struct {
 	ctl     *core.Controller
 	runtime *core.Runtime
 
-	ctx                                           context.Context
-	cancel                                        context.CancelFunc
-	results                                       chan result
-	records                                       []core.Record
-	cache                                         []cachedRecord
-	input                                         editor
-	menu                                          *menu
-	choice                                        *core.Choice
-	answer                                        editor
-	choiceIndex                                   int
-	writing                                       bool
-	cwd                                           string
-	generation                                    int
-	queued                                        uint64
-	serial                                        uint64
-	queuedText                                    string
-	pending                                       string
-	turnIndex                                     int
-	contextTokens                                 int64
+	ctx         context.Context
+	cancel      context.CancelFunc
+	results     chan result
+	records     []core.Record
+	cache       []cachedRecord
+	input       editor
+	menu        *menu
+	choice      *core.Choice
+	answer      editor
+	choiceIndex int
+	writing     bool
+	cwd         string
+	generation  int
+	queued      uint64
+	serial      uint64
+	queuedText  string
+	pending     string
+	turnIndex   int
+
 	scroll                                        int
 	history, historyBase                          []row
 	visibleStart, chatHeight, inputY, inputHeight int
@@ -107,7 +107,6 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 	defer func() { cancel(); m.cancelPrompt(); m.ctl.Close() }()
 	if s, err := m.ctl.Session(); err == nil {
 		m.records = s.Records
-		m.contextTokens = s.Context
 	}
 	m.turnIndex = len(m.records)
 	a.OnChoiceChanged(func() { m.post(result{kind: "choice"}) })
@@ -259,9 +258,6 @@ func (m *app) control(e core.Event) {
 			m.pending = ""
 		}
 		m.records = core.ApplyEvent(m.records, *e.Agent)
-		if meta := e.Agent.Meta; meta != nil && meta.ContextInput != nil {
-			m.contextTokens = *meta.ContextInput
-		}
 	case "notice", "error":
 		m.ctl.LogEvent(e.Kind, e.Text)
 	case "fatal":
@@ -272,7 +268,6 @@ func (m *app) control(e core.Event) {
 		m.operation = false
 		m.modelsLoading = false
 		m.records = slices.Clone(e.Session.Records)
-		m.contextTokens = e.Session.Context
 		m.cache = nil
 		m.scroll = 0
 		m.turnIndex = len(m.records)
@@ -289,7 +284,6 @@ func (m *app) control(e core.Event) {
 		mdStable.key = nil
 	case "done":
 		m.pending = ""
-		m.contextTokens = e.Context
 		if e.Error != "" && !slices.ContainsFunc(m.records[min(m.turnIndex, len(m.records)):], func(r core.Record) bool { return r.Kind == "turn_end" }) {
 			m.notice(errors.New(e.Error))
 		}

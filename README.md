@@ -29,6 +29,9 @@ Ctrl+K opens the menu for models, sessions and settings. Type `@` for files
 or `#` for prompt completions. Ctrl+D stops the current turn; Ctrl+Q saves
 and quits. Bash calls and other details live in Tracing, not the chat.
 
+The composer follows the conversation and working indicator, rather than being
+pinned to the bottom. Model and context details are in Info, not in the chat.
+
 The interface uses tcell. Drag text to select and copy it, or use Shift+drag
 for native terminal selection. Click in the input to place the cursor;
 Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Some shortcuts need an

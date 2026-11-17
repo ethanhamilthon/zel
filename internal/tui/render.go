@@ -65,23 +65,27 @@ func (m *app) draw() {
 			choiceRows = min(len(m.choice.Options)+2, max(1, height/2))
 		}
 	}
-	reserve := inputHeight + completionRows + choiceRows + 2
-	indicatorHeight := min(len(indicators), max(0, height-reserve-1))
-	m.chatHeight = max(0, height-reserve-indicatorHeight)
-	maxScroll := max(0, len(m.history)-m.chatHeight)
-	m.scroll = min(m.scroll, maxScroll)
-	end := max(0, len(m.history)-m.scroll)
-	start := max(0, end-m.chatHeight)
-	m.visibleStart = start
-	for i, r := range m.history[start:end] {
+	// The composer is the tail of the same scrollable timeline, not a footer.
+	tailStart := len(m.history) + len(indicators)
+	gap := 0
+	if tailStart > 0 {
+		gap = 1
+	}
+	total := tailStart + gap + choiceRows + inputHeight + completionRows
+	m.scroll = max(0, min(m.scroll, max(0, total-height)))
+	start := max(0, total-height-m.scroll)
+	end := min(len(m.history), start+height)
+	m.visibleStart = min(start, len(m.history))
+	m.chatHeight = max(0, end-m.visibleStart)
+	for i, r := range m.history[m.visibleStart:end] {
 		drawRow(m.screen, i, r, width)
 	}
-	y := m.chatHeight
-	for _, r := range indicators[:indicatorHeight] {
+	y := len(m.history) - start
+	for _, r := range indicators {
 		drawRow(m.screen, y, r, width)
 		y++
 	}
-	y++
+	y += gap
 	m.inputY = y
 	m.inputHeight = inputHeight
 	if m.choice != nil {
@@ -125,12 +129,7 @@ func (m *app) draw() {
 			y++
 		}
 	}
-	s := m.ctl.Settings()
-	footer := s.Provider + "/" + s.Model + " · " + s.Effort + " · " + formatContext(m.contextTokens)
-	if s.Model == "" {
-		footer = "Ctrl+K · Configure a provider and choose a model"
-	}
-	m.line(height-1, footer, width, darkGray)
+
 	m.drawSelection()
 	m.screen.Show()
 }

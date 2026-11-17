@@ -153,6 +153,75 @@ func TestPruneBeforeTheNextFrame(t *testing.T) {
 	}
 }
 
+func TestInputFollowsChat(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		records []core.Record
+		pending string
+		tasks   []core.ActiveTask
+		inputY  int
+	}{
+		{name: "empty"},
+		{name: "user", records: []core.Record{{Kind: "user", Text: "hello"}}, inputY: 3},
+		{name: "assistant", records: []core.Record{{Kind: "assistant", Text: "hello"}}, inputY: 4},
+		{name: "pending", pending: "hello", inputY: 2},
+		{name: "working", tasks: []core.ActiveTask{{Name: "Running task", Started: time.Now()}}, inputY: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testApp(t)
+			m.records, m.pending, m.tasks = tc.records, tc.pending, tc.tasks
+			m.input.set("draft")
+			s := m.screen.(tcell.SimulationScreen)
+			for _, height := range []int{20, 40} {
+				s.SetSize(60, height)
+				m.draw()
+				if m.inputY != tc.inputY {
+					t.Fatalf("height %d: input at %d, want %d", height, m.inputY, tc.inputY)
+				}
+				if x, y, visible := s.GetCursor(); !visible || x != 6 || y != m.inputY {
+					t.Fatalf("cursor at %d,%d, visible %v", x, y, visible)
+				}
+				for y := m.inputY + m.inputHeight; y < height; y++ {
+					for x := range 60 {
+						if text, _, _ := s.Get(x, y); strings.TrimSpace(text) != "" {
+							t.Fatalf("unexpected footer at %d,%d: %q", x, y, text)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestComposerScrollsWithHistory(t *testing.T) {
+	m := testApp(t)
+	m.records = []core.Record{{Kind: "user", Text: strings.Repeat("history line\n", 40)}}
+	m.input.set("draft")
+	m.draw()
+	screen := m.screen.(tcell.SimulationScreen)
+	_, y, visible := screen.GetCursor()
+	if !visible || y != 19 {
+		t.Fatalf("following tail: cursor %d visible %v", y, visible)
+	}
+	m.scroll = 10
+	m.draw()
+	if _, _, visible := screen.GetCursor(); visible {
+		t.Fatal("composer should scroll out with the timeline")
+	}
+	if m.inputY < 20 {
+		t.Fatalf("composer pinned at %d", m.inputY)
+	}
+	m.editKey(tcell.NewEventKey(tcell.KeyRune, 'X', 0))
+	m.draw()
+	if _, _, visible := screen.GetCursor(); !visible {
+		t.Fatal("typing should return to the composer")
+	}
+	m.openMenu("info")
+	if m.menu == nil || m.menu.page != "info" {
+		t.Fatal("Info remains available")
+	}
+}
+
 func TestTinyScreenAndChoiceEditor(t *testing.T) {
 	m := testApp(t)
 	_, err := m.runtime.Ask("Long question", []string{"A", "B"})

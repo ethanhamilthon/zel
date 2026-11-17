@@ -155,7 +155,7 @@ try:
     wait(lambda:'second-model' in view(),'model list is searchable')
     capture('02-models')
     send('second'); send('\r'); wait(lambda:'medium' in view(),'effort picker opens')
-    send('\r'); wait(lambda:'fixture/second-model' in view(),'model selection is applied')
+    send('\r'); wait(lambda:'second-model' in (home/'zel.toml').read_text(),'model selection is applied')
     send('#pl'); wait(lambda:'#plan' in view(),'prompt suggestions open'); send('\t')
     capture('03-completed-token'); send(b'\x1b[D\x1b[D'); send(b'\x1b[3~')
     assert '#plan' not in view(), 'completed token was split instead of deleted'
