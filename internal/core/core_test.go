@@ -110,7 +110,19 @@ func sock(t *testing.T, a *Runtime, op string, args any) ipc.Response {
 	return sockAs(t, s.socketPath(), s.token, op, args)
 }
 
+// sockIn is sock from the folder cwd, like a zel command run by a bash call there.
+func sockIn(t *testing.T, a *Runtime, cwd, op string, args any) ipc.Response {
+	t.Helper()
+	s := a.session()
+	return sockFrom(t, s.socketPath(), s.token, cwd, op, args)
+}
+
 func sockAs(t *testing.T, path, token, op string, args any) ipc.Response {
+	t.Helper()
+	return sockFrom(t, path, token, "", op, args)
+}
+
+func sockFrom(t *testing.T, path, token, cwd, op string, args any) ipc.Response {
 	t.Helper()
 	data, err := json.Marshal(args)
 	if err != nil {
@@ -118,7 +130,7 @@ func sockAs(t *testing.T, path, token, op string, args any) ipc.Response {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	r, err := ipc.Call(ctx, path, ipc.Request{Token: token, Op: op, Args: data})
+	r, err := ipc.Call(ctx, path, ipc.Request{Token: token, Op: op, Cwd: cwd, Args: data})
 	if err != nil {
 		t.Fatalf("%s: %v", op, err)
 	}
@@ -632,14 +644,19 @@ func TestSocketSessionAndView(t *testing.T) {
 		t.Fatalf("rename: %+v %q", r, a.CustomTitle())
 	}
 	writeFile(t, filepath.Join(s.dir, "img.png"), string(tinyPNG()))
-	if r := sock(t, a, "view.add", map[string]any{"paths": []string{"img.png"}, "cwd": s.dir}); !r.OK {
+	if r := sockIn(t, a, s.dir, "view.add", map[string]any{"paths": []string{"img.png"}}); !r.OK {
 		t.Fatalf("view: %+v", r)
 	}
 	if got := a.Queue().Take(); len(got) != 1 || got[0].Text != "<notification>view: img.png attached</notification>" || len(got[0].Images) != 1 {
 		t.Fatalf("view input: %+v", got)
 	}
-	if r := sock(t, a, "view.add", map[string]any{"paths": []string{"missing.png"}, "cwd": s.dir}); r.Code != 1 {
+	if r := sockIn(t, a, s.dir, "view.add", map[string]any{"paths": []string{"missing.png"}}); r.Code != 1 {
 		t.Fatalf("missing image: %+v", r)
+	}
+	// A relative path is the caller's: a script that did cd sub, not the session folder.
+	writeFile(t, filepath.Join(s.dir, "sub", "deep.png"), string(tinyPNG()))
+	if r := sockIn(t, a, filepath.Join(s.dir, "sub"), "view.add", map[string]any{"paths": []string{"deep.png"}}); !r.OK {
+		t.Fatalf("view from a subfolder: %+v", r)
 	}
 }
 
@@ -989,7 +1006,7 @@ func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
 	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
 	pwd := func() string { return strings.TrimSpace(s.runBash(ctx, "pwd -P")) }
 
-	if r := sock(t, a, "cd", map[string]any{"dir": "sub", "cwd": start}); !r.OK || r.Out != sub+"\n" {
+	if r := sockIn(t, a, start, "cd", map[string]any{"dir": "sub"}); !r.OK || r.Out != sub+"\n" {
 		t.Fatalf("cd: %+v", r)
 	}
 	if pwd() != real(sub) {
@@ -1041,7 +1058,7 @@ func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
 		t.Fatalf("session: %s", r.Out)
 	}
 	// A folder that is gone falls back to the start folder.
-	sock(t, a, "cd", map[string]any{"dir": "sub", "cwd": start})
+	sockIn(t, a, start, "cd", map[string]any{"dir": "sub"})
 	if err := a.NewSession(); err != nil {
 		t.Fatal(err)
 	}

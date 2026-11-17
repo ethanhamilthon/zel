@@ -12,6 +12,13 @@ versions and `zel update` only replaces the binary.
   always on.
 - A model stream is no longer cut after 10 minutes: the limit is on the
   response headers, not on the whole body.
+- A `bash_after` hook with `match` now works (it never matched before); `match`
+  on events with nothing to match is a config error.
+- `zel view` and `zel cd` resolve a relative path from the folder of the call
+  (a script that did `cd sub`), as documented; they used the session folder.
+- Writing the model into `config.toml` is a small top-level edit (the file
+  keeps its comments and tables); the old general TOML editor is gone.
+- Ctrl+K opens the menu everywhere, also in a custom answer.
 - Fewer layers in the runtime: the `agent` loop lives in `core`, the
   controller talks to the session directly, one mode name (`main`/`headless`)
   and one place that redacts API keys.

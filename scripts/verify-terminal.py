@@ -1,8 +1,8 @@
-"""Real PTY check of zel 0.9. Usage: python verify-terminal.py BINARY OUTPUT_DIRECTORY.
+"""Real PTY check of zel. Usage: python verify-terminal.py BINARY OUTPUT_DIRECTORY.
 Requires pyte and Pillow. Uses only temporary homes and a local fake provider.
 The PNG files are renderings of the captured virtual terminal, not OS screenshots.
 """
-import codecs, fcntl, json, os, pathlib, pty, select, struct, subprocess, sys
+import codecs, fcntl, json, os, pathlib, pty, re, select, struct, subprocess, sys
 import tempfile, termios, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pyte
@@ -40,6 +40,8 @@ class Provider(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":{"message":"overloaded"}}'); return
         if last == 'slow-run' and 'slow' not in calls: output = [command('sleep 6; ' + LONG, 'slow')]
         elif last == 'attach-image' and 'image' not in calls: output = [command(f'{BIN} view {OUT}/fixture.png', 'image')]
+        elif last == 'view-relative' and 'rel' not in calls: output = [command(f'mkdir -p {OUT}/relsub && cp {OUT}/fixture.png {OUT}/relsub/rel.png && cd {OUT}/relsub && {BIN} view rel.png', 'rel')]
+        elif last == 'hook-check' and 'hook' not in calls: output = [command('echo hooked', 'hook')]
         elif last == 'stream-check': output = [answer('Hello from the fake provider.\n\nA **bold** answer and `code`.')]
         elif last.startswith('<notification>'): output = [answer('Notification received: ' + last)]
         else: output = [answer('Ready for the next check.')]
@@ -127,7 +129,7 @@ class Term:
         return self.p.returncode
 
 # 1. No provider: the app exits with an error, and ~/.zel gets its default files.
-home1, cwd = pathlib.Path(tempfile.mkdtemp(prefix='zel090-empty-')), pathlib.Path(tempfile.mkdtemp(prefix='zel090-project-'))
+home1, cwd = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-empty-')), pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-project-'))
 t = Term(home1 / 'new', cwd)
 while t.p.poll() is None: t.pump(.05)
 t.pump(.3)
@@ -137,7 +139,7 @@ check(sorted(os.listdir(home1 / 'new')) == ['.gitignore', '.sessions', 'config.t
 check((home1 / 'new' / '.gitignore').read_text() == '.env\n.sessions/\n', '.gitignore content')
 
 # 2. The TUI with a provider.
-home = pathlib.Path(tempfile.mkdtemp(prefix='zel090-home-')); (home / 'config.toml').write_text(CONFIG)
+home = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-home-')); (home / 'config.toml').write_text(CONFIG)
 (cwd / 'my file.go').write_text('sample\n'); (cwd / 'zel.toml').write_text('model = "from-local-file"\n')
 t = Term(home, cwd); t.pump(1.5)
 check(t.screen.cursor.x == 0 and t.screen.cursor.y == 0, 'empty composer starts at the corner, no padding', (t.screen.cursor.x, t.screen.cursor.y))
@@ -216,11 +218,48 @@ check('Retrying in' in t.view(), 'retries are shown in Tracing', t.view()); t.se
 check(t.close() == 0, 'clean quit again')
 
 # --config uses another file instead of the home config; ./zel.toml is ignored
-other = pathlib.Path(tempfile.mkdtemp(prefix='zel090-other-')) / 'another.toml'
+other = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-other-')) / 'another.toml'
 other.write_text(CONFIG.replace('model = "fixture"', 'model = "from-another"'))
 def run(*args, env_extra=None):
     return subprocess.run([BIN, *args], cwd=cwd, env=dict(base_env, ZEL_HOME=str(home), **(env_extra or {})), capture_output=True, text=True, timeout=30)
 r = run('config', '--config', str(other)); check('from-another' in r.stdout and str(other) in r.stdout, 'zel config --config reads that file only', r.stdout)
 r = run('config'); check('from-local-file' not in r.stdout and 'second-model' in r.stdout, 'a ./zel.toml is not read', r.stdout)
 r = run('-p', 'stream-check', '--config', str(other)); check('Hello from the fake provider.' in r.stdout and requests[-1]['model'] == 'from-another', 'zel -p --config uses the model of that file', (r.stdout, r.stderr))
+# the bash tool description: one text per mode, nothing the agent can guess, no old wording
+main_tool = requests[0]['tools'][0]['description']
+check('zel choice "Question"' in main_tool and 'Ask the user before launching subagents' in main_tool, 'the main description has zel choice and the subagent rule', main_tool)
+check('cut to 8000 bytes' in main_tool and 'never truncated' not in main_tool and not re.search(r'\brg\b', main_tool), 'the output limit is stated, no tool hints', main_tool)
+check('{timeout}' not in main_tool and '{output}' not in main_tool, 'no template placeholder is left', main_tool)
+check(requests[0]['reasoning'].get('summary') == 'auto', 'the reasoning summary is always requested', requests[0].get('reasoning'))
+r = run('-p', 'stream-check', '--config', str(other))
+head_tool = requests[-1]['tools'][0]['description']
+check('no user to ask' in head_tool and 'zel choice' not in head_tool and 'Ask the user before' not in head_tool, 'the headless description has no user and no zel choice', head_tool)
+
+# removed settings are config errors now
+old = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-old-')) / 'old.toml'
+old.write_text(CONFIG + '\n[settings]\nslash_menu = true\n')
+r = run('config', '--config', str(old)); check('unknown key "settings.slash_menu"' in r.stdout, 'settings.slash_menu is gone', r.stdout)
+old.write_text(CONFIG + '\n[settings]\nreasoning_summary = true\n')
+r = run('config', '--config', str(old)); check('unknown key "settings.reasoning_summary"' in r.stdout, 'settings.reasoning_summary is gone', r.stdout)
+old.write_text(CONFIG + '\n[hooks]\nidle = [{ run = "true", match = "x" }]\n')
+r = run('config', '--config', str(old)); check('only message, notification' in r.stdout, 'match on an event with nothing to match is an error', r.stdout)
+
+# "/" always opens the menu; a bash_after hook with match fires and is in Tracing
+home3 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-hook-'))
+(home3 / 'config.toml').write_text(CONFIG + '\n[hooks]\nbash_after = [{ match = "^echo hooked", run = "cat >/dev/null; echo HOOK-SAW-IT" }]\n')
+t = Term(home3, cwd); t.pump(1.2)
+t.send('/', .6); t.shot('13-slash-menu')
+check('Resume' in t.view() and 'Models' in t.view(), '"/" opens the menu', t.view())
+t.send('\x1b', .4)
+t.send('hook-check\r'); t.wait('Ready for the next check', 'answer after the hooked command', 20)
+outputs = [i.get('output', '') for i in requests[-1].get('input', []) if i.get('type') in ('function_call_output', 'custom_tool_call_output')]
+check(any('hooked\nHOOK-SAW-IT' in o for o in outputs), 'bash_after with match added its line to the output', outputs)
+t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8); t.shot('14-hook-in-tracing')
+check(re.search(r'hook\s+bash_after: ', t.view()) is not None, 'the hook run is an entry in Tracing', t.view())
+t.send('\x1b', .4); t.send('\x1b', .4)
+t.send('view-relative\r'); t.wait('Notification received: <notification>view: rel.png', 'zel view takes a path relative to the folder of the call', 25)
+has_image = any(p.get('type') == 'input_image' for i in requests[-1].get('input', []) if isinstance(i.get('content'), list) for p in i['content'])
+check(has_image, 'the image of a relative path reached the model', requests[-1].get('input', [])[-2:])
+check(t.close() == 0, 'clean quit after hooks')
+
 (OUT / 'terminal-checks.log').write_text('\n'.join(log) + '\n'); print('ALL PASS')

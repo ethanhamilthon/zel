@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,7 +133,7 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 	case "view.add":
 		for _, p := range a.Paths {
 			if !filepath.IsAbs(p) {
-				p = filepath.Join(cmpDir(a.Cwd, s.dir), p)
+				p = filepath.Join(cmp.Or(a.Cwd, req.Cwd, s.bashCwd()), p)
 			}
 			if err := s.view(p); err != nil {
 				return bad("EFAIL", "%s: %v", p, err)
@@ -140,7 +141,7 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		}
 		return ok("")
 	case "cd":
-		path, err := s.changeDir(a.Dir, a.Cwd)
+		path, err := s.changeDir(a.Dir, cmp.Or(a.Cwd, req.Cwd))
 		if err != nil {
 			return errResponse(err)
 		}
@@ -160,13 +161,6 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		return ok("")
 	}
 	return bad("EINVAL", "unknown op %q", req.Op)
-}
-
-func cmpDir(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 // sessionInfo is zel session: text in Out, the same as JSON in Data.
