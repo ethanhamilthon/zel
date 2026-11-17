@@ -1,5 +1,0 @@
-[instruction.plan]
-text = "Plan only: read the code and write a plan, change no files."
-modes = [
-    "plan",
-]

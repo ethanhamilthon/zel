@@ -55,7 +55,7 @@ func TestProductionPackageBoundaries(t *testing.T) {
 // agent can reach the whole reference through zel docs.
 func TestExamplesIncludeSnippets(t *testing.T) {
 	text := exampleText()
-	for _, want := range []string{"hooks/notify.toml", "prompts/", "instructions/", "[hook.notify]"} {
+	for _, want := range []string{"hooks/notify.yaml", "prompts/", "systems/", "events:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("examples missing %s", want)
 		}

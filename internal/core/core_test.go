@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 
 	"zel/internal/config"
 	"zel/internal/ipc"
@@ -224,7 +224,7 @@ func instructionItems(a *Runtime) int {
 }
 
 func TestBashOutputExitCodeAndEnvironment(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[env]\nGREETING = \"hello\"\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("env:\n  GREETING: \"hello\"\n"))
 	s, ctx := a.session(), context.Background()
 	for command, want := range map[string]string{
 		"echo out; echo err >&2; exit 3": "out\nerr\n[exit 3]",
@@ -286,14 +286,14 @@ func TestBashOutputCut(t *testing.T) {
 }
 
 func TestBashOutputOffAndInvalid(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_output = 0\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("settings:\n  bash_output: 0\n"))
 	s := a.session()
 	if got := s.runBash(context.Background(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) != 13000 {
 		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
 	}
 	for _, bad := range []string{"-1", "500"} {
-		path := filepath.Join(t.TempDir(), "settings.toml")
-		if err := os.WriteFile(path, []byte("[settings]\nbash_output = "+bad+"\n"), 0600); err != nil {
+		path := filepath.Join(t.TempDir(), "settings.yaml")
+		if err := os.WriteFile(path, []byte("settings:\n  bash_output: "+bad+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if cfg := config.Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
@@ -303,7 +303,7 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 }
 
 func TestBashTimeoutAndCancel(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 1\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("settings:\n  bash_timeout: 1\n"))
 	s := a.session()
 	if !strings.Contains(s.toolDescription(), "A call has 1 s") {
 		t.Fatal("the prompt does not say the bash timeout")
@@ -323,9 +323,9 @@ func TestBashTimeoutAndCancel(t *testing.T) {
 
 func TestMessageHooksRewriteAndBlock(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hook]
-block = { event = "message", match = "secret", run = "echo 'no secrets' >&2; exit 2" }
-ping = { event = "message", match = "PING", run = "cat >/dev/null; echo PONG-REWRITTEN" }
+	a := newTestAgentWith(t, fp, Options{}, withLocal(`hook:
+  block: { events: "message", match: "secret", run: "echo 'no secrets' >&2; exit 2" }
+  ping: { events: "message", match: "PING", run: "cat >/dev/null; echo PONG-REWRITTEN" }
 `))
 	if _, err := turn(t, a, "PING please"); err != nil {
 		t.Fatal(err)
@@ -349,13 +349,13 @@ ping = { event = "message", match = "PING", run = "cat >/dev/null; echo PONG-REW
 }
 
 func TestBashHooks(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook]
-rm = { event = "bash_before", match = 'rm -rf', run = "echo 'no rm' >&2; exit 2" }
-rewrite = { event = "bash_before", match = '^echo original', run = "cat >/dev/null; echo 'echo rewritten'" }
-fail = { event = "bash_before", run = "cat >/dev/null; exit 7" }
-after = { event = "bash_after", run = "cat >/dev/null; echo AFTER" }
-code = { event = "bash_after", run = 'grep -q "\"code\":3," && echo SAW-EXIT-3 || true' }
-matched = { event = "bash_after", match = '^exit 3', run = "cat >/dev/null; echo MATCHED-AFTER" }
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`hook:
+  rm: { events: "bash_before", match: 'rm -rf', run: "echo 'no rm' >&2; exit 2" }
+  rewrite: { events: "bash_before", match: '^echo original', run: "cat >/dev/null; echo 'echo rewritten'" }
+  fail: { events: "bash_before", run: "cat >/dev/null; exit 7" }
+  after: { events: "bash_after", run: "cat >/dev/null; echo AFTER" }
+  code: { events: "bash_after", run: 'grep -q "\"code\":3," && echo SAW-EXIT-3 || true' }
+  matched: { events: "bash_after", match: '^exit 3', run: "cat >/dev/null; echo MATCHED-AFTER" }
 `))
 	s, ctx := a.session(), context.Background()
 	for command, want := range map[string]string{
@@ -376,9 +376,10 @@ matched = { event = "bash_after", match = '^exit 3', run = "cat >/dev/null; echo
 
 func TestTurnEndHookContinuesTheTurnAtMostThreeTimes(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hook.keep]
-event = "turn_end"
-run = 'grep -q "\"answer\":\"ok\"" && echo keep going'
+	a := newTestAgentWith(t, fp, Options{}, withLocal(`hook:
+  keep:
+    events: "turn_end"
+    run: 'grep -q "\"answer\":\"ok\"" && echo keep going'
 `))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
@@ -390,9 +391,9 @@ run = 'grep -q "\"answer\":\"ok\"" && echo keep going'
 }
 
 func TestNotificationHookGetsPlainTextAndIsWrapped(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook]
-a = { event = "notification", run = 'jq -r .text | sed "s/\$/, run make test/"' }
-b = { event = "notification", run = 'jq -r .text | sed "s/^/[/; s/\$/]/"' }
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`hook:
+  a: { events: "notification", run: 'jq -r .text | sed "s/\$/, run make test/"' }
+  b: { events: "notification", run: 'jq -r .text | sed "s/^/[/; s/\$/]/"' }
 `))
 	s := a.session()
 	in := notification("t1 finished")
@@ -403,9 +404,10 @@ b = { event = "notification", run = 'jq -r .text | sed "s/^/[/; s/\$/]/"' }
 }
 
 func TestNotificationHookPrintingTagsIsNotWrappedAgain(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook.tagged]
-event = "notification"
-run = 'cat >/dev/null; echo "<notification>t1 finished, run make test</notification>"'
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`hook:
+  tagged:
+    events: "notification"
+    run: 'cat >/dev/null; echo "<notification>t1 finished, run make test</notification>"'
 `))
 	got, ok := a.session().hookInput(context.Background(), notification("t1 finished"), func(TurnEvent) {})
 	if !ok || got.Text != "<notification>t1 finished, run make test</notification>" {
@@ -414,23 +416,24 @@ run = 'cat >/dev/null; echo "<notification>t1 finished, run make test</notificat
 }
 
 func TestHooksInstructionsAndCompletionsFollowTheMode(t *testing.T) {
-	conf := withLocal(`[instruction]
-main = "MAIN-ONLY"
-both = { text = "BOTH-MODES", modes = ["main", "headless"] }
-headless = { text = "HEADLESS-ONLY", modes = ["headless"] }
-plan = { text = "PLAN-ONLY", modes = ["plan"] }
-[hook]
-a-main = { event = "bash_after", run = "cat >/dev/null; echo MAIN" }
-b-both = { event = "bash_after", run = "cat >/dev/null; echo BOTH", modes = ["main", "headless"] }
-c-headless = { event = "bash_after", run = "cat >/dev/null; echo HEADLESS", modes = ["headless"] }
-d-plan = { event = "bash_after", run = "cat >/dev/null; echo PLAN", modes = ["plan"] }
-[completion]
-hi = "say ${{ echo $((40 + 2)) }}"
-bad = "${{ exit 3 }}"
-planned = { text = "PLANNED", modes = ["plan"] }
-[provider.q]
-base_url = "http://127.0.0.1:1"
-modes = ["plan"]
+	conf := withLocal(`system:
+  main: "MAIN-ONLY"
+  both: { text: "BOTH-MODES", modes: ["main", "headless"] }
+  headless: { text: "HEADLESS-ONLY", modes: ["headless"] }
+  plan: { text: "PLAN-ONLY", modes: ["plan"] }
+hook:
+  a-main: { events: "bash_after", run: "cat >/dev/null; echo MAIN" }
+  b-both: { events: "bash_after", run: "cat >/dev/null; echo BOTH", modes: ["main", "headless"] }
+  c-headless: { events: "bash_after", run: "cat >/dev/null; echo HEADLESS", modes: ["headless"] }
+  d-plan: { events: "bash_after", run: "cat >/dev/null; echo PLAN", modes: ["plan"] }
+completion:
+  hi: "say ${{ echo $((40 + 2)) }}"
+  bad: "${{ exit 3 }}"
+  planned: { text: "PLANNED", modes: ["plan"] }
+provider:
+  q:
+    base_url: "http://127.0.0.1:1"
+    modes: ["plan"]
 `)
 	ctx := context.Background()
 	main := newTestAgentWith(t, &fakeProvider{}, Options{}, conf)
@@ -490,7 +493,7 @@ modes = ["plan"]
 func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
 	dir := t.TempDir()
 	started, release := filepath.Join(dir, "started"), filepath.Join(dir, "release")
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf("[hook.slow]\nevent = \"model_changed\"\nrun = 'touch %s; while [ ! -f %s ]; do sleep 0.01; done'\n", started, release)))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf("hook:\n  slow:\n    events: \"model_changed\"\n    run: 'touch %s; while [ ! -f %s ]; do sleep 0.01; done'\n", started, release)))
 	ctl := NewController(a, func(Event) {})
 	defer ctl.Close()
 	done := make(chan error, 1)
@@ -530,7 +533,7 @@ func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
 }
 
 func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hook.slow]\nevent = \"turn_start\"\nrun = 'touch hook-started; sleep 30; touch survived'\nasync = true\n"))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("hook:\n  slow:\n    events: \"turn_start\"\n    run: 'touch hook-started; sleep 30; touch survived'\n    async: true\n"))
 	s := a.session()
 	s.fireHooks("turn_start", map[string]any{})
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
@@ -557,7 +560,7 @@ func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
 }
 
 func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hook.slow]\nevent = \"idle\"\nrun = 'touch idle-started; sleep 30'\n"))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("hook:\n  slow:\n    events: \"idle\"\n    run: 'touch idle-started; sleep 30'\n"))
 	s := a.session()
 	s.checkIdle()
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
@@ -577,10 +580,11 @@ func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
 }
 
 func TestAsyncHookDoesNotBlock(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook.async]
-event = "bash_after"
-run = "sleep 1; echo IGNORED; touch async-done"
-async = true
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`hook:
+  async:
+    events: "bash_after"
+    run: "sleep 1; echo IGNORED; touch async-done"
+    async: true
 `))
 	s := a.session()
 	done := filepath.Join(s.dir, "async-done")
@@ -747,25 +751,25 @@ func TestSocketSessionAndView(t *testing.T) {
 
 func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal("instruction.rule = \"RULE-ONE\"\n"))
+	a := newTestAgentWith(t, fp, Options{}, withLocal("system:\n  rule: \"RULE-ONE\"\n"))
 	local := a.ConfigFile()
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	provider := "model = \"p/m\"\n[provider.p]\nbase_url = \"" + a.Settings().Providers["p"].BaseURL + "\"\n"
-	writeFile(t, local, "instruction.rule = \"RULE-ONE\"\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
+	provider := "model: \"p/m\"\nprovider:\n  p:\n    base_url: \"" + a.Settings().Providers["p"].BaseURL + "\"\n"
+	writeFile(t, local, "system:\n  rule: \"RULE-ONE\"\n"+provider+"colors:\n  accent: \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || a.Settings().Colors.Get("accent") != "#aa00aa" || instructionItems(a) != 1 {
 		t.Fatalf("reload: %v accent %q, %d prompts", err, a.Settings().Colors.Get("accent"), instructionItems(a))
 	}
-	writeFile(t, local, "instruction.rule = \"RULE-TWO\"\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
+	writeFile(t, local, "system:\n  rule: \"RULE-TWO\"\n"+provider+"colors:\n  accent: \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || instructionItems(a) != 2 {
 		t.Fatalf("reload: %v, %d prompts", err, instructionItems(a))
 	}
-	writeFile(t, local, "modle = \"typo\"\n")
+	writeFile(t, local, "modle: \"typo\"\n")
 	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "modle") {
 		t.Fatalf("broken file: %v", err)
 	}
-	writeFile(t, local, "[colors]\naccent = \"purple\"\n")
+	writeFile(t, local, "colors:\n  accent: \"purple\"\n")
 	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "colors.accent") {
 		t.Fatalf("bad color: %v", err)
 	}
@@ -782,7 +786,7 @@ func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 }
 
 func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 5\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("settings:\n  bash_timeout: 5\n"))
 	if err := a.SelectSession(context.Background(), "p", "picked", "high"); err != nil {
 		t.Fatal(err)
 	}
@@ -791,8 +795,8 @@ func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, `model = "p/picked"`) || !strings.Contains(got, `effort = "high"`) ||
-		!strings.Contains(got, "bash_timeout = 5") {
+	if !strings.Contains(got, `model: "p/picked"`) || !strings.Contains(got, `effort: "high"`) ||
+		!strings.Contains(got, "bash_timeout: 5") {
 		t.Fatalf("config:\n%s", got)
 	}
 	if st := a.Settings(); st.Model != "picked" || st.Effort != "high" || st.BashTimeout != 5 {
@@ -898,7 +902,7 @@ func TestSessionRoundTripThroughResume(t *testing.T) {
 		return out
 	}
 	before, id := texts(), a.SessionID()
-	file := filepath.Join(a.Home(), ".sessions", strings.ReplaceAll(filepath.Clean(a.Project()), string(filepath.Separator), "-"), id, "session.jsonl")
+	file := filepath.Join(a.StateHome(), "sessions", strings.ReplaceAll(filepath.Clean(a.Project()), string(filepath.Separator), "-"), id, "session.jsonl")
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal(err)
 	}
@@ -934,7 +938,7 @@ func TestLifecycleHooks(t *testing.T) {
 		status: func(n int) int { return map[bool]int{true: 400}[n == 2] }}
 	hook := `'echo "$ZEL_HOOK $(cat)" >> hooks.log'`
 	var conf strings.Builder
-	conf.WriteString("[hook.log]\nrun = " + hook + "\nevent = [")
+	conf.WriteString("hook:\n  log:\n    run: " + hook + "\n    events: [")
 	for _, event := range []string{"session_created", "session_resumed", "session_closed", "config_changed", "turn_start", "turn_end", "idle", "model_changed", "error"} {
 		conf.WriteString(`"` + event + `", `)
 	}
@@ -1000,8 +1004,8 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 	t.Cleanup(server.Close)
 	home := t.TempDir()
 	isolate(t, home)
-	extra := filepath.Join(t.TempDir(), "other.toml")
-	writeFile(t, extra, "model = \"p/m\"\n[env]\nFROM_EXTRA = \"yes\"\n[provider.p]\nbase_url = \""+server.URL+"\"\n")
+	extra := filepath.Join(t.TempDir(), "other.yaml")
+	writeFile(t, extra, "model: \"p/m\"\nenv:\n  FROM_EXTRA: \"yes\"\nprovider:\n  p:\n    base_url: \""+server.URL+"\"\n")
 	parent, err := New(t.TempDir(), Options{Config: extra})
 	if err != nil {
 		t.Fatal(err)
@@ -1037,7 +1041,7 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 }
 
 func TestConfigWatchAndBrokenFileAtStart(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("model = 1\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("model: 1\n"))
 	if st := a.Settings(); st.Model != "" {
 		t.Fatalf("a broken config was applied: %+v", st)
 	}
@@ -1054,7 +1058,7 @@ func TestConfigWatchAndBrokenFileAtStart(t *testing.T) {
 	// The watcher takes its first look in the background, so a change made at
 	// once may be part of it: change the file again until it is noticed.
 	for i := 0; ; i++ {
-		writeFile(t, a.ConfigFile(), fmt.Sprintf("[env]\nWATCH = \"value%d\"\n", i))
+		writeFile(t, a.ConfigFile(), fmt.Sprintf("env:\n  WATCH: \"value%d\"\n", i))
 		select {
 		case <-changed:
 			return
@@ -1174,7 +1178,7 @@ func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
 func TestPromotedBashKeepsTimeoutAndCanBeStopped(t *testing.T) {
 	for _, stop := range []bool{false, true} {
 		t.Run(fmt.Sprint(stop), func(t *testing.T) {
-			a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 1\n"))
+			a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("settings:\n  bash_timeout: 1\n"))
 			s := a.session()
 			done := make(chan string, 1)
 			go func() { done <- s.runBash(context.Background(), "touch started; echo before; sleep 30; echo after") }()
@@ -1271,12 +1275,21 @@ func TestChoiceAnswersStayInTheChat(t *testing.T) {
 	}
 }
 
-// setKey sets a dotted key in a TOML file for the tests; unlike config.SetKey it
+// setKey sets a dotted key in a YAML file for the tests; unlike config.SetKey it
 // rewrites the whole file (comments are lost) and takes any value.
 func setKey(path, key string, value any) error {
 	data := map[string]any{}
-	if _, err := toml.DecodeFile(path, &data); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	if len(raw) > 0 {
+		if err := yaml.Unmarshal(raw, &data); err != nil {
+			return err
+		}
+	}
+	if data == nil {
+		data = map[string]any{}
 	}
 	table, segs := data, strings.Split(key, ".")
 	for _, seg := range segs[:len(segs)-1] {
@@ -1288,12 +1301,11 @@ func setKey(path, key string, value any) error {
 		table = next
 	}
 	table[segs[len(segs)-1]] = value
-	f, err := os.Create(path)
+	out, err := yaml.Marshal(data)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(data)
+	return os.WriteFile(path, out, 0600)
 }
 
 func TestDeepestChildCannotStartSubagents(t *testing.T) {

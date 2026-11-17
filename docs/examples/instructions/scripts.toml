@@ -1,2 +1,0 @@
-[instruction.scripts]
-text = "## Scripts (in PATH)\n- web-search <query> [-n 5] [--answer]   web search via Tavily\n"

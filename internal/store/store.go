@@ -1,5 +1,5 @@
 // Package store keeps sessions as files: one folder per session under
-// ~/.config/zel/.sessions/<project key>/<id>/ with an append-only session.jsonl, a
+// ~/.zel/sessions/<project key>/<id>/ with an append-only session.jsonl, a
 // meta.json cache for the session list, tasks.jsonl and the task logs.
 package store
 
@@ -17,17 +17,17 @@ import (
 
 var ErrNotFound = errors.New("session not found")
 
-// Store is the sessions folder of one zel home. It is safe for concurrent use;
+// Store is the sessions folder of one zel state home. It is safe for concurrent use;
 // one session is written by one process at a time (the caller holds its lock).
 type Store struct {
-	Root string // ~/.config/zel/.sessions
+	Root string // ~/.zel/sessions
 
 	mu   sync.Mutex
 	last map[string]Session // what the session file says now, by session dir
 }
 
 func Open(home string) (*Store, error) {
-	root := filepath.Join(home, ".sessions")
+	root := filepath.Join(home, "sessions")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}

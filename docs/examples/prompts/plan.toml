@@ -1,6 +1,0 @@
-[completion.plan]
-text = "${{ cat PLAN.md }}"
-modes = [
-    "main",
-    "plan",
-]

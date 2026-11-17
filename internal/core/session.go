@@ -22,7 +22,7 @@ func (s *session) sessionDir() string { return s.store.Dir(s.project, s.id) }
 func (s *session) lockPath() string { return filepath.Join(s.sessionDir(), "lock") }
 
 func (s *session) socketPath() string {
-	return ipc.Path(filepath.Join(s.home, ".sessions", "run"), s.id)
+	return ipc.Path(filepath.Join(s.store.Root, "run"), s.id)
 }
 
 // acquire takes the session lock, opens the session socket and starts the tasks.

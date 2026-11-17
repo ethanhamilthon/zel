@@ -10,10 +10,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -92,7 +93,7 @@ func (c *Config) expand(ctx context.Context, env []named[string], run func(map[s
 	}
 	kept := c.Instructions[:0]
 	for _, in := range c.Instructions {
-		do(exp, "instruction."+in.Name, &in.Text)
+		do(exp, "system."+in.Name, &in.Text)
 		if strings.TrimSpace(in.Text) != "" {
 			kept = append(kept, in)
 		}
@@ -124,19 +125,18 @@ func (c *Config) splitModel() {
 // readFile parses and validates the file. The env values come back in file
 // order, not yet expanded.
 func readFile(path string) (*Config, []named[string], error) {
-	var data map[string]any
-	md, err := toml.DecodeFile(path, &data)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		var pe toml.ParseError
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, fmt.Errorf("%s: file not found", path)
-		case errors.As(err, &pe):
-			return nil, nil, errors.New(parseError(path, pe))
 		}
 		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
-	p := &parser{md: &md, cfg: newConfig(path)}
+	data, md, err := decodeYAML(path, raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	p := &parser{md: md, cfg: newConfig(path)}
 	if err := p.file(data); err != nil {
 		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
@@ -146,26 +146,124 @@ func readFile(path string) (*Config, []named[string], error) {
 	return p.cfg, p.env, nil
 }
 
-// parseError is "PATH:LINE:COL: message" with the line and a caret under the
+type yamlMeta struct {
+	order map[string][]string
+}
+
+var yamlLineRe = regexp.MustCompile(`line (\d+): (.*)`)
+
+// decodeYAML parses raw into a map while preserving key order and reporting
+// duplicate keys and syntax errors with their line and caret.
+func decodeYAML(path string, raw []byte) (map[string]any, *yamlMeta, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		if m := yamlLineRe.FindStringSubmatch(err.Error()); m != nil {
+			line, _ := strconv.Atoi(m[1])
+			return nil, nil, errors.New(lineError(path, raw, line, 1, m[2]))
+		}
+		return nil, nil, fmt.Errorf("%s: %v", path, err)
+	}
+	md := &yamlMeta{order: map[string][]string{}}
+	if len(doc.Content) == 0 || (doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].ShortTag() == "!!null") {
+		return map[string]any{}, md, nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, nil, errors.New(lineError(path, raw, root.Line, root.Column, "expected a YAML mapping"))
+	}
+	v, err := decodeNode(path, raw, root, nil, md)
+	if err != nil {
+		return nil, nil, err
+	}
+	return v.(map[string]any), md, nil
+}
+
+func decodeNode(path string, raw []byte, n *yaml.Node, prefix []string, md *yamlMeta) (any, error) {
+	switch n.Kind {
+	case yaml.MappingNode:
+		m := map[string]any{}
+		pkey := strings.Join(prefix, ".")
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			kn, vn := n.Content[i], n.Content[i+1]
+			if kn.Kind != yaml.ScalarNode || kn.ShortTag() != "!!str" {
+				return nil, errors.New(lineError(path, raw, kn.Line, kn.Column, "mapping key must be a string"))
+			}
+			k := kn.Value
+			if _, dup := m[k]; dup {
+				full := k
+				if pkey != "" {
+					full = pkey + "." + k
+				}
+				return nil, errors.New(lineError(path, raw, kn.Line, kn.Column, fmt.Sprintf("Key '%s' has already been defined", full)))
+			}
+			md.order[pkey] = append(md.order[pkey], k)
+			val, err := decodeNode(path, raw, vn, append(prefix, k), md)
+			if err != nil {
+				return nil, err
+			}
+			m[k] = val
+		}
+		return m, nil
+	case yaml.SequenceNode:
+		out := make([]any, len(n.Content))
+		for i, item := range n.Content {
+			val, err := decodeNode(path, raw, item, prefix, md)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = val
+		}
+		return out, nil
+	case yaml.ScalarNode:
+		switch n.ShortTag() {
+		case "!!str":
+			return n.Value, nil
+		case "!!int":
+			v, err := strconv.ParseInt(n.Value, 0, 64)
+			if err != nil {
+				return nil, errors.New(lineError(path, raw, n.Line, n.Column, err.Error()))
+			}
+			return v, nil
+		case "!!float":
+			v, err := strconv.ParseFloat(n.Value, 64)
+			if err != nil {
+				return nil, errors.New(lineError(path, raw, n.Line, n.Column, err.Error()))
+			}
+			return v, nil
+		case "!!bool":
+			v, err := strconv.ParseBool(n.Value)
+			if err != nil {
+				return nil, errors.New(lineError(path, raw, n.Line, n.Column, err.Error()))
+			}
+			return v, nil
+		case "!!null":
+			return nil, nil
+		default:
+			return n.Value, nil
+		}
+	default:
+		return nil, errors.New(lineError(path, raw, n.Line, n.Column, "unsupported YAML value"))
+	}
+}
+
+// lineError is "PATH:LINE:COL: message" with the line and a caret under the
 // error, so a broken file shows where it is broken.
-func parseError(path string, pe toml.ParseError) string {
-	pos := pe.Position
-	msg := fmt.Sprintf("%s:%d:%d: %s", path, pos.Line, max(pos.Col, 1), strings.TrimSuffix(pe.Message, "."))
-	data, err := os.ReadFile(path)
+func lineError(path string, data []byte, lineNo, colNo int, message string) string {
+	colNo = max(colNo, 1)
+	msg := fmt.Sprintf("%s:%d:%d: %s", path, lineNo, colNo, strings.TrimSuffix(message, "."))
 	lines := strings.Split(string(data), "\n")
-	if err != nil || pos.Line < 1 || pos.Line > len(lines) {
+	if lineNo < 1 || lineNo > len(lines) {
 		return msg
 	}
-	line := strings.ReplaceAll(strings.TrimRight(lines[pos.Line-1], "\r"), "\t", " ")
-	col := min(max(pos.Col, 1), len(line)+1)
-	width := min(max(pos.Len, 1), max(len(line)-col+1, 1))
-	num := fmt.Sprint(pos.Line)
+	line := strings.ReplaceAll(strings.TrimRight(lines[lineNo-1], "\r"), "\t", " ")
+	col := min(colNo, len(line)+1)
+	num := fmt.Sprint(lineNo)
 	pad := strings.Repeat(" ", len(num))
-	return fmt.Sprintf("%s\n %s | %s\n %s | %s%s", msg, num, line, pad, strings.Repeat(" ", col-1), strings.Repeat("^", width))
+	return fmt.Sprintf("%s\n %s | %s\n %s | %s^", msg, num, line, pad, strings.Repeat(" ", col-1))
 }
 
 type parser struct {
-	md  *toml.MetaData
+	md  *yamlMeta
 	cfg *Config
 	env []named[string]
 }
@@ -173,10 +271,10 @@ type parser struct {
 // keys returns the keys of m (the table at prefix) in file order.
 func (p *parser) keys(m map[string]any, prefix ...string) []string {
 	var out []string
-	for _, k := range p.md.Keys() {
-		if len(k) == len(prefix)+1 && slices.Equal(k[:len(prefix)], prefix) {
-			if _, ok := m[k[len(prefix)]]; ok && !slices.Contains(out, k[len(prefix)]) {
-				out = append(out, k[len(prefix)])
+	if p.md != nil {
+		for _, k := range p.md.order[strings.Join(prefix, ".")] {
+			if _, ok := m[k]; ok && !slices.Contains(out, k) {
+				out = append(out, k)
 			}
 		}
 	}
@@ -188,12 +286,15 @@ func (p *parser) keys(m map[string]any, prefix ...string) []string {
 	return out
 }
 
-// renamed are the keys of the old (0.9.1) format, with what replaced them.
+// renamed are the keys of older formats, with what replaced them.
 var renamed = map[string]string{
-	"providers":    "[provider.NAME]",
-	"instructions": "[instruction.NAME] with text = ...",
-	"hooks":        "[hook.NAME] with event = ... and run = ...",
-	"completions":  "[completion.NAME] with text = ...",
+	"providers":    "provider.<name>",
+	"instruction":  "system.<name> or systems/*.md",
+	"instructions": "system.<name> or systems/*.md",
+	"systems":      "system.<name> or systems/*.md",
+	"hooks":        "hook.<name> or hooks/*.yaml",
+	"completions":  "completion.<name> or prompts/*.md",
+	"prompts":      "completion.<name> or prompts/*.md",
 }
 
 func (p *parser) file(data map[string]any) error {
@@ -219,15 +320,15 @@ func (p *parser) file(data map[string]any) error {
 			err = p.colors(v)
 		case "provider":
 			if _, ok := v.(string); ok {
-				return fmt.Errorf(`provider: the selected model is one key now, model = "PROVIDER/MODEL"; [provider.NAME] configures a provider`)
+				return fmt.Errorf(`provider: the selected model is one key now, model: "PROVIDER/MODEL"; provider.NAME configures a provider`)
 			}
 			err = p.providers(v)
 		case "env":
 			err = p.strings(v, "env", envName, func(name, s string) { p.env = append(p.env, named[string]{name, s}) })
 		case "completion":
 			err = p.completions(v)
-		case "instruction":
-			err = p.instructions(v)
+		case "system":
+			err = p.systems(v)
 		case "hook":
 			err = p.hooks(v)
 		default:
@@ -476,8 +577,8 @@ func (p *parser) entries(v any, kind, short string, add func(f *fields, name str
 	return nil
 }
 
-func (p *parser) instructions(v any) error {
-	return p.entries(v, "instruction", "text", func(f *fields, name string) error {
+func (p *parser) systems(v any) error {
+	return p.entries(v, "system", "text", func(f *fields, name string) error {
 		f.only("text", "modes")
 		in := Instruction{Name: name, Text: f.str("text", true), Modes: f.modes([]string{ModeMain})}
 		if f.err != nil {
@@ -501,64 +602,75 @@ func (p *parser) completions(v any) error {
 }
 
 func (p *parser) hooks(v any) error {
-	return p.entries(v, "hook", "", func(f *fields, name string) error {
-		f.only("event", "run", "match", "timeout", "async", "modes")
-		h := Hook{Name: name, Run: f.str("run", true), Match: f.str("match", false), Async: f.flag("async", false), Modes: f.modes([]string{ModeMain})}
-		var events []string
-		switch e := f.m["event"].(type) {
-		case string:
-			events = []string{e}
-		case []any:
-			for _, x := range e {
-				s, ok := x.(string)
-				if !ok {
-					f.fail("event", "must be an event or a list of events")
-				}
-				events = append(events, s)
+	return p.entries(v, "hook", "", p.addHook)
+}
+
+func (p *parser) addHook(f *fields, name string) error {
+	f.only("events", "event", "run", "match", "timeout", "async", "modes")
+	h := Hook{Name: name, Run: f.str("run", true), Match: f.str("match", false), Async: f.flag("async", false), Modes: f.modes([]string{ModeMain})}
+	evKey := "events"
+	rawEv, hasEvents := f.m["events"]
+	if !hasEvents {
+		if rawEv, hasEvents = f.m["event"]; hasEvents {
+			evKey = "event"
+		}
+	} else if _, both := f.m["event"]; both {
+		f.fail("event", "cannot be used with events")
+	}
+	var events []string
+	switch e := rawEv.(type) {
+	case string:
+		events = []string{e}
+	case []any:
+		for _, x := range e {
+			s, ok := x.(string)
+			if !ok {
+				f.fail(evKey, "must be an event or a list of events")
 			}
-		case nil:
-			f.fail("event", "is required")
+			events = append(events, s)
+		}
+	case nil:
+		f.fail(evKey, "is required")
+	default:
+		f.fail(evKey, "must be an event or a list of events")
+	}
+	if t, ok := f.m["timeout"]; ok {
+		var sec float64
+		switch t := t.(type) {
+		case int64:
+			sec = float64(t)
+		case float64:
+			sec = t
 		default:
-			f.fail("event", "must be an event or a list of events")
+			f.fail("timeout", "must be a number of seconds")
 		}
-		if t, ok := f.m["timeout"]; ok {
-			var sec float64
-			switch t := t.(type) {
-			case int64:
-				sec = float64(t)
-			case float64:
-				sec = t
-			default:
-				f.fail("timeout", "must be a number of seconds")
-			}
-			if sec < 0 {
-				f.fail("timeout", "must be >= 0")
-			}
-			h.Timeout = time.Duration(sec * float64(time.Second))
+		if sec < 0 {
+			f.fail("timeout", "must be >= 0")
 		}
-		if f.err != nil {
-			return f.err
+		h.Timeout = time.Duration(sec * float64(time.Second))
+	}
+	if f.err != nil {
+		return f.err
+	}
+	if len(events) == 0 {
+		return fmt.Errorf("%s.%s: is required", f.where, evKey)
+	}
+	if strings.TrimSpace(h.Run) == "" {
+		return fmt.Errorf("%s.run: empty command", f.where)
+	}
+	if _, err := regexp.Compile(h.Match); err != nil {
+		return fmt.Errorf("%s.match: %v", f.where, err)
+	}
+	for _, event := range events {
+		if !slices.Contains(Events, event) {
+			return fmt.Errorf("%s.%s: unknown event %q", f.where, evKey, event)
 		}
-		if len(events) == 0 {
-			return fmt.Errorf("%s.event: is required", f.where)
+		if _, ok := MatchField[event]; h.Match != "" && !ok {
+			return fmt.Errorf("%s.match: only message, notification, turn_start, bash_before and bash_after have text to match", f.where)
 		}
-		if strings.TrimSpace(h.Run) == "" {
-			return fmt.Errorf("%s.run: empty command", f.where)
-		}
-		if _, err := regexp.Compile(h.Match); err != nil {
-			return fmt.Errorf("%s.match: %v", f.where, err)
-		}
-		for _, event := range events {
-			if !slices.Contains(Events, event) {
-				return fmt.Errorf("%s.event: unknown event %q", f.where, event)
-			}
-			if _, ok := MatchField[event]; h.Match != "" && !ok {
-				return fmt.Errorf("%s.match: only message, notification, turn_start, bash_before and bash_after have text to match", f.where)
-			}
-			e := h
-			e.Event = event
-			p.cfg.Hooks[event] = append(p.cfg.Hooks[event], e)
-		}
-		return nil
-	})
+		e := h
+		e.Event = event
+		p.cfg.Hooks[event] = append(p.cfg.Hooks[event], e)
+	}
+	return nil
 }

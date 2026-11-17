@@ -14,5 +14,6 @@ var DefaultSettings = config.DefaultSettings
 var DefaultKeys = config.DefaultKeys
 var DefaultColors = config.DefaultColors
 var ZelHome = config.ZelHome
+var StateHome = config.StateHome
 var ResolvePath = config.ResolvePath
 var DisplayPath = config.DisplayPath

@@ -1,0 +1,4 @@
+events:
+  - bash_before
+match: "git push (-f|--force)"
+run: "echo 'force push is not allowed here' >&2; exit 2"

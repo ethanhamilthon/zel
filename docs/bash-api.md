@@ -2,8 +2,8 @@
 
 Zel gives the model one tool, `bash`: its input is a bash script. Background
 tasks, questions to the user, images and edits are `zel` commands the script
-runs. You configure Zel with one file, `~/.config/zel/settings.toml`: settings, providers,
-instructions, hooks and prompt completions.
+runs. You configure Zel in `~/.config/zel/settings.yaml`, with snippets in
+`hooks/*.yaml`, `prompts/*.md` and `systems/*.md`.
 
 ## The bash tool
 
@@ -25,7 +25,7 @@ instructions, hooks and prompt completions.
   …first 4000 bytes…
 
   ======== [output cut: 5000 of 13000 bytes omitted]
-  ======== full output: /Users/…/.sessions/…/outputs/b12.txt
+  ======== full output: /Users/…/.zel/sessions/…/outputs/b12.txt
   ======== read it with sed -n '100,200p', rg, head or tail
 
   …last 4000 bytes…
@@ -44,13 +44,13 @@ instructions, hooks and prompt completions.
   ends. Tracing and task rows are unchanged. The command is cut to one line
   with `...` at its end, in the dark gray color.
 - `settings.trace_hooks` (default `true`) shows the hook runs in Tracing. With
-  `false` Tracing opens without them; `h` in Tracing shows or hides them until
+  `false` Tracing opens without them; `Ctrl+H` in Tracing shows or hides them until
   zel quits.
 - Tracing (Ctrl+T) lists the session by turn: a row per turn with its first
   message and how long it took, then its entries with a failure (`exit 1`),
   their duration and time. Tab cycles the view: All, Bash, Agent (the answers)
   and Errors (failed bash calls and hooks, errors); Shift+Tab goes back. Typing
-  searches; `h` with an empty search line toggles the hooks. Enter opens an
+  searches; `Ctrl+H` toggles the hooks. Enter opens an
   entry: a bash call shows its command and output together, every entry its
   time, exit and duration, and the model request it came from with its tokens.
   Left and Right go to the previous and next entry of the view; Esc returns to
@@ -161,43 +161,40 @@ session, error}`). `zel -p --resume ID` continues one of your own children
 only. Children nest at most 3 deep. In a bash call a child has the same time
 limit, so longer work runs as a task: `zel task run --name review -- zel -p "..."`.
 
-## settings.toml
+## settings.yaml
 
-Settings: `~/.config/zel/settings.toml` (or `$ZEL_HOME/settings.toml`). `--config FILE`
+Settings: `~/.config/zel/settings.yaml` (or `$ZEL_HOME/settings.yaml`). `--config FILE`
 replaces it and reads snippets beside that file, not from the default home.
-There is no per-project config. Zel creates the home, `settings.toml`,
-`hooks/`, `prompts/`, `instructions/` and a `.gitignore` (`.env`, `.sessions/`).
-This is a breaking layout: old `~/.zel` files and sessions are not imported.
+There is no per-project config. Zel creates `~/.config/zel/` with `settings.yaml`,
+`hooks/`, `prompts/`, `systems/` and a `.gitignore` (`.env`).
+Sessions and runtime sockets live in `~/.zel/sessions/`.
 
 Snippets load in filename order, after the settings file:
-- `hooks/*.toml`: `[hook.NAME]` tables, with the hook fields documented below.
-- `prompts/*.toml`: `[completion.NAME]` tables or `[completion]` strings.
-- `instructions/*.toml`: `[instruction.NAME]` tables or `[instruction]` strings.
-- `prompts/NAME.md` and `instructions/NAME.md`: raw text named `NAME`, main mode
-  by default. Use TOML to select other modes. `${{ }}` works as documented below.
+- `hooks/NAME.yaml`: a YAML mapping `{events, run, match, timeout, async, modes}` named `NAME`.
+- `prompts/NAME.md`: markdown body for `#NAME`, with optional YAML frontmatter (`---\nmodes: [main]\n---`).
+- `systems/NAME.md`: markdown body for the system prompt, with optional YAML frontmatter (`---\nmodes: [main]\n---`).
 
-Each TOML snippet only accepts its directory's entry type. Duplicate names are
-errors. Hidden files and other extensions are ignored; subdirectories are not
-scanned. Scripts can live alongside hook snippets and be called by their paths.
-Adding, editing or deleting a supported snippet hot-reloads the configuration.
-Inline entries remain supported, but no old files are migrated automatically.
+Duplicate names are errors. Hidden files and other extensions are ignored;
+subdirectories are not scanned. Scripts can live alongside hook snippets and be
+called by their paths. Adding, editing or deleting a supported snippet
+hot-reloads the configuration.
 
-`[keys]` binds actions to `ctrl+LETTER` or `alt+LETTER` (case-insensitive).
+`keys` binds actions to `ctrl+LETTER` or `alt+LETTER` (case-insensitive).
 An empty string disables an action. Unspecified actions keep their defaults;
 duplicate bindings and unknown actions are errors. Actions and defaults:
 
-```toml
-[keys]
-menu = "ctrl+k"
-models = "ctrl+m"
-sessions = "ctrl+r"
-new_session = "ctrl+n"
-info = "ctrl+i"
-trace = "ctrl+t"
-editor = "ctrl+e"
-stop = "ctrl+d"
-quit = "ctrl+q"
-redraw = "ctrl+l"
+```yaml
+keys:
+  menu: ctrl+k
+  models: ctrl+m
+  sessions: ctrl+r
+  new_session: ctrl+n
+  info: ctrl+i
+  trace: ctrl+t
+  editor: ctrl+e
+  stop: ctrl+d
+  quit: ctrl+q
+  redraw: ctrl+l
 ```
 
 Bindings reload live and Help shows the current values. Russian letters on the
@@ -206,57 +203,37 @@ Legacy terminals cannot distinguish Ctrl+M from Enter or Ctrl+I from Tab;
 use an enhanced keyboard protocol or bind those actions to other keys.
 Navigation/editing keys keep their usual meaning when not bound to an action.
 
-Everything else Zel writes lives in `~/.config/zel/.sessions/`. Without a configured
-provider the TUI exits with an error. The app never edits this file, except
-that choosing a model writes `provider`, `model` and `effort`; Providers and
-Settings are not in the UI, you edit the file and Zel follows it.
+Without a configured provider the TUI exits with an error. The app never edits
+this file, except that choosing a model writes `model` and `effort`; Providers
+and Settings are not in the UI, you edit the file and Zel follows it.
 
-```toml
-# top-level keys first: in TOML, keys after a [table] belong to that table
-model  = "openai/gpt-5"        # PROVIDER/MODEL, default for new sessions; the model menu writes here
-effort = "medium"              # none minimal low medium high xhigh max
+```yaml
+model: openai/gpt-5        # PROVIDER/MODEL, default for new sessions; the model menu writes here
+effort: medium             # none minimal low medium high xhigh max
 
-[settings]
-compaction        = 400000     # tokens, 0 = off
-bash_timeout      = 30         # seconds per bash call
-bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
-show_bash         = true       # false: the working line has no command and no `thinking...`
-trace_hooks       = true       # false: Tracing opens without the hook runs (h toggles them)
-editor            = "nvim"     # Ctrl+E opens the composer text in it
+settings:
+  compaction: 400000       # tokens, 0 = off
+  bash_timeout: 30         # seconds per bash call
+  bash_output: 8000        # bytes of one bash call the agent gets, 0 = no cut
+  show_bash: true          # false: the working line has no command and no `thinking...`
+  trace_hooks: true        # false: Tracing opens without the hook runs (Ctrl+H toggles them)
+  editor: nvim             # Ctrl+E opens the composer text in it
 
-[colors]                       # the TUI theme; see `zel docs colors`
-accent = "#c3e88d"
+colors:                    # the TUI theme; see `zel docs colors`
+  accent: "#c3e88d"
 
-[provider.openai]
-base_url = "https://api.openai.com/v1"
-api      = "responses"         # responses | chat
-api_key  = "${{ echo $OPENAI_API_KEY }}"
+provider:
+  openai:
+    base_url: https://api.openai.com/v1
+    api: responses         # responses | chat
+    api_key: ${{ echo $OPENAI_API_KEY }}
 
-[env]                          # for bash, tasks, hooks and ${{ }}
-EDITOR = "true"
-
-[instruction.style]
-text  = "You are zel. Short answers."
-modes = ["main", "headless"]   # default ["main"]
-
-[instruction]
-agents = "${{ cat AGENTS.md }}" # a string is the text; main only
-
-[hook.uncommitted]
-event = "turn_end"
-run   = 'test -z "$(git status --porcelain)" || echo "uncommitted changes, commit them"'
-
-[completion]
-plan = "${{ cat PLAN.md }}"
+env:                       # for bash, tasks, hooks and ${{ }}
+  EDITOR: "true"
 ```
 
-- Providers, instructions, hooks and completions are maps: `[provider.NAME]`,
-  `[instruction.NAME]`, `[hook.NAME]`, `[completion.NAME]` (or one
-  `[instruction]` table with `NAME = ...` lines). Names are 1 to 64 letters,
-  digits, `-` or `_`. Instructions and hooks keep file order.
-  Name a hook after what it does and give it all its events
-  (`event = [...]`, the script switches on `$ZEL_HOOK`), see Hooks.
-- `model = "PROVIDER/MODEL"` picks the provider and the model in one key; the
+- Names are 1 to 64 letters, digits, `-` or `_`. Systems and hooks keep file order.
+- `model: "PROVIDER/MODEL"` picks the provider and the model in one key; the
   model ID may contain `/` itself (`openrouter/anthropic/claude`). Without a `/`
   the only configured provider is meant.
 
@@ -267,34 +244,31 @@ Every session runs in one base mode: `main` (the TUI) or `headless` (`zel -p`).
 mode, so the session runs in `main` + `plan` or `headless` + `plan`. A
 `zel -p` started by the agent does not inherit the custom mode; pass `--mode`.
 
-`modes = [...]` on an entry says in which modes it applies; it applies when one
+`modes: [...]` on an entry says in which modes it applies; it applies when one
 of them is a mode of the session:
 
 | entry | default `modes` | outside its modes |
 |---|---|---|
-| `[instruction.NAME]` | `["main"]` | not in the system prompt |
-| `[hook.NAME]` | `["main"]` | does not run |
-| `[completion.NAME]` | `["main"]` | `#NAME` is not offered or expanded |
-| `[provider.NAME]` | every mode | not in the model menu; selecting it is an error |
+| `systems/NAME.md` | `[main]` | not in the system prompt |
+| `hooks/NAME.yaml` | `[main]` | does not run |
+| `prompts/NAME.md` | `[main]` | `#NAME` is not offered or expanded |
+| `provider.NAME` | every mode | not in the model menu; selecting it is an error |
 
-So `modes = ["plan"]` is an entry only for `--mode plan` sessions, and
-`modes = ["main", "headless"]` is one for every session. `zel session` shows the
+So `modes: [plan]` is an entry only for `--mode plan` sessions, and
+`modes: [main, headless]` is one for every session. `zel session` shows the
 modes as `main+plan`.
 
-- `${{ script }}` in any string (not in hook `run`) is replaced by the output
+- `${{ script }}` in any YAML string or `.md` body (not in hook `run`) is replaced by the output
   of `bash -c script`, one trailing newline trimmed; `$${{` is a literal `${{`.
   Each expression has 10 s; a failing one becomes empty and leaves a notice.
-  Instructions, providers, settings and env are expanded when the session
-  starts and whenever the config changes; completions when they are used.
-- `[instruction.NAME]` is a string (the text) or a table `{text, modes}`.
+  Systems, providers, settings and env are expanded when the session
+  starts and whenever the config changes; prompt completions when they are used.
 - Unknown keys and wrong types make the file invalid: it is skipped with a
-  notice naming the file (and the line, for syntax errors). The keys of the
-  0.9.1 format (`provider = "..."`, `[providers.*]`, `instructions`, `[hooks]`,
-  `[completions]`) are errors that name their replacement.
-- Hot reload: Zel watches the file. A change is applied after the
+  notice naming the file (and the line, for syntax errors).
+- Hot reload: Zel watches the file and snippet directories. A change is applied after the
   current turn; a broken file keeps the previous config. The system prompt is
-  only your `instructions`: Zel adds nothing of its own to it. It is rebuilt
-  only when the instructions changed. Everything Zel itself tells the model
+  only your `systems`: Zel adds nothing of its own to it. It is rebuilt
+  only when the systems changed. Everything Zel itself tells the model
   (how the bash tool and the zel commands work) is the description of the bash
   tool, built fresh for every request; the main session and `zel -p` get
   different texts (a `zel -p` agent has no user to ask and no `zel choice`).
@@ -304,45 +278,52 @@ modes as `main+plan`.
   session when you edit `model` by hand.
 - `zel config` prints the config and its problems.
 
-Tell the agent about your own tools in an instruction. Invoke scripts by their
+Tell the agent about your own tools in a `systems/*.md` file. Invoke scripts by their
 paths, or install them on your normal `PATH`; Zel does not manage script folders.
 
 ## Hooks
 
-`[hook.NAME]` is a table `{event, run, match, timeout, async, modes}`:
-`event` is one event or a list of them; `run` is the command;
+Each `hooks/NAME.yaml` is a YAML mapping `{events, run, match, timeout, async, modes}`:
+`events` is a list of events (or one event); `run` is the command;
 `match` is a regexp on the command (`bash_before`, `bash_after`) or the text
 (`message`, `notification`, `turn_start`); the other events have nothing to match,
-so `match` there is a config error; `timeout` is in seconds (default 60); `async = true` starts the
-hook and does not wait; `modes` (default `["main"]`) are the session modes it
+so `match` there is a config error; `timeout` is in seconds (default 60); `async: true` starts the
+hook and does not wait; `modes` (default `[main]`) are the session modes it
 runs in, see Modes above.
 
-```toml
-[hook.notify]
-event = "idle"
-run   = "osascript -e 'display notification \"done\"'"
-async = true
-
-[hook.no-force-push]
-event = "bash_before"
-match = 'git push (-f|--force)'
-run   = "echo 'no force push' >&2; exit 2"
+```yaml
+# ~/.config/zel/hooks/notify.yaml
+events:
+  - idle
+run: "osascript -e 'display notification \"done\"'"
+async: true
 ```
 
-Group hooks by purpose, not by event: one `[hook.<namespace>]` with a list of
-events and one script that tells them apart by `$ZEL_HOOK`, not a `[hook.X]`
-block per event. When you (the agent) add hooks to a config, do it this way.
+```yaml
+# ~/.config/zel/hooks/no-force-push.yaml
+events:
+  - bash_before
+match: "git push (-f|--force)"
+run: "echo 'no force push' >&2; exit 2"
+```
 
-```toml
-[hook.progress]
-event = ["turn_start", "turn_end", "error", "session_closed"]
-run   = '''
-case "$ZEL_HOOK" in
-  turn_start) printf "\033]9;4;3\a" ;;
-  error)      printf "\033]9;4;2;100\a" ;;
-  *)          printf "\033]9;4;0\a" ;;
-esac > /dev/tty
-'''
+Group hooks by purpose, not by event: one `hooks/<name>.yaml` with a list of
+events and one script that tells them apart by `$ZEL_HOOK`. When you (the agent)
+add hooks to a config, do it this way.
+
+```yaml
+# ~/.config/zel/hooks/progress.yaml
+events:
+  - turn_start
+  - turn_end
+  - error
+  - session_closed
+run: |
+  case "$ZEL_HOOK" in
+    turn_start) printf "\033]9;4;3\a" ;;
+    error)      printf "\033]9;4;2;100\a" ;;
+    *)          printf "\033]9;4;0\a" ;;
+  esac > /dev/tty
 ```
 
 A hook is `bash -c` with the session environment and `ZEL_HOOK` (the event's
@@ -436,8 +417,9 @@ on `turn_start`, `turn_end`, `error` and `session_closed`.
 
 ## Prompt completions
 
-`[completion] name = "text"` (or `[completion.name]` with `text` and
-`modes`) registers `#name` in the sessions of its modes (default main). Typing
+`~/.config/zel/prompts/NAME.md` registers `#NAME` in the sessions of its modes
+(default `main`), with optional YAML frontmatter (`---\nmodes: [main]\n---`)
+followed by the markdown body (which may contain `${{ }}`). Typing
 `#` in the composer lists the names; when you send a message, each `#name`
 is replaced by its text with `${{ }}` expanded (10 s), wrapped in a tag so the
 agent sees where it starts and ends:
@@ -462,29 +444,28 @@ Backspace (right after it) or Delete (right before it) removes it whole.
 
 ## Colors
 
-`[colors]` sets every color of the TUI. Values are `#rrggbb` hex; a missing
+`colors` sets every color of the TUI. Values are `#rrggbb` hex; a missing
 key keeps the default. A change applies on reload, and a
 bad value is a config error: the previous config stays and the error is shown.
 
-```toml
-[colors]
-bg             = ""         # empty: the terminal's own background
-accent         = "#d97757"
-agent          = "#d6d6d6"
-user           = "#606060"
-user_highlight = "#8c8c8c"
-gray           = "#929292"
-dark_gray      = "#606060"
-error          = "#e27878"
-
-[colors.trace]
-system  = "#606060"
-user    = "#d97757"
-agent   = "#ffffff"
-bash    = "#a0a0a0"
-notice  = "#808080"   # notices, compaction, tasks
-output  = "#404040"
-error   = "#e27878"
+```yaml
+colors:
+  bg: ""                    # empty: the terminal's own background
+  accent: "#d97757"
+  agent: "#d6d6d6"
+  user: "#606060"
+  user_highlight: "#8c8c8c"
+  gray: "#929292"
+  dark_gray: "#606060"
+  error: "#e27878"
+  trace:
+    system: "#606060"
+    user: "#d97757"
+    agent: "#ffffff"
+    bash: "#a0a0a0"
+    notice: "#808080"       # notices, compaction, tasks
+    output: "#404040"
+    error: "#e27878"
 ```
 
 - `bg`: the background of the whole screen (chat, composer, menus, Tracing,
@@ -510,4 +491,4 @@ Strings and numbers in highlighted bash keep fixed tones.
 
 ## Examples
 
-See the examples topic: a complete settings.toml and a standalone web-search script.
+See the examples topic: a complete settings.yaml and a standalone web-search script.

@@ -166,7 +166,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	fs.StringVar(&dir, "cwd", "", "working directory")
 	fs.Float64Var(&timeout, "timeout", 0, "seconds before the run is cancelled")
 	fs.BoolVar(&asJSON, "json", false, "print {ok, answer, session, error}")
-	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.config/zel/settings.toml")
+	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.config/zel/settings.yaml")
 	// -p may come without its value when flags follow: zel -p --resume ID "text".
 	args = slices.Clone(args)
 	for i, a := range args {

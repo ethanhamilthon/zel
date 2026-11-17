@@ -53,12 +53,12 @@ stays silent for five minutes ends as a retryable failure.
 
 ## Config
 
-A session has one config file: `~/.config/zel/settings.toml`, or the `--config` file in
+A session has one config file: `~/.config/zel/settings.yaml`, or the `--config` file in
 its place (a `zel -p` child takes its parent's from `ZEL_CONFIG`). Nothing is
 inherited from other homes. `config.Load` reads the selected file and sorted
-`hooks/`, `prompts/`, `instructions/` snippets beside it into one snapshot: settings,
-providers, instructions, hooks by event and completions. Providers,
-instructions, hooks and completions are named entries (`[hook.NAME]`) with
+`hooks/*.yaml`, `prompts/*.md`, `systems/*.md` snippets beside it into one snapshot: settings,
+providers, systems, hooks by event and completions. Providers,
+systems, hooks and completions are named entries with
 `modes`; a session keeps those whose modes meet its own (`main` or `headless`,
 plus the `--mode` one), see `config.InModes`. The only write is the model
 selection, made with `config.SetKey`, which replaces or adds just the top-level
@@ -66,9 +66,9 @@ selection, made with `config.SetKey`, which replaces or adds just the top-level
 In the main session `config.Watch` hashes the file and supported directory
 entries, including creations and removals; a change goes through the
 controller, which applies it between turns. A file with errors keeps the old
-snapshot. `config.EnsureHome` creates `~/.config/zel` with a default `settings.toml`
-and the three snippet directories and a `.gitignore`; runtime data is under
-`~/.config/zel/.sessions/`. No migration from older layouts is attempted.
+snapshot. `config.EnsureHome` creates `~/.config/zel` with a default `settings.yaml`,
+the three snippet directories (`hooks/`, `prompts/`, `systems/`) and a `.gitignore`;
+sessions and runtime sockets live in `~/.zel/sessions/`. No migration from older layouts is attempted.
 
 ## The bash tool and the socket
 
@@ -81,7 +81,7 @@ the configured bash working folder and its own process group, with the session e
 (`ZEL_SESSION_ID`, `ZEL_MODE`, `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG`, ...),
 `bash_before`/`bash_after` hooks around it and the `settings.bash_timeout` and `settings.bash_output` limits.
 
-Every session (main or headless) listens on `~/.config/zel/.sessions/run/<hash>.sock`
+Every session (main or headless) listens on `~/.zel/sessions/run/<hash>.sock`
 (the hash is of the session ID; a very long home falls back to the temp folder)
 with a random token. The `zel` subcommands its bash, tasks and hooks run send one
 request there: tasks (`bash -c` jobs owned by the session, logged in

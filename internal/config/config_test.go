@@ -31,20 +31,30 @@ func TestDirectoryLayoutAndKeys(t *testing.T) {
 	if err != nil || root != filepath.Join(home, ".config", "zel") {
 		t.Fatalf("home: %s %v", root, err)
 	}
+	state, err := StateHome(home)
+	if err != nil || state != filepath.Join(home, ".zel") {
+		t.Fatalf("state home: %s %v", state, err)
+	}
 	if err := EnsureHome(root); err != nil {
 		t.Fatal(err)
 	}
 	path := File(root)
-	writeFile(t, path, "[keys]\nmenu = 'alt+k'\n")
-	writeFile(t, filepath.Join(root, "prompts", "plan.md"), "Plan first. ${{ echo preview }}")
-	writeFile(t, filepath.Join(root, "instructions", "rules.toml"), "[instruction.rules]\ntext='Read first'\nmodes=['headless']\n")
-	writeFile(t, filepath.Join(root, "hooks", "notify.toml"), "[hook.notify]\nevent='turn_end'\nrun='true'\n")
+	writeFile(t, path, "keys:\n  menu: alt+k\n")
+	writeFile(t, filepath.Join(root, "prompts", "plan.md"), "---\nmodes: [main, plan]\n---\nPlan first. ${{ echo preview }}")
+	writeFile(t, filepath.Join(root, "systems", "rules.md"), "---\nmodes: [headless]\n---\nRead first ${{ hi }}")
+	writeFile(t, filepath.Join(root, "hooks", "notify.yaml"), "events:\n  - turn_end\nrun: \"true\"\nasync: true\n")
 	cfg := Load(context.Background(), path, fakeRun)
 	if len(cfg.Errors) != 0 || cfg.Settings.Keys["menu"] != "alt+k" || len(cfg.Completions) != 1 || len(cfg.Instructions) != 1 || len(cfg.Hooks["turn_end"]) != 1 {
 		t.Fatalf("config: %+v", cfg)
 	}
-	if cfg.Completions["plan"].Text != "Plan first. ${{ echo preview }}" {
-		t.Fatal("preview executed expansion")
+	if cfg.Completions["plan"].Text != "Plan first. ${{ echo preview }}" || !reflect.DeepEqual(cfg.Completions["plan"].Modes, []string{"main", "plan"}) {
+		t.Fatalf("prompt completion: %+v", cfg.Completions["plan"])
+	}
+	if cfg.Instructions[0].Text != "Read first X:hi" || !reflect.DeepEqual(cfg.Instructions[0].Modes, []string{"headless"}) {
+		t.Fatalf("system: %+v", cfg.Instructions[0])
+	}
+	if !cfg.Hooks["turn_end"][0].Async || cfg.Hooks["turn_end"][0].Name != "notify" {
+		t.Fatalf("hook: %+v", cfg.Hooks["turn_end"][0])
 	}
 	before := treeStamp(path)
 	writeFile(t, filepath.Join(root, "prompts", "new.md"), "new")
@@ -57,22 +67,22 @@ func TestDirectoryLayoutAndKeys(t *testing.T) {
 	if treeStamp(path) != before {
 		t.Fatal("removal not watched")
 	}
-	writeFile(t, filepath.Join(root, "prompts", "duplicate.toml"), "[completion]\nplan='duplicate'\n")
+	writeFile(t, path, "keys:\n  menu: alt+k\ncompletion:\n  plan: duplicate\n")
 	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
 		t.Fatal("duplicate accepted")
 	}
 }
 
 func TestInvalidKeyBindings(t *testing.T) {
-	for _, text := range []string{"menu='ctrl+q'", "unknown='ctrl+x'", "menu='f999'", "menu=42"} {
-		path := filepath.Join(t.TempDir(), "settings.toml")
-		writeFile(t, path, "[keys]\n"+text)
+	for _, text := range []string{"  menu: ctrl+q\n", "  unknown: ctrl+x\n", "  menu: f999\n", "  menu: 42\n"} {
+		path := filepath.Join(t.TempDir(), "settings.yaml")
+		writeFile(t, path, "keys:\n"+text)
 		if cfg := Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
 			t.Fatalf("accepted %s", text)
 		}
 	}
-	path := filepath.Join(t.TempDir(), "settings.toml")
-	writeFile(t, path, "[keys]\nmenu=''\n")
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	writeFile(t, path, "keys:\n  menu: ''\n")
 	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) != 0 || cfg.Settings.Keys["menu"] != "" {
 		t.Fatalf("disable: %+v", cfg)
 	}
@@ -100,66 +110,71 @@ func TestEnsureHome(t *testing.T) {
 		t.Fatalf("the default config must load and set nothing: %+v", cfg)
 	}
 	ignore, _ := os.ReadFile(filepath.Join(home, ".gitignore"))
-	if string(ignore) != ".env\n.sessions/\n" {
+	if string(ignore) != ".env\n" {
 		t.Fatalf(".gitignore = %q", ignore)
 	}
-	writeFile(t, File(home), "model = \"mine\"\n")
+	writeFile(t, File(home), "model: \"mine\"\n")
 	if err := EnsureHome(home); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(File(home)); string(data) != "model = \"mine\"\n" {
+	if data, _ := os.ReadFile(File(home)); string(data) != "model: \"mine\"\n" {
 		t.Fatalf("an existing config must stay: %q", data)
 	}
 }
 
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
-	path, bad, syntax := filepath.Join(dir, "c.toml"), filepath.Join(dir, "bad.toml"), filepath.Join(dir, "syn.toml")
+	path, bad, syntax := filepath.Join(dir, "c.yaml"), filepath.Join(dir, "bad.yaml"), filepath.Join(dir, "syn.yaml")
 	writeFile(t, path, `
-model = "openai/m1"
-[instruction.global]
-text = "global ${{ hi }}"
-[instruction.sub]
-text = "headless only"
-modes = ["headless", "plan"]
-[instruction]
-empty = ""
-[settings]
-compaction = 1000
-bash_timeout = 5
-bash_output = 2000
-editor = "code -w"
-trace_hooks = false
-[colors]
-accent = "${{ fail }}#123456"
-user = "#111111"
-[colors.trace]
-bash = "#010203"
-[provider.openai]
-base_url = "https://api.openai.com/v1"
-api_key = "${{ env KEY }}"
-[env]
-KEY = "k-${{ one }}"
-OTHER = "${{ env KEY }}"
-[hook.a]
-event = "bash_before"
-run = "echo a"
-[hook.b]
-event = ["bash_before", "bash_after"]
-run = "echo b"
-match = "^git"
-timeout = 1.5
-async = true
-modes = ["main", "headless"]
-[hook.idle]
-event = "idle"
-run = "echo idle"
-[completion]
-fix = "Fix ${{ x }}"
-plan = { text = "plan", modes = ["plan"] }
+model: "openai/m1"
+system:
+  global:
+    text: "global ${{ hi }}"
+  sub:
+    text: "headless only"
+    modes: ["headless", "plan"]
+  empty: ""
+settings:
+  compaction: 1000
+  bash_timeout: 5
+  bash_output: 2000
+  editor: "code -w"
+  trace_hooks: false
+colors:
+  accent: "${{ fail }}#123456"
+  user: "#111111"
+  trace:
+    bash: "#010203"
+provider:
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key: "${{ env KEY }}"
+env:
+  KEY: "k-${{ one }}"
+  OTHER: "${{ env KEY }}"
+hook:
+  a:
+    events: "bash_before"
+    run: "echo a"
+  b:
+    events: ["bash_before", "bash_after"]
+    run: "echo b"
+    match: "^git"
+    timeout: 1.5
+    async: true
+    modes: ["main", "headless"]
+  idle:
+    events:
+      - idle
+    run: "echo idle"
+completion:
+  fix: "Fix ${{ x }}"
+  plan:
+    text: "plan"
+    modes: ["plan"]
 `)
-	writeFile(t, bad, "[settings]\ncompaction = 1\nunknown = 2\n")
-	writeFile(t, syntax, "model = \"x\"\n\nmodel = = 3\n")
+	writeFile(t, bad, "settings:\n  compaction: 1\n  unknown: 2\n")
+	writeFile(t, syntax, "model: \"x\"\n\nmodel: : 3\n")
 	cfg := Load(context.Background(), path, fakeRun)
 
 	if cfg.Path != path || len(cfg.Errors) != 0 {
@@ -212,24 +227,25 @@ plan = { text = "plan", modes = ["plan"] }
 		t.Fatalf("raw: %+v", raw)
 	}
 	// A file that cannot be read or is invalid gives the defaults and one error.
-	missing := filepath.Join(dir, "missing.toml")
-	for path, prefix := range map[string]string{bad: bad + ": ", syntax: syntax + ":3:9: ", missing: missing + ": "} {
+	missing := filepath.Join(dir, "missing.yaml")
+	for path, prefix := range map[string]string{bad: bad + ": ", syntax: syntax + ":3:1: ", missing: missing + ": "} {
 		c := Load(context.Background(), path, nil)
 		if len(c.Errors) != 1 || !strings.HasPrefix(c.Errors[0], prefix) || !reflect.DeepEqual(c.Settings, DefaultSettings()) {
 			t.Errorf("%s: %+v", path, c)
 		}
 	}
-	// A syntax error shows its line with a caret under the error.
-	writeFile(t, bad, "[instruction.main]\ntext = \"x\"\n[instruction.main]\n")
-	dup := bad + ":3:2: Key 'instruction.main' has already been defined\n 3 | [instruction.main]\n   |  ^"
+	// A duplicate key error shows its line with a caret under the error.
+	writeFile(t, bad, "system:\n  main:\n    text: \"x\"\n  main:\n    text: \"y\"\n")
+	dup := bad + ":4:3: Key 'system.main' has already been defined\n 4 |   main:\n   |   ^"
 	if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 || !strings.HasPrefix(c.Errors[0], dup) {
-		t.Errorf("duplicate table: errors %q", c.Errors)
+		t.Errorf("duplicate key: errors %q", c.Errors)
 	}
 	for _, content := range []string{
-		"[hook.x]\nevent = \"nope\"\nrun = \"x\"", "[hook.x]\nevent = \"idle\"\nrun = \"x\"\nmatch = \"(\"", "[settings]\ncompaction = -1",
-		"[provider.x]\nbase_url = \"ftp://x\"", "[instruction.x]\nmodes = [\"main\"]", "[completion]\n\"a b\" = \"x\"",
-		"[settings]\naccent = \"#123456\"", "[hook.x]\nevent = \"idle\"\nrun = \"x\"\nmatch = \"y\"", "[hook]\nx = \"echo\"",
-		"[instruction.x]\ntext = \"a\"\nmodes = []", "provider = \"openai\"", "[providers.x]\nbase_url = \"https://x\"",
+		"hook:\n  x:\n    events: nope\n    run: x", "hook:\n  x:\n    events: idle\n    run: x\n    match: \"(\"", "settings:\n  compaction: -1",
+		"provider:\n  x:\n    base_url: ftp://x", "system:\n  x:\n    modes: [main]", "completion:\n  \"a b\": x",
+		"settings:\n  accent: \"#123456\"", "hook:\n  x:\n    events: idle\n    run: x\n    match: y", "hook:\n  x: echo",
+		"system:\n  x:\n    text: a\n    modes: []", "provider: openai", "providers:\n  x:\n    base_url: https://x",
+		"instructions:\n  x: a",
 	} {
 		writeFile(t, bad, content)
 		if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 {
@@ -262,7 +278,7 @@ func TestExpand(t *testing.T) {
 }
 
 func TestEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "settings.toml")
+	path := filepath.Join(t.TempDir(), "sub", "settings.yaml")
 	read := func() string {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -270,27 +286,26 @@ func TestEdit(t *testing.T) {
 		}
 		return string(data)
 	}
-	if err := SetKey(path, "model", "m1"); err != nil || read() != "model = \"m1\"\n" {
+	if err := SetKey(path, "model", "m1"); err != nil || read() != "model: \"m1\"\n" {
 		t.Fatalf("create: %v %q", err, read())
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
 	writeFile(t, path, `# my config
-provider = "openai" # default
-instructions = [
-  """
-[not a table]
-model = "fake"
-""",
-]
+provider: "openai" # default
+systems:
+  - |
+    not_a_table:
+    model: "fake"
 
-[settings] # ui
-compaction = 5
-model = "inside a table"
+settings: # ui
+  compaction: 5
+  model: "inside a table"
 
-[providers.openai]
-base_url = "https://api.openai.com"
+providers:
+  openai:
+    base_url: "https://api.openai.com"
 `)
 	for _, kv := range [][2]string{{"model", "gr\"een\n"}, {"effort", "high"}, {"provider", "local"}} {
 		if err := SetKey(path, kv[0], kv[1]); err != nil {
@@ -298,29 +313,28 @@ base_url = "https://api.openai.com"
 		}
 	}
 	want := `# my config
-provider = "local"
-instructions = [
-  """
-[not a table]
-model = "fake"
-""",
-]
-model = "gr\"een\n"
-effort = "high"
+provider: "local"
+systems:
+  - |
+    not_a_table:
+    model: "fake"
+model: "gr\"een\n"
+effort: "high"
 
-[settings] # ui
-compaction = 5
-model = "inside a table"
+settings: # ui
+  compaction: 5
+  model: "inside a table"
 
-[providers.openai]
-base_url = "https://api.openai.com"
+providers:
+  openai:
+    base_url: "https://api.openai.com"
 `
 	if got := read(); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	writeFile(t, path, "[settings]\ncompaction = 5\n")
-	if err := SetKey(path, "model", "n"); err != nil || read() != "model = \"n\"\n\n[settings]\ncompaction = 5\n" {
-		t.Fatalf("before the first table: %v\n%s", err, read())
+	writeFile(t, path, "settings:\n  compaction: 5\n")
+	if err := SetKey(path, "model", "n"); err != nil || read() != "model: \"n\"\n\nsettings:\n  compaction: 5\n" {
+		t.Fatalf("before the first mapping: %v\n%s", err, read())
 	}
 }
 
@@ -407,7 +421,7 @@ func TestPortableHomePaths(t *testing.T) {
 
 // The documented examples must load without errors.
 func TestDocExamplesLoad(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "examples", "settings.toml")
+	path := filepath.Join("..", "..", "docs", "examples", "settings.yaml")
 	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) > 0 {
 		t.Errorf("%s: %v", path, cfg.Errors)
 	}
@@ -416,9 +430,9 @@ func TestDocExamplesLoad(t *testing.T) {
 // A bad color makes the file invalid.
 func TestColors(t *testing.T) {
 	dir := t.TempDir()
-	for _, bad := range []string{`[colors]` + "\naccent = \"red\"\n", "[colors]\nbg = \"#12345\"\n", "[colors]\nnope = \"#123456\"\n",
-		"[colors.trace]\nuser = 1\n", "[colors.trace]\nbg = \"#123456\"\n", "[colors]\naccent = \"\"\n"} {
-		path := filepath.Join(dir, "bad.toml")
+	for _, bad := range []string{"colors:\n  accent: \"red\"\n", "colors:\n  bg: \"#12345\"\n", "colors:\n  nope: \"#123456\"\n",
+		"colors:\n  trace:\n    user: 1\n", "colors:\n  trace:\n    bg: \"#123456\"\n", "colors:\n  accent: \"\"\n"} {
+		path := filepath.Join(dir, "bad.yaml")
 		writeFile(t, path, bad)
 		if cfg := Load(context.Background(), path, nil); len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], "colors") {
 			t.Errorf("%q: errors %q", bad, cfg.Errors)

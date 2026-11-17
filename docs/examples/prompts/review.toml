@@ -1,2 +1,0 @@
-[completion]
-review = "Review the uncommitted changes:\n${{ git diff --stat }}"

@@ -21,7 +21,7 @@ func testApp(t *testing.T) *app {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	if err := os.WriteFile(config.File(home), []byte("[settings]\neditor = \"perl -pi -e s/draft/EDITED/\"\n[completion]\nplan=\"expanded\"\n"), 0600); err != nil {
+	if err := os.WriteFile(config.File(home), []byte("settings:\n  editor: \"perl -pi -e s/draft/EDITED/\"\ncompletion:\n  plan: \"expanded\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})

@@ -259,7 +259,7 @@ func docsCommand(args []string, out io.Writer) error {
 }
 
 // configPath is the config file a command uses: --config, else the session's
-// (ZEL_CONFIG), else ~/.config/zel/settings.toml.
+// (ZEL_CONFIG), else ~/.config/zel/settings.yaml.
 func configPath(cwd, flag string) (string, error) {
 	if flag == "" {
 		flag = os.Getenv("ZEL_CONFIG")

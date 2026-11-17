@@ -1,8 +1,0 @@
-[hook.progress]
-event = [
-    "turn_start",
-    "turn_end",
-    "error",
-    "session_closed",
-]
-run = "case \"$ZEL_HOOK\" in\n  turn_start) printf \"\\033]9;4;3\\a\" ;;\n  error)      printf \"\\033]9;4;2;100\\a\" ;;\n  *)          printf \"\\033]9;4;0\\a\" ;;\nesac > /dev/tty\n"

@@ -24,10 +24,14 @@ type fileStamp struct {
 func treeStamp(path string) fileStamp {
 	h := sha256.New()
 	paths := []string{path}
-	for _, dir := range []string{"hooks", "prompts", "instructions"} {
+	for _, dir := range []string{"hooks", "prompts", "systems"} {
+		want := ".md"
+		if dir == "hooks" {
+			want = ".yaml"
+		}
 		entries, _ := os.ReadDir(filepath.Join(filepath.Dir(path), dir))
 		for _, e := range entries {
-			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") && (filepath.Ext(e.Name()) == ".toml" || (dir != "hooks" && filepath.Ext(e.Name()) == ".md")) {
+			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") && filepath.Ext(e.Name()) == want {
 				paths = append(paths, filepath.Join(filepath.Dir(path), dir, e.Name()))
 			}
 		}

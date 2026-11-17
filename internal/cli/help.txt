@@ -12,7 +12,7 @@ USAGE
                           config entries with modes = ["NAME"] apply too.
   zel config [--config FILE]     the config and its problems
   zel models [--json]     the models of the configured providers
-  zel docs [TOPIC]        the reference (bash tool, commands, settings.toml, hooks)
+  zel docs [TOPIC]        the reference (bash tool, commands, settings.yaml, hooks)
   zel edit FILE [--all]   exact text edits read from stdin (see zel docs commands)
   zel update              replace this binary with the latest release
   zel version | zel help
@@ -25,25 +25,16 @@ INSIDE A SESSION (the agent's bash, tasks, hooks)
   zel session [--json] | zel session rename NAME
 
 CONFIG
-  ~/.config/zel/settings.toml (or --config FILE instead of it). Changes apply by
-  themselves (hot reload). Any string may contain ${{ bash }}.
+  ~/.config/zel/settings.yaml (or --config FILE instead of it), with snippets in
+  hooks/*.yaml, prompts/*.md and systems/*.md. Changes apply by themselves (hot
+  reload). Any string or .md body may contain ${{ bash }}.
 
-    model = "openai/gpt-5"
+    model: openai/gpt-5
 
-    [provider.openai]
-    base_url = "https://api.openai.com/v1"
-    api_key = "${{ echo $OPENAI_API_KEY }}"
-
-    [instruction]
-    rules = "Read code first."
-    agents = { text = "${{ cat AGENTS.md }}", modes = ["main", "headless"] }
-
-    [hook.check-git]
-    event = "turn_end"
-    run = "./scripts/check-git"
-
-    [completion]
-    plan = "${{ cat PLAN.md }}"
+    provider:
+      openai:
+        base_url: https://api.openai.com/v1
+        api_key: ${{ echo $OPENAI_API_KEY }}
 
   Scripts use your normal PATH, or can be invoked by their paths.
 
@@ -53,6 +44,6 @@ KEYS
   @ completes paths, # completes prompt completions
 
 ENVIRONMENT
-  ZEL_HOME   data directory (default ~/.config/zel): settings.toml and .sessions/
+  ZEL_HOME   config directory (default ~/.config/zel); sessions live in ~/.zel/
 
 bash runs with your permissions and network access; there is no sandbox.

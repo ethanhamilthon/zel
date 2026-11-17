@@ -69,22 +69,24 @@ server = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 Image.new('RGB', (48, 32), (20, 80, 200)).save(OUT / 'fixture.png')
 base_env = {k: v for k, v in os.environ.items() if not k.startswith(('ZEL_', 'REX_'))}
-CONFIG = f'''model = "fixture/fixture"
+CONFIG = f'''model: "fixture/fixture"
 
-[provider.fixture]
-base_url = "http://127.0.0.1:{server.server_port}/v1"
-api_key = "local-test"
+provider:
+  fixture:
+    base_url: "http://127.0.0.1:{server.server_port}/v1"
+    api_key: "local-test"
 
-[completion]
-plan = "Expanded test plan."
+completion:
+  plan: "Expanded test plan."
 
-[instruction.plan]
-text = "PLAN-MODE-RULE"
-modes = ["plan"]
+system:
+  plan:
+    text: "PLAN-MODE-RULE"
+    modes: ["plan"]
 
-[colors]
-bg = "#0A0A0A"
-accent = "#FF3B30"
+colors:
+  bg: "#0A0A0A"
+  accent: "#FF3B30"
 '''
 log = []
 def check(ok, label, detail=''):
@@ -136,18 +138,18 @@ class Term:
         except subprocess.TimeoutExpired: self.p.kill()
         return self.p.returncode
 
-# 1. No provider: the app exits with an error, and ~/.config/zel gets its default files.
+# 1. No provider: the app exits with an error, and ~/.config/zel gets its default files (only configs, no sessions).
 home1, cwd = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-empty-')), pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-project-'))
 t = Term(home1 / 'new', cwd)
 while t.p.poll() is None: t.pump(.05)
 t.pump(.3)
 check(t.p.returncode not in (None, 0) and 'no provider configured' in t.view(), 'no provider: exit with an error', t.view())
 (OUT / '00-no-provider.txt').write_text(t.view())
-check(set(os.listdir(home1 / 'new')) - {'.sessions'} == {'.gitignore', 'settings.toml', 'hooks', 'prompts', 'instructions'}, 'default files', os.listdir(home1 / 'new'))
-check((home1 / 'new' / '.gitignore').read_text() == '.env\n.sessions/\n', '.gitignore content')
+check(set(os.listdir(home1 / 'new')) == {'.gitignore', 'settings.yaml', 'hooks', 'prompts', 'systems'}, 'default files (configs only)', os.listdir(home1 / 'new'))
+check((home1 / 'new' / '.gitignore').read_text() == '.env\n', '.gitignore content')
 
 # 2. The TUI with a provider.
-home = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-home-')); (home / 'settings.toml').write_text(CONFIG)
+home = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-home-')); (home / 'settings.yaml').write_text(CONFIG)
 (cwd / 'my file.go').write_text('sample\n'); (cwd / 'zel.toml').write_text('model = "from-local-file"\n')
 t = Term(home, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.screen.cursor.x == 0 and t.screen.cursor.y == 0, 'empty composer starts at the corner, no padding', (t.screen.cursor.x, t.screen.cursor.y))
@@ -184,17 +186,17 @@ def title_at(title):
     return next(((y, r.index(title)) for y, r in enumerate(t.rows()) if title in r), None)
 main_at = title_at('Zel '); t.shot('06-menu')
 t.send('info'); t.send('\r'); t.pump(.6); t.shot('07-info')
-check('settings.toml' in t.view(), 'Info shows settings.toml', t.view())
+check('settings.yaml' in t.view(), 'Info shows settings.yaml', t.view())
 check(title_at('Info') == main_at, 'the menu and Info are one box: the title stays in place', (main_at, title_at('Info'))); t.send('\x1b', .5)
 t.send('models'); t.send('\r'); t.pump(1.2); t.shot('08-models')
-before = (home / 'settings.toml').read_text()
+before = (home / 'settings.yaml').read_text()
 t.send('second'); t.send('\r'); t.pump(.5); t.shot('09-effort'); t.send('\r'); t.pump(1.0)
-after = (home / 'settings.toml').read_text()
+after = (home / 'settings.yaml').read_text()
 changed = [l for l in after.splitlines() if l not in before.splitlines()]
-check(changed == ['model = "fixture/second-model"'], 'choosing a model writes only the model line', changed)
-check('zel.toml' not in os.listdir(home), 'only settings.toml is used')
+check(changed == ['model: "fixture/second-model"'], 'choosing a model writes only the model line', changed)
+check('zel.toml' not in os.listdir(home), 'only settings.yaml is used')
 # the file is watched: an outside edit is applied
-(home / 'settings.toml').write_text(after.replace('#FF3B30', '#30D158')); t.pump(1.8)
+(home / 'settings.yaml').write_text(after.replace('#FF3B30', '#30D158')); t.pump(1.8)
 t.send('@'); t.pump(.8)
 check(any(t.fg(x, y) == '30d158' for y in range(ROWS) for x in range(COLS)), 'an edit of settings.toml is applied while running (the arrow is the new accent)', t.view())
 t.send('\x1b', .4); t.send('\x15')
@@ -207,10 +209,11 @@ t.send('attach-image\r'); t.wait('Notification received', 'zel view image reache
 check(image_seen, 'the provider received the image bytes')
 t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8); t.shot('10-tracing'); t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit')
-session_files = list((home / '.sessions').rglob('session.jsonl')); data = ''.join(f.read_text() for f in session_files)
+state_home = home.parent / ('.zel-' + home.name)
+session_files = list((state_home / 'sessions').rglob('session.jsonl')); data = ''.join(f.read_text() for f in session_files)
 check('base64' not in data and '[an image was here]' in data, 'saved history has a placeholder, no image data', data[-400:])
 check(not list(home.rglob('attachments')), 'no attachments folder anywhere', list(home.rglob('attachments')))
-check(set(p.name for p in home.iterdir()) == {'.gitignore', '.sessions', 'settings.toml', 'hooks', 'prompts', 'instructions'}, 'home holds settings, snippets and sessions', os.listdir(home))
+check(set(p.name for p in home.iterdir()) == {'.gitignore', 'settings.yaml', 'hooks', 'prompts', 'systems'}, 'config home holds only configs, no sessions', os.listdir(home))
 
 # resume shows the placeholder where the image was (Tracing keeps the notification that carried it)
 t = Term(home, cwd); t.pump(1); t.send('\x1b', .4); t.send('\x1b', .4); t.send('\x12'); t.pump(.8); t.send('\r'); t.pump(1.2)
@@ -229,8 +232,8 @@ check('Retrying in' in t.view(), 'retries are shown in Tracing', t.view()); t.se
 check(t.close() == 0, 'clean quit again')
 
 # --config uses another file instead of the home config; ./zel.toml is ignored
-other = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-other-')) / 'another.toml'
-other.write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/from-another"'))
+other = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-other-')) / 'another.yaml'
+other.write_text(CONFIG.replace('model: "fixture/fixture"', 'model: "fixture/from-another"'))
 def run(*args, env_extra=None):
     return subprocess.run([BIN, *args], cwd=cwd, env=dict(base_env, ZEL_HOME=str(home), **(env_extra or {})), capture_output=True, text=True, timeout=30)
 r = run('config', '--config', str(other)); check('from-another' in r.stdout and str(other) in r.stdout, 'zel config --config reads that file only', r.stdout)
@@ -247,17 +250,17 @@ head_tool = requests[-1]['tools'][0]['description']
 check('no user to ask' in head_tool and 'zel choice' not in head_tool, 'the headless description has no user and no zel choice', head_tool)
 
 # removed settings are config errors now
-old = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-old-')) / 'old.toml'
-old.write_text(CONFIG + '\n[settings]\nslash_menu = true\n')
+old = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-old-')) / 'old.yaml'
+old.write_text(CONFIG + '\nsettings:\n  slash_menu: true\n')
 r = run('config', '--config', str(old)); check('unknown key "settings.slash_menu"' in r.stdout, 'settings.slash_menu is gone', r.stdout)
-old.write_text(CONFIG + '\n[settings]\nreasoning_summary = true\n')
+old.write_text(CONFIG + '\nsettings:\n  reasoning_summary: true\n')
 r = run('config', '--config', str(old)); check('unknown key "settings.reasoning_summary"' in r.stdout, 'settings.reasoning_summary is gone', r.stdout)
-old.write_text(CONFIG + '\n[hook.x]\nevent = "idle"\nrun = "true"\nmatch = "x"\n')
+old.write_text(CONFIG + '\nhook:\n  x:\n    events: "idle"\n    run: "true"\n    match: "x"\n')
 r = run('config', '--config', str(old)); check('only message, notification' in r.stdout, 'match on an event with nothing to match is an error', r.stdout)
 
 # "/" always opens the menu; a bash_after hook with match fires and is in Tracing
 home3 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-hook-'))
-(home3 / 'settings.toml').write_text(CONFIG + '\n[hook.saw]\nevent = "bash_after"\nmatch = "^echo hooked"\nrun = "cat >/dev/null; echo HOOK-SAW-IT"\n')
+(home3 / 'settings.yaml').write_text(CONFIG + '\nhook:\n  saw:\n    events: "bash_after"\n    match: "^echo hooked"\n    run: "cat >/dev/null; echo HOOK-SAW-IT"\n')
 t = Term(home3, cwd); t.pump(1.2); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('/', .6); t.shot('13-slash-menu')
 check('Resume' in t.view() and 'Models' in t.view(), '"/" opens the menu', t.view())
@@ -275,10 +278,10 @@ check(t.close() == 0, 'clean quit after hooks')
 
 # 0.9.2 checks ------------------------------------------------------------
 # the old config format names its replacement
-old.write_text('provider = "x"\n')
-r = run('config', '--config', str(old)); check('model = "PROVIDER/MODEL"' in r.stdout, 'the old provider key is an error that names model = PROVIDER/MODEL', r.stdout)
-old.write_text('[providers.x]\nbase_url = "http://x"\n')
-r = run('config', '--config', str(old)); check('[provider.NAME]' in r.stdout, 'the old [providers.x] is an error that names [provider.NAME]', r.stdout)
+old.write_text('provider: "x"\n')
+r = run('config', '--config', str(old)); check('model: "PROVIDER/MODEL"' in r.stdout, 'the old provider key is an error that names model: PROVIDER/MODEL', r.stdout)
+old.write_text('providers:\n  x:\n    base_url: "http://x"\n')
+r = run('config', '--config', str(old)); check('provider.<name>' in r.stdout, 'the old providers is an error that names provider.<name>', r.stdout)
 (OUT / '20-config.txt').write_text(run('config').stdout)
 
 # modes: --mode plan adds the plan instruction, headless alone does not
@@ -289,7 +292,7 @@ check('PLAN-MODE-RULE' not in plain_prompt, 'zel -p without --mode has no plan i
 r = run('-p', 'x', '--mode', 'main'); check(r.returncode != 0 and 'not a custom mode' in r.stderr, '--mode main is refused', r.stderr)
 
 home4 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-092-'))
-(home4 / 'settings.toml').write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/second-model"') + '\n[settings]\neditor = "sleep 2; perl -pi -e s/draft/EDITED/"\n')
+(home4 / 'settings.yaml').write_text(CONFIG.replace('model: "fixture/fixture"', 'model: "fixture/second-model"') + '\nsettings:\n  editor: "sleep 2; perl -pi -e s/draft/EDITED/"\n')
 t = Term(home4, cwd, ('--mode', 'plan')); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 # the current model is the first row of the models menu
 t.send('\x0b'); t.send('models'); t.send('\r'); t.pump(1.5)
@@ -303,7 +306,7 @@ t.pump(1.8)
 check('my EDITED text' in t.view(), 'Ctrl+E: the editor changed the input and zel shows it', t.view()); t.shot('22-ctrl-e-result')
 t.send('\x15')
 # a real nvim: type into it, save and quit
-(home4 / 'settings.toml').write_text((home4 / 'settings.toml').read_text().replace('editor = "sleep 2; perl -pi -e s/draft/EDITED/"', 'editor = "nvim -u NONE -i NONE"')); t.pump(1.8)
+(home4 / 'settings.yaml').write_text((home4 / 'settings.yaml').read_text().replace('editor: "sleep 2; perl -pi -e s/draft/EDITED/"', 'editor: "nvim -u NONE -i NONE"')); t.pump(1.8)
 t.send('from zel'); t.send('\x05', 1.5); t.shot('23-nvim-open')
 check('from zel' in t.view() and '~' in t.view(), 'Ctrl+E opens nvim with the input', t.view())
 t.send('A and nvim\x1b', .4); t.send(':wq\r', 1.2)
@@ -336,7 +339,7 @@ check(t.close() == 0, 'clean quit after the 0.9.2 checks')
 r = run('-p', 'stream-check'); desc = json.dumps(requests[-1].get('tools', []))
 check('Run a bash script in current dir.' in desc and 'zel docs [TOPIC]' in desc and 'zel choice' not in desc and 'no user to ask' in desc, 'headless: the new bash description, no zel choice', desc[:400])
 home5 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-093-'))
-(home5 / 'settings.toml').write_text(CONFIG)
+(home5 / 'settings.yaml').write_text(CONFIG)
 t = Term(home5, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('hook-check\r'); t.wait('Ready for the next check', 'a turn with one bash call', 20)
 desc = json.dumps(requests[-1].get('tools', []))
@@ -353,9 +356,9 @@ check(y == (ROWS - 16) // 2 and rows[y].index('Info') == (COLS - 60) // 2, 'Info
 t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit after the 0.9.3 checks')
 
-# 0.9.5: Tracing by turn, Tab filters, bash with its output, arrows of the view, Esc, h and trace_hooks
+# 0.9.5: Tracing by turn, Tab filters, bash with its output, arrows of the view, Esc, Ctrl+H and trace_hooks
 home6 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-095-'))
-(home6 / 'settings.toml').write_text(CONFIG + '\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+(home6 / 'settings.yaml').write_text(CONFIG + '\nhook:\n  noise:\n    events: ["turn_start", "idle"]\n    run: "true"\n')
 t = Term(home6, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('stream-check\r'); t.wait('Hello from the fake provider.', 'turn 1 answered')
 t.send('trace-check\r'); t.wait('Ready for the next check', 'turn 2: two bash calls in one response, then an answer', 20); t.pump(.8)
@@ -371,15 +374,15 @@ t.send('\x1b[D', .5); v = t.view(); t.shot('33-tracing-previous')
 check('Tracing / bash · 1/2 · turn 2' in v and 'echo traced' in v and 'exit 0 · ' in v and 'traced' in v.split('── output')[-1], 'Left: the previous bash of the view', v)
 t.send('\x1b', .6); rows = t.rows(); sel = next((r for r in rows if r.endswith('‹')), '')
 check('Tracing · Bash' in '\n'.join(rows) and 'echo traced' in sel, 'Esc: back on the same row', rows)
-t.send('\t\t\t', .5); t.send('h', .6); v = t.view(); t.shot('34-tracing-hooks-hidden')
-check('Tracing · All · hooks hidden' in v and 'turn_start' not in v and 'Turn 2' in v, 'h hides the hooks', v)
+t.send('\t\t\t', .5); t.send('\x08', .6); v = t.view(); t.shot('34-tracing-hooks-hidden')
+check('Tracing · All · hooks hidden' in v and 'turn_start' not in v and 'Turn 2' in v, 'Ctrl+H hides the hooks', v)
 t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit after the 0.9.5 checks')
-(home6 / 'settings.toml').write_text(CONFIG + '\n[settings]\ntrace_hooks = false\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+(home6 / 'settings.yaml').write_text(CONFIG + '\nsettings:\n  trace_hooks: false\nhook:\n  noise:\n    events: ["turn_start", "idle"]\n    run: "true"\n')
 t = Term(home6, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4); t.send('\x12', .8); t.send('\r', 1.2)
 t.send('\x14', 1.0); v = t.view(); t.shot('35-trace-hooks-false')
 check('hooks hidden' in v and 'turn_start' not in v and 'Turn 2 · trace-check' in v, 'trace_hooks = false: a resumed session opens Tracing without hooks', v)
-t.send('h', .6); check(re.search(r'hook\s+', t.view()) is not None, 'h shows them again', t.view())
+t.send('\x08', .6); check(re.search(r'hook\s+', t.view()) is not None, 'Ctrl+H shows them again', t.view())
 t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit after trace_hooks')
 

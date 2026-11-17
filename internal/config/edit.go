@@ -6,18 +6,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 )
 
-// keyLine matches "key = value" at the start of a line.
-var keyLine = regexp.MustCompile(`^([A-Za-z0-9_-]+)[ \t]*=[ \t]*`)
-
-// SetKey sets the top-level string key (provider, model, effort) in the TOML
+// SetKey sets the top-level string key (provider, model, effort) in the YAML
 // file at path and keeps everything else, comments included. A missing key is
-// added after the last top-level key; a missing file is created.
+// added after the last top-level key before the first mapping section; a
+// missing file is created.
 func SetKey(path, key, value string) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -27,46 +24,52 @@ func SetKey(path, key, value string) error {
 	if text := strings.TrimSuffix(string(data), "\n"); text != "" {
 		lines = strings.Split(text, "\n")
 	}
-	line := key + " = " + quote(value)
+	line := key + ": " + quote(value)
 	lines = setTopLevel(lines, key, line)
 	content := strings.Join(lines, "\n") + "\n"
-	var check map[string]any
-	if _, err := toml.Decode(content, &check); err != nil {
+	if _, _, err := decodeYAML(path, []byte(content)); err != nil {
 		return fmt.Errorf("%s: the edit would make the file invalid: %w", path, err)
 	}
 	return writeAtomic(path, []byte(content))
 }
 
-// setTopLevel replaces the line of key, or inserts line after the last
-// top-level key. Top-level keys come before the first [table].
+// setTopLevel replaces the lines of key, or inserts line after the last
+// top-level key before the first multi-line mapping section.
 func setTopLevel(lines []string, key, line string) []string {
-	var scan valueScan
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(strings.Join(lines, "\n")), &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return append(lines, line)
+	}
+	root := doc.Content[0]
 	last, header := -1, len(lines)
-	for i := 0; i < len(lines); i++ {
-		l := strings.TrimSpace(lines[i])
-		if l == "" || l[0] == '#' {
-			continue
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		kn, vn := root.Content[i], root.Content[i+1]
+		start := kn.Line - 1
+		limit := len(lines)
+		if i+2 < len(root.Content) {
+			limit = root.Content[i+2].Line - 1
 		}
-		if l[0] == '[' {
-			header = i
+		end := start
+		for j := limit - 1; j > start; j-- {
+			trimmed := strings.TrimSpace(lines[j])
+			if trimmed == "" || strings.HasPrefix(lines[j], "#") {
+				continue
+			}
+			end = j
 			break
 		}
-		m := keyLine.FindStringSubmatchIndex(l)
-		if m == nil {
+		if kn.Value == key {
+			return append(lines[:start:start], append([]string{line}, lines[end+1:]...)...)
+		}
+		if vn.Kind == yaml.MappingNode && vn.Style != yaml.FlowStyle && end > start {
+			if header == len(lines) {
+				header = start
+			}
 			continue
 		}
-		start := len(lines[i]) - len(strings.TrimLeft(lines[i], " \t")) + m[1]
-		scan = valueScan{}
-		end := i
-		scan.line(lines[i], start)
-		for scan.open() && end+1 < len(lines) {
-			end++
-			scan.line(lines[end], 0)
+		if header == len(lines) {
+			last = end
 		}
-		if l[m[2]:m[3]] == key {
-			return append(lines[:i:i], append([]string{line}, lines[end+1:]...)...)
-		}
-		last, i = end, end
 	}
 	switch {
 	case last >= 0:
@@ -87,7 +90,7 @@ func writeAtomic(path string, data []byte) error {
 	} else if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".settings.toml-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".settings.yaml-*")
 	if err != nil {
 		return err
 	}
@@ -105,7 +108,7 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(f.Name(), path)
 }
 
-// quote encodes s as a TOML basic string.
+// quote encodes s as a double-quoted YAML string.
 func quote(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -131,58 +134,4 @@ func quote(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-// valueScan follows strings and brackets of a value across lines.
-type valueScan struct {
-	ml    string // delimiter of an open multi-line string
-	depth int    // open [ and {
-}
-
-func (v *valueScan) open() bool { return v.ml != "" || v.depth > 0 }
-
-// line scans s from i, up to a comment.
-func (v *valueScan) line(s string, i int) {
-	for i < len(s) {
-		if v.ml != "" {
-			switch {
-			case v.ml == `"""` && s[i] == '\\':
-				i += 2
-			case strings.HasPrefix(s[i:], v.ml):
-				i += 3
-				for n := 0; n < 2 && i < len(s) && s[i] == v.ml[0]; n++ { // quotes right before the closing ones
-					i++
-				}
-				v.ml = ""
-			default:
-				i++
-			}
-			continue
-		}
-		switch c := s[i]; c {
-		case '#':
-			return
-		case '"', '\'':
-			if q := strings.Repeat(string(c), 3); strings.HasPrefix(s[i:], q) {
-				v.ml, i = q, i+3
-				continue
-			}
-			j := i + 1
-			for j < len(s) && s[j] != c {
-				if c == '"' && s[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			i = j + 1
-		case '[', '{':
-			v.depth++
-			i++
-		case ']', '}':
-			v.depth--
-			i++
-		default:
-			i++
-		}
-	}
 }

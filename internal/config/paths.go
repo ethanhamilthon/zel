@@ -62,32 +62,49 @@ func ZelHome(cwd string) (string, error) {
 	return filepath.Abs(dir)
 }
 
+// StateHome is the directory where sessions and runtime sockets live (~/.zel).
+func StateHome(cwd string) (string, error) {
+	if os.Getenv("ZEL_HOME") != "" {
+		dir, err := ZelHome(cwd)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(filepath.Dir(dir), ".zel-"+filepath.Base(dir)), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".zel"), nil
+}
+
 // File is the config file of a Zel home.
-func File(home string) string { return filepath.Join(home, "settings.toml") }
+func File(home string) string { return filepath.Join(home, "settings.yaml") }
 
 const defaultConfig = `# Zel settings. Edits apply by themselves. Reference: zel docs config
-# Snippets live beside this file: hooks/*.toml, prompts/*, instructions/*.
-# [keys] binds UI actions, e.g. menu = "alt+k"; see zel docs config.
+# Snippets live beside this file: hooks/*.yaml, prompts/*.md, systems/*.md.
+# keys binds UI actions, e.g. menu: alt+k; see zel docs config.
 #
-# model  = "openai/gpt-5"        # PROVIDER/MODEL
+# model: openai/gpt-5        # PROVIDER/MODEL
 #
-# [provider.openai]
-# base_url = "https://api.openai.com/v1"
-# api_key  = "${{ echo $OPENAI_API_KEY }}"
+# provider:
+#   openai:
+#     base_url: https://api.openai.com/v1
+#     api_key: ${{ echo $OPENAI_API_KEY }}
 `
 
-// EnsureHome creates the Zel home with the default settings.toml and a
-// .gitignore that keeps secrets and sessions out of git. Existing files stay.
+// EnsureHome creates the Zel home with the default settings.yaml and a
+// .gitignore that keeps secrets out of git. Existing files stay.
 func EnsureHome(home string) error {
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return err
 	}
-	for _, dir := range []string{"hooks", "prompts", "instructions"} {
+	for _, dir := range []string{"hooks", "prompts", "systems"} {
 		if err := os.MkdirAll(filepath.Join(home, dir), 0700); err != nil {
 			return err
 		}
 	}
-	for name, text := range map[string]string{"settings.toml": defaultConfig, ".gitignore": ".env\n.sessions/\n"} {
+	for name, text := range map[string]string{"settings.yaml": defaultConfig, ".gitignore": ".env\n"} {
 		f, err := os.OpenFile(filepath.Join(home, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if errors.Is(err, os.ErrExist) {
 			continue

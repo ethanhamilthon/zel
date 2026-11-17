@@ -72,7 +72,7 @@ func (c *Config) Describe() string {
 	}
 
 	if len(c.Instructions) > 0 {
-		p("Instructions:")
+		p("Systems:")
 		for _, in := range c.Instructions {
 			first, _, _ := strings.Cut(strings.TrimSpace(in.Text), "\n")
 			p("  %s: %s%s", in.Name, clip(first, 60), modes(in.Modes, []string{ModeMain}))

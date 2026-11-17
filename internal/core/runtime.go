@@ -23,7 +23,7 @@ type Options struct {
 	Custom                  string               // --mode: a custom mode the session runs in besides Mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
-	Config                  string               // absolute path of --config, used instead of ~/.config/zel/settings.toml
+	Config                  string               // absolute path of --config, used instead of ~/.config/zel/settings.yaml
 	Prompt                  string               // headless: the prompt, shown in the parent's row of a child
 	SessionReady            func(*Runtime) error // May persist and announce the session.
 }
@@ -35,6 +35,7 @@ type Options struct {
 type Runtime struct {
 	opts      Options
 	home      string
+	state     string
 	store     *store.Store
 	project   string
 	ask       *chooser
@@ -119,10 +120,15 @@ func (a *Runtime) session() *session {
 	return s
 }
 
-func (a *Runtime) Home() string { return a.home }
+func (a *Runtime) Home() string      { return a.home }
+func (a *Runtime) StateHome() string { return a.state }
 
 func New(dir string, opts Options) (*Runtime, error) {
 	home, err := ZelHome(dir)
+	if err != nil {
+		return nil, err
+	}
+	state, err := StateHome(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +140,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 			return nil, err
 		}
 	}
-	a := &Runtime{opts: opts, home: home, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
+	a := &Runtime{opts: opts, home: home, state: state, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
 	if opts.Mode == "headless" {
 		// A zel -p started by the bash of another session is its child.
 		if a.parent, err = parentFromEnv(); err != nil {
@@ -147,7 +153,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 			}
 		}
 	}
-	if a.store, err = store.Open(home); err != nil {
+	if a.store, err = store.Open(state); err != nil {
 		return nil, err
 	}
 	s := a.newSessionState(dir, nil, nil)

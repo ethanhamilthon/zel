@@ -1010,7 +1010,7 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.inFlight(2)
-	if err := setKey(global, "instruction.v2", "INSTRUCTIONS-V2"); err != nil {
+	if err := setKey(global, "system.v2", "INSTRUCTIONS-V2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := setKey(global, "settings.compaction", 4242); err != nil {
@@ -1368,7 +1368,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 // store of its own.
 func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	t.Helper()
-	db, err := store.Open(a.Home())
+	db, err := store.Open(a.StateHome())
 	if err != nil {
 		return nil, err
 	}

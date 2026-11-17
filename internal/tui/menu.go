@@ -123,7 +123,7 @@ Tracing: Tab: all, bash, agent or errors · Ctrl+H: show the hooks
   Left/Right in an entry: the previous or next of the view
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.
-The config file (~/.config/zel/settings.toml) reloads automatically.
+The config file (~/.config/zel/settings.yaml) reloads automatically.
 Commands run with your user permissions.`
 
 var pageTitles = map[string]string{"sessions": "Sessions", "models": "Models", "effort": "Effort", "trace": "Tracing", "info": "Info", "help": "Help"}

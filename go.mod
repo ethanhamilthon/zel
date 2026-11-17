@@ -3,7 +3,6 @@ module zel
 go 1.27.3
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
@@ -13,6 +12,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	golang.org/x/image v0.46.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

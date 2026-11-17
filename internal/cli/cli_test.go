@@ -24,7 +24,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
 
 	"zel/internal/config"
 	"zel/internal/core"
@@ -220,8 +220,8 @@ func TestConfigShowsTheFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	t.Chdir(t.TempDir())
-	extra := filepath.Join(t.TempDir(), "extra.toml")
-	for file, text := range map[string]string{filepath.Join(home, "settings.toml"): "model = \"m1\"\n", extra: "model = \"m2\"\n"} {
+	extra := filepath.Join(t.TempDir(), "extra.yaml")
+	for file, text := range map[string]string{filepath.Join(home, "settings.yaml"): "model: \"m1\"\n", extra: "model: \"m2\"\n"} {
 		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -343,14 +343,14 @@ func writeConfig(home string, s core.Settings) error {
 }
 
 // writeLocalConfig makes a project directory, enters it and puts the top-level
-// keys of toml first in the config of ZEL_HOME.
-func writeLocalConfig(t *testing.T, toml string) string {
+// keys of yml first in the config of ZEL_HOME.
+func writeLocalConfig(t *testing.T, yml string) string {
 	t.Helper()
 	project := t.TempDir()
 	t.Chdir(project)
 	path := config.File(os.Getenv("ZEL_HOME"))
 	existing, _ := os.ReadFile(path)
-	if err := os.WriteFile(path, []byte(toml+"\n"+string(existing)), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(yml+"\n"+string(existing)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	project, err := os.Getwd()
@@ -438,14 +438,15 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			if err := writeConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
-			project := writeLocalConfig(t, `instruction = { main = "main only", sub = { text = "headless config", modes = ["headless"] } }`)
+			project := writeLocalConfig(t, `system: { main: "main only", sub: { text: "headless config", modes: ["headless"] } }`)
 			stderr := &firstLine{fn: func(line string) {
 				id, ok := strings.CutPrefix(line, "zel: session ")
 				mu.Lock()
 				session = id
 				mu.Unlock()
 				// The session is on disk before its ID is shown.
-				if db, err := store.Open(home); !ok || err != nil || !db.Exists(project, id) {
+				state, _ := config.StateHome(project)
+				if db, err := store.Open(state); !ok || err != nil || !db.Exists(project, id) {
 					t.Errorf("session %q not saved before its ID was shown: %v", line, err)
 				}
 			}}
@@ -624,7 +625,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if err := writeConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	project := writeLocalConfig(t, `instruction.rule = { text = "Project rule: be brief", modes = ["main", "headless"] }`)
+	project := writeLocalConfig(t, "system:\n  rule: { text: \"Project rule: be brief\", modes: [\"main\", \"headless\"] }")
 	if err := os.WriteFile(filepath.Join(project, "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +641,8 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	parent := strings.TrimSpace(strings.TrimPrefix(stderr.String(), "zel: session "))
 	_, rest, ok := strings.Cut(text, "zel: session ")
 	child, _, _ := strings.Cut(rest, "\n")
-	db, err := store.Open(home)
+	state, _ := config.StateHome(project)
+	db, err := store.Open(state)
 	if err != nil || !ok {
 		t.Fatalf("no child session in %q: %v", text, err)
 	}
@@ -654,12 +656,21 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	}
 }
 
-// setKey sets a dotted key in a TOML file for the tests; unlike config.SetKey it
+// setKey sets a dotted key in a YAML file for the tests; unlike config.SetKey it
 // rewrites the whole file (comments are lost) and takes any value.
 func setKey(path, key string, value any) error {
 	data := map[string]any{}
-	if _, err := toml.DecodeFile(path, &data); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	if len(raw) > 0 {
+		if err := yaml.Unmarshal(raw, &data); err != nil {
+			return err
+		}
+	}
+	if data == nil {
+		data = map[string]any{}
 	}
 	table, segs := data, strings.Split(key, ".")
 	for _, seg := range segs[:len(segs)-1] {
@@ -671,10 +682,9 @@ func setKey(path, key string, value any) error {
 		table = next
 	}
 	table[segs[len(segs)-1]] = value
-	f, err := os.Create(path)
+	out, err := yaml.Marshal(data)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(data)
+	return os.WriteFile(path, out, 0600)
 }

@@ -7,9 +7,9 @@ system to learn before you can get started.
 Zel is an agent that simply writes bash. Through that one tool, it can run
 background tasks and subagents, view images, work with files, and more.
 
-One file, `~/.config/zel/settings.toml`, lets you tailor Zel to yourself, including the
+One file, `~/.config/zel/settings.yaml`, and snippets in `systems/*.md`, `prompts/*.md` and `hooks/*.yaml`, let you tailor Zel to yourself, including the
 look of the terminal interface. A project's own rules come in through your
-instructions, for example `[instruction] agents = "${{ cat AGENTS.md }}"`. The TUI is as minimal as it
+systems, for example `${{ cat AGENTS.md }}` in `systems/agents.md`. The TUI is as minimal as it
 gets: just you and your agent.
 
 ## Install
@@ -24,20 +24,20 @@ nothing else.
 
 ## Get started
 
-Run `zel` once: it creates `~/.config/zel` with a commented `settings.toml`. Add your
+Run `zel` once: it creates `~/.config/zel` with a commented `settings.yaml`. Add your
 provider there (`zel docs config`), run `zel` in your project folder, and choose
 a model in the picker that opens automatically. Without a provider Zel exits with an error.
 
 Ctrl+K opens the menu for models, sessions and Info. Type `@` for files
 or `#` for prompt completions. Ctrl+E opens what you typed in your editor
-(`nvim` by default, `[settings] editor`). Ctrl+D stops the current turn; Ctrl+Q saves
+(`nvim` by default, `settings.editor`). Ctrl+D stops the current turn; Ctrl+Q saves
 and quits. Bash calls and other details live in Tracing (Ctrl+T), not the chat:
-grouped by turn, with Tab to show only bash calls, answers or errors, and `h`
+grouped by turn, with Tab to show only bash calls, answers or errors, and `Ctrl+H`
 to hide the hooks.
 
 The composer follows the conversation and working indicator, rather than being
 pinned to the bottom. Model and context details are in Info, not in the chat;
-Info also lists the running subagents with their model, effort, context and spend.
+Info also lists the session's subagents (running and finished) with their model, effort, context and spend.
 
 The interface uses tcell and leaves the mouse to the terminal: select and copy
 text, and open links, the way your terminal does. PgUp/PgDn scroll the chat.
@@ -49,18 +49,17 @@ Only use configuration files and tools you trust.
 
 ## Make it yours
 
-Zel reads `~/.config/zel/settings.toml` and snippets in `hooks/`, `prompts/`,
-`instructions/` beside it. `--config FILE` uses that file and its sibling
-folders instead. Sessions live in `~/.config/zel/.sessions/`.
-Version 0.10.0 is a breaking release: no import from `~/.zel` and no rollback.
+Zel reads `~/.config/zel/settings.yaml` and snippets in `hooks/*.yaml`, `prompts/*.md` and
+`systems/*.md` beside it. `--config FILE` uses that file and its sibling
+folders instead. Sessions live in `~/.zel/sessions/`.
 
-Use `[keys]` to rebind shortcuts, for example `menu = "alt+k"`.
+Use `keys` to rebind shortcuts, for example `menu: alt+k`.
 Ctrl/Alt shortcuts also recognize the Russian keyboard layout.
 
-Use the file to set instructions, providers, colors, hooks and prompt
-completions; each of them is a named entry such as `[provider.openai]` or
-`[hook.notify]`. An entry's `modes` says where it applies: `main` (the TUI),
-`headless` (`zel -p`), or a custom mode you start with `zel --mode plan`. Describe your own tools in your instructions and invoke scripts
+Use `settings.yaml` to set providers, settings, keys and colors, and the snippet
+folders for systems (`systems/*.md`), prompt completions (`prompts/*.md`) and
+hooks (`hooks/*.yaml`). An entry's `modes` says where it applies: `main` (the TUI),
+`headless` (`zel -p`), or a custom mode you start with `zel --mode plan`. Describe your own tools in `systems/*.md` and invoke scripts
 by their paths, or install them on your normal `PATH`. No plugin framework needed.
 
 The config reloads automatically; Zel only reads it, except that choosing a

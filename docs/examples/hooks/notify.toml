@@ -1,4 +1,0 @@
-[hook.notify]
-event = "idle"
-run = "osascript -e 'display notification \"zel is done\"' || true"
-async = true
