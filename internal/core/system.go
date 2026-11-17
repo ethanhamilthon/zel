@@ -51,7 +51,7 @@ func (s *session) assemblePrompt() string {
 	var parts []string
 	if cfg := s.conf.get(); cfg != nil {
 		for _, in := range cfg.Instructions {
-			if (s.mode() == "main" && in.Main) || (s.mode() == "headless" && in.Headless) {
+			if config.InModes(in.Modes, s.modes()) {
 				parts = append(parts, strings.TrimSpace(in.Text))
 			}
 		}

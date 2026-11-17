@@ -186,6 +186,9 @@ func (s *session) baseEnv() map[string]string {
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session
 	}
+	if s.opts.Custom != "" {
+		env["ZEL_CUSTOM_MODE"] = s.opts.Custom
+	}
 	if s.cfg != nil {
 		st := s.Settings()
 		env["ZEL_PROVIDER"], env["ZEL_MODEL"], env["ZEL_EFFORT"] = st.Provider, st.Model, st.Effort
@@ -209,3 +212,11 @@ func (s *session) shellEnv() map[string]string {
 
 // mode is how the session runs: "main" (the TUI) or "headless" (zel -p).
 func (s *session) mode() string { return cmp.Or(s.opts.Mode, "main") }
+
+// modes are the modes the session runs in: its base mode and the custom one.
+func (s *session) modes() []string {
+	if s.opts.Custom != "" {
+		return []string{s.mode(), s.opts.Custom}
+	}
+	return []string{s.mode()}
+}

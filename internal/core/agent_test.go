@@ -571,16 +571,14 @@ func writeConfig(home string, s Settings) error {
 			if v == "" {
 				continue
 			}
-			if err := setKey(path, "providers."+name+"."+k, v); err != nil {
+			if err := setKey(path, "provider."+name+"."+k, v); err != nil {
 				return err
 			}
 		}
 	}
-	for k, v := range map[string][2]string{"provider": {s.Provider, cfg.Settings.Provider}, "model": {s.Model, cfg.Settings.Model}} {
-		if v[0] != "" && v[1] == "" {
-			if err := setKey(path, k, v[0]); err != nil {
-				return err
-			}
+	if s.Model != "" && cfg.Settings.Model == "" {
+		if err := setKey(path, "model", s.Provider+"/"+s.Model); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -616,7 +614,7 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 func isolate(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("ZEL_HOME", home)
-	for _, name := range []string{"ZEL_MODE", "ZEL_SESSION_ID", "ZEL_SOCKET", "ZEL_TOKEN", "ZEL_DEPTH", "ZEL_CONFIG", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT"} {
+	for _, name := range []string{"ZEL_MODE", "ZEL_CUSTOM_MODE", "ZEL_SESSION_ID", "ZEL_SOCKET", "ZEL_TOKEN", "ZEL_DEPTH", "ZEL_CONFIG", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -841,7 +839,7 @@ func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				return sse(events...)
 			}}
 			a := newTestAgent(t, fp, Options{})
-			if err := setKey(a.ConfigFile(), "providers.p.api", api); err != nil {
+			if err := setKey(a.ConfigFile(), "provider.p.api", api); err != nil {
 				t.Fatal(err)
 			}
 			if err := a.Reload(); err != nil {
@@ -1012,7 +1010,7 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.inFlight(2)
-	if err := setKey(global, "instructions", "INSTRUCTIONS-V2"); err != nil {
+	if err := setKey(global, "instruction.v2", "INSTRUCTIONS-V2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := setKey(global, "settings.compaction", 4242); err != nil {

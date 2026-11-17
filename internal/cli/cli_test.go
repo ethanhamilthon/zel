@@ -335,16 +335,11 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 func writeConfig(home string, s core.Settings) error {
 	path := config.File(home)
 	for name, p := range s.Providers {
-		if err := setKey(path, "providers."+name+".base_url", p.BaseURL); err != nil {
+		if err := setKey(path, "provider."+name+".base_url", p.BaseURL); err != nil {
 			return err
 		}
 	}
-	for k, v := range map[string]string{"provider": s.Provider, "model": s.Model} {
-		if err := setKey(path, k, v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return setKey(path, "model", s.Provider+"/"+s.Model)
 }
 
 // writeLocalConfig makes a project directory, enters it and puts the top-level
@@ -443,7 +438,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			if err := writeConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
-			project := writeLocalConfig(t, `instructions = ["main only", {text = "headless config", headless = true, main = false}]`)
+			project := writeLocalConfig(t, `instruction = { main = "main only", sub = { text = "headless config", modes = ["headless"] } }`)
 			stderr := &firstLine{fn: func(line string) {
 				id, ok := strings.CutPrefix(line, "zel: session ")
 				mu.Lock()
@@ -629,7 +624,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if err := writeConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	project := writeLocalConfig(t, `instructions = [{text = "Project rule: be brief", headless = true}]`)
+	project := writeLocalConfig(t, `instruction.rule = { text = "Project rule: be brief", modes = ["main", "headless"] }`)
 	if err := os.WriteFile(filepath.Join(project, "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

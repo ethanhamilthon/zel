@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	completionName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	envName        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	entryName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	// ModeName is what a mode may be called: in modes = [...] and in --mode.
+	ModeName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	envName  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 type named[T any] struct {
@@ -43,7 +45,7 @@ func Load(ctx context.Context, path string, run func(env map[string]string) Expa
 }
 
 func newConfig(path string) *Config {
-	return &Config{Path: path, Settings: DefaultSettings(), Hooks: map[string][]Hook{}, Completions: map[string]string{}}
+	return &Config{Path: path, Settings: DefaultSettings(), Hooks: map[string][]Hook{}, Completions: map[string]Completion{}}
 }
 
 func (c *Config) expand(ctx context.Context, env []named[string], run func(map[string]string) Expander) {
@@ -66,8 +68,8 @@ func (c *Config) expand(ctx context.Context, env []named[string], run func(map[s
 	if run != nil {
 		exp = run(maps.Clone(s.Env))
 	}
-	do(exp, "provider", &s.Provider)
 	do(exp, "model", &s.Model)
+	c.splitModel()
 	do(exp, "effort", &s.Effort)
 	defaults := DefaultColors()
 	for i, key := range ColorKeys {
@@ -81,7 +83,7 @@ func (c *Config) expand(ctx context.Context, env []named[string], run func(map[s
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(s.Providers)) {
-		p, key := s.Providers[name], "providers."+name
+		p, key := s.Providers[name], "provider."+name
 		do(exp, key+".base_url", &p.BaseURL)
 		do(exp, key+".api", &p.API)
 		do(exp, key+".api_key", &p.APIKey)
@@ -89,12 +91,33 @@ func (c *Config) expand(ctx context.Context, env []named[string], run func(map[s
 	}
 	kept := c.Instructions[:0]
 	for _, in := range c.Instructions {
-		do(exp, "instructions", &in.Text)
+		do(exp, "instruction."+in.Name, &in.Text)
 		if strings.TrimSpace(in.Text) != "" {
 			kept = append(kept, in)
 		}
 	}
 	c.Instructions = kept
+}
+
+// splitModel turns model = "PROVIDER/MODEL" into the provider and the model.
+// The model ID may contain slashes itself; the provider name cannot. Without a
+// slash the only configured provider is meant.
+func (c *Config) splitModel() {
+	s := &c.Settings
+	if s.Model == "" {
+		return
+	}
+	if prov, model, ok := strings.Cut(s.Model, "/"); ok && prov != "" {
+		s.Provider, s.Model = prov, model
+		return
+	}
+	if len(s.Providers) == 1 {
+		for name := range s.Providers {
+			s.Provider = name
+		}
+		return
+	}
+	c.Warnings = append(c.Warnings, fmt.Sprintf("model: %q must be PROVIDER/MODEL", s.Model))
 }
 
 // readFile parses and validates the file. The env values come back in file
@@ -143,41 +166,50 @@ func (p *parser) keys(m map[string]any, prefix ...string) []string {
 	return out
 }
 
+// renamed are the keys of the old (0.9.1) format, with what replaced them.
+var renamed = map[string]string{
+	"providers":    "[provider.NAME]",
+	"instructions": "[instruction.NAME] with text = ...",
+	"hooks":        "[hook.NAME] with event = ... and run = ...",
+	"completions":  "[completion.NAME] with text = ...",
+}
+
 func (p *parser) file(data map[string]any) error {
 	for _, k := range p.keys(data) {
 		v := data[k]
 		var err error
 		switch k {
-		case "provider", "model", "effort":
+		case "model", "effort":
 			s, ok := v.(string)
 			if !ok {
 				return fmt.Errorf("%s: must be a string", k)
 			}
-			switch k {
-			case "provider":
-				p.cfg.Settings.Provider = s
-			case "model":
-				p.cfg.Settings.Model = s
-			default:
+			if k == "effort" {
 				p.cfg.Settings.Effort = s
+			} else {
+				p.cfg.Settings.Model = s
 			}
 		case "settings":
 			err = p.settings(v)
 		case "colors":
 			err = p.colors(v)
-		case "providers":
+		case "provider":
+			if _, ok := v.(string); ok {
+				return fmt.Errorf(`provider: the selected model is one key now, model = "PROVIDER/MODEL"; [provider.NAME] configures a provider`)
+			}
 			err = p.providers(v)
 		case "env":
 			err = p.strings(v, "env", envName, func(name, s string) { p.env = append(p.env, named[string]{name, s}) })
-		case "completions":
-			err = p.strings(v, "completions", completionName, func(name, s string) {
-				p.cfg.Completions[name] = s
-			})
-		case "instructions":
+		case "completion":
+			err = p.completions(v)
+		case "instruction":
 			err = p.instructions(v)
-		case "hooks":
+		case "hook":
 			err = p.hooks(v)
 		default:
+			if now, ok := renamed[k]; ok {
+				return fmt.Errorf("%s: this is %s now (zel docs config)", k, now)
+			}
 			err = fmt.Errorf("unknown key %q", k)
 		}
 		if err != nil {
@@ -193,23 +225,6 @@ func asTable(v any, where string) (map[string]any, error) {
 		return nil, fmt.Errorf("%s: must be a table", where)
 	}
 	return m, nil
-}
-
-// asList accepts an array (of values or tables) or a single string.
-func asList(v any) ([]any, bool) {
-	switch v := v.(type) {
-	case []any:
-		return v, true
-	case []map[string]any:
-		out := make([]any, len(v))
-		for i, m := range v {
-			out[i] = m
-		}
-		return out, true
-	case string:
-		return []any{v}, true
-	}
-	return nil, false
 }
 
 func (p *parser) settings(v any) error {
@@ -239,6 +254,12 @@ func (p *parser) settings(v any) error {
 			default:
 				st.BashOutput = int(n)
 			}
+		case "editor":
+			s, ok := v.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return fmt.Errorf("%s: must be a command", where)
+			}
+			st.Editor = s
 		case "show_bash":
 			b, ok := v.(bool)
 			if !ok {
@@ -253,18 +274,29 @@ func (p *parser) settings(v any) error {
 }
 
 func (p *parser) providers(v any) error {
-	m, err := asTable(v, "providers")
+	m, err := asTable(v, "provider")
 	if err != nil {
 		return err
 	}
-	for _, name := range p.keys(m, "providers") {
-		where := "providers." + name
+	for _, name := range p.keys(m, "provider") {
+		where := "provider." + name
+		if !entryName.MatchString(name) {
+			return fmt.Errorf("provider: invalid name %q", name)
+		}
 		pm, err := asTable(m[name], where)
 		if err != nil {
 			return err
 		}
 		var pr Provider
-		for _, k := range p.keys(pm, "providers", name) {
+		for _, k := range p.keys(pm, "provider", name) {
+			if k == "modes" {
+				f := fields{m: pm, where: where}
+				pr.Modes = f.modes(nil)
+				if f.err != nil {
+					return f.err
+				}
+				continue
+			}
 			s, ok := pm[k].(string)
 			if !ok {
 				return fmt.Errorf("%s.%s: must be a string", where, k)
@@ -349,6 +381,31 @@ func (f *fields) str(k string, required bool) string {
 	return s
 }
 
+// modes reads a list of mode names; def when the key is missing.
+func (f *fields) modes(def []string) []string {
+	v, ok := f.m["modes"]
+	if !ok {
+		return def
+	}
+	list, ok := v.([]any)
+	if !ok || len(list) == 0 {
+		f.fail("modes", "must be a non-empty list of mode names")
+		return def
+	}
+	var out []string
+	for _, x := range list {
+		s, ok := x.(string)
+		if !ok || !ModeName.MatchString(s) {
+			f.fail("modes", fmt.Sprintf("invalid mode %v", x))
+			return def
+		}
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func (f *fields) flag(k string, def bool) bool {
 	v, ok := f.m[k]
 	if !ok {
@@ -361,87 +418,119 @@ func (f *fields) flag(k string, def bool) bool {
 	return b
 }
 
-func (p *parser) instructions(v any) error {
-	list, ok := asList(v)
-	if !ok {
-		return fmt.Errorf("instructions: must be an array")
+// entries reads a [kind.NAME] map in file order. A string value is the table
+// {short = value}, when the kind has a shorthand.
+func (p *parser) entries(v any, kind, short string, add func(f *fields, name string) error) error {
+	m, err := asTable(v, kind)
+	if err != nil {
+		return err
 	}
-	for i, item := range list {
-		in := Instruction{Main: true}
-		switch item := item.(type) {
-		case string:
-			in.Text = item
-		case map[string]any:
-			f := fields{m: item, where: fmt.Sprintf("instructions[%d]", i)}
-			f.only("text", "main", "headless")
-			in.Text, in.Main, in.Headless = f.str("text", true), f.flag("main", true), f.flag("headless", false)
-			if f.err != nil {
-				return f.err
-			}
-		default:
-			return fmt.Errorf("instructions[%d]: must be a string or a table", i)
+	for _, name := range p.keys(m, kind) {
+		where := kind + "." + name
+		if !entryName.MatchString(name) {
+			return fmt.Errorf("%s: invalid name %q", kind, name)
 		}
-		p.cfg.Instructions = append(p.cfg.Instructions, in)
+		item := m[name]
+		if s, ok := item.(string); ok && short != "" {
+			item = map[string]any{short: s}
+		}
+		t, ok := item.(map[string]any)
+		if !ok {
+			if short != "" {
+				return fmt.Errorf("%s: must be a string or a table", where)
+			}
+			return fmt.Errorf("%s: must be a table", where)
+		}
+		if err := add(&fields{m: t, where: where}, name); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+func (p *parser) instructions(v any) error {
+	return p.entries(v, "instruction", "text", func(f *fields, name string) error {
+		f.only("text", "modes")
+		in := Instruction{Name: name, Text: f.str("text", true), Modes: f.modes([]string{ModeMain})}
+		if f.err != nil {
+			return f.err
+		}
+		p.cfg.Instructions = append(p.cfg.Instructions, in)
+		return nil
+	})
+}
+
+func (p *parser) completions(v any) error {
+	return p.entries(v, "completion", "text", func(f *fields, name string) error {
+		f.only("text", "modes")
+		c := Completion{Text: f.str("text", true), Modes: f.modes([]string{ModeMain})}
+		if f.err != nil {
+			return f.err
+		}
+		p.cfg.Completions[name] = c
+		return nil
+	})
+}
+
 func (p *parser) hooks(v any) error {
-	m, err := asTable(v, "hooks")
-	if err != nil {
-		return err
-	}
-	for _, event := range p.keys(m, "hooks") {
-		if !slices.Contains(Events, event) {
-			return fmt.Errorf("hooks: unknown event %q", event)
+	return p.entries(v, "hook", "", func(f *fields, name string) error {
+		f.only("event", "run", "match", "timeout", "async", "modes")
+		h := Hook{Name: name, Run: f.str("run", true), Match: f.str("match", false), Async: f.flag("async", false), Modes: f.modes([]string{ModeMain})}
+		var events []string
+		switch e := f.m["event"].(type) {
+		case string:
+			events = []string{e}
+		case []any:
+			for _, x := range e {
+				s, ok := x.(string)
+				if !ok {
+					f.fail("event", "must be an event or a list of events")
+				}
+				events = append(events, s)
+			}
+		case nil:
+			f.fail("event", "is required")
+		default:
+			f.fail("event", "must be an event or a list of events")
 		}
-		list, ok := asList(m[event])
-		if !ok {
-			return fmt.Errorf("hooks.%s: must be a string or an array", event)
-		}
-		for i, item := range list {
-			h := Hook{Event: event, Main: true}
-			where := fmt.Sprintf("hooks.%s[%d]", event, i)
-			switch item := item.(type) {
-			case string:
-				h.Run = item
-			case map[string]any:
-				f := fields{m: item, where: where}
-				f.only("run", "match", "timeout", "async", "main", "headless")
-				h.Run, h.Match = f.str("run", true), f.str("match", false)
-				h.Async, h.Main, h.Headless = f.flag("async", false), f.flag("main", true), f.flag("headless", false)
-				if t, ok := item["timeout"]; ok {
-					var sec float64
-					switch t := t.(type) {
-					case int64:
-						sec = float64(t)
-					case float64:
-						sec = t
-					default:
-						f.fail("timeout", "must be a number of seconds")
-					}
-					if sec < 0 {
-						f.fail("timeout", "must be >= 0")
-					}
-					h.Timeout = time.Duration(sec * float64(time.Second))
-				}
-				if f.err != nil {
-					return f.err
-				}
-				if _, ok := MatchField[event]; h.Match != "" && !ok {
-					return fmt.Errorf("%s.match: only message, notification, turn_start, bash_before and bash_after have text to match", where)
-				}
-				if _, err := regexp.Compile(h.Match); err != nil {
-					return fmt.Errorf("%s.match: %v", where, err)
-				}
+		if t, ok := f.m["timeout"]; ok {
+			var sec float64
+			switch t := t.(type) {
+			case int64:
+				sec = float64(t)
+			case float64:
+				sec = t
 			default:
-				return fmt.Errorf("%s: must be a string or a table", where)
+				f.fail("timeout", "must be a number of seconds")
 			}
-			if strings.TrimSpace(h.Run) == "" {
-				return fmt.Errorf("%s: empty command", where)
+			if sec < 0 {
+				f.fail("timeout", "must be >= 0")
 			}
-			p.cfg.Hooks[event] = append(p.cfg.Hooks[event], h)
+			h.Timeout = time.Duration(sec * float64(time.Second))
 		}
-	}
-	return nil
+		if f.err != nil {
+			return f.err
+		}
+		if len(events) == 0 {
+			return fmt.Errorf("%s.event: is required", f.where)
+		}
+		if strings.TrimSpace(h.Run) == "" {
+			return fmt.Errorf("%s.run: empty command", f.where)
+		}
+		if _, err := regexp.Compile(h.Match); err != nil {
+			return fmt.Errorf("%s.match: %v", f.where, err)
+		}
+		for _, event := range events {
+			if !slices.Contains(Events, event) {
+				return fmt.Errorf("%s.event: unknown event %q", f.where, event)
+			}
+			if _, ok := MatchField[event]; h.Match != "" && !ok {
+				return fmt.Errorf("%s.match: only message, notification, turn_start, bash_before and bash_after have text to match", f.where)
+			}
+			e := h
+			e.Event = event
+			p.cfg.Hooks[event] = append(p.cfg.Hooks[event], e)
+		}
+		return nil
+	})
 }

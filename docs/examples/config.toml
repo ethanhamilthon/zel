@@ -1,26 +1,13 @@
 # ~/.zel/config.toml
-provider = "openai"
-model    = "gpt-5"
-effort   = "medium"
-
-instructions = [
-  """
-  Talk like a friend: short phrases, no filler.
-  Use `zel choice` instead of asking questions in text; then end your turn.
-  """,
-  """
-  ## Scripts (in PATH)
-  - web-search <query> [-n 5] [--answer]   web search via Tavily
-  """,
-  { text = "You are a subagent: answer short, do not ask questions.", main = false, headless = true },
-  # a project's own rules, read when the session starts: "${{ cat AGENTS.md }}"
-]
+model  = "openai/gpt-5"   # PROVIDER/MODEL; the model menu writes here
+effort = "medium"
 
 [settings]
 compaction   = 400000
 bash_timeout = 30
 show_bash    = true     # false hides the running command in the working line (time and steps stay)
 bash_output  = 8000     # bytes per bash call; longer output is cut, the full text goes to a file
+editor       = "nvim"   # Ctrl+E opens the composer text in it
 
 [colors]
 accent = "#c3e88d"
@@ -29,28 +16,74 @@ bg     = "#1a1b26"
 [colors.trace]
 agent = "#e0e0e0"
 
-[providers.openai]
+[provider.openai]
 base_url = "https://api.openai.com/v1"
 api      = "responses"
 api_key  = "${{ echo $OPENAI_API_KEY }}"
 
-[providers.local]
+[provider.local]
 base_url = "http://localhost:11434/v1"
 api      = "chat"
 api_key  = ""
+modes    = ["headless"]   # only zel -p sessions may use it
 
-[hooks]
+# Instructions are the system prompt, in file order. Default modes: ["main"].
+[instruction.style]
+text = """
+Talk like a friend: short phrases, no filler.
+Use `zel choice` instead of asking questions in text; then end your turn.
+"""
+modes = ["main", "headless"]
+
+[instruction.scripts]
+text = """
+## Scripts (in PATH)
+- web-search <query> [-n 5] [--answer]   web search via Tavily
+"""
+
+[instruction.subagent]
+text  = "You are a subagent: answer short, do not ask questions."
+modes = ["headless"]
+
+# only in sessions started with --mode plan (zel --mode plan, zel -p --mode plan)
+[instruction.plan]
+text  = "Plan only: read the code and write a plan, change no files."
+modes = ["plan"]
+
+# a project's own rules, read when the session starts
+# [instruction.project]
+# text = "${{ cat AGENTS.md }}"
+
 # a desktop notification when the agent is done and nothing runs any more
-idle = [{ run = "osascript -e 'display notification \"zel is done\"' || true", async = true }]
+[hook.notify]
+event = "idle"
+run   = "osascript -e 'display notification \"zel is done\"' || true"
+async = true
+
 # progress in the terminal tab (OSC 9;4: Ghostty, iTerm2, Windows Terminal); zel itself
 # writes no title or progress. A turn stopped with Ctrl+D fires neither turn_end nor
 # error, so its bar stays until the next turn ends.
-turn_start     = ['printf "\033]9;4;3\a" > /dev/tty']
-turn_end       = ['printf "\033]9;4;0\a" > /dev/tty']
-error          = ['printf "\033]9;4;2;100\a" > /dev/tty']
-session_closed = ['printf "\033]9;4;0\a" > /dev/tty']
-# stop a forced push
-bash_before    = [{ match = 'git push (-f|--force)', run = "echo 'force push is not allowed here' >&2; exit 2" }]
+[hook.progress-start]
+event = "turn_start"
+run   = 'printf "\033]9;4;3\a" > /dev/tty'
 
-[completions]
+[hook.progress-end]
+event = ["turn_end", "session_closed"]
+run   = 'printf "\033]9;4;0\a" > /dev/tty'
+
+[hook.progress-error]
+event = "error"
+run   = 'printf "\033]9;4;2;100\a" > /dev/tty'
+
+# stop a forced push
+[hook.no-force-push]
+event = "bash_before"
+match = 'git push (-f|--force)'
+run   = "echo 'force push is not allowed here' >&2; exit 2"
+
+[completion]
 review = "Review the uncommitted changes:\n${{ git diff --stat }}"
+
+[completion.plan]
+text  = "${{ cat PLAN.md }}"
+modes = ["main", "plan"]

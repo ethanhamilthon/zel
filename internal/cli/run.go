@@ -16,6 +16,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
+	"zel/internal/config"
 	"zel/internal/core"
 )
 
@@ -150,7 +151,7 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 }
 
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
-	var prompt, provider, model, effort, resume, dir string
+	var prompt, provider, model, effort, resume, dir, mode string
 	var configFile string
 	var asJSON bool
 	var timeout float64
@@ -161,6 +162,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	fs.StringVar(&model, "model", "", "model for this run")
 	fs.StringVar(&effort, "effort", "", "reasoning effort for this run")
 	fs.StringVar(&resume, "resume", "", "continue this session")
+	fs.StringVar(&mode, "mode", "", "a custom mode the session runs in besides main or headless")
 	fs.StringVar(&dir, "cwd", "", "working directory")
 	fs.Float64Var(&timeout, "timeout", 0, "seconds before the run is cancelled")
 	fs.BoolVar(&asJSON, "json", false, "print {ok, answer, session, error}")
@@ -201,6 +203,9 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	if !headless && (provider != "" || model != "" || effort != "" || resume != "" || asJSON || timeout != 0 || dir != "") {
 		return errors.New("--provider, --model, --effort, --resume, --cwd, --timeout and --json require -p")
 	}
+	if mode != "" && (!config.ModeName.MatchString(mode) || mode == config.ModeMain || mode == config.ModeHeadless) {
+		return fmt.Errorf("--mode: %q is not a custom mode name (letters, digits, - and _; not main or headless)", mode)
+	}
 	if !headless && (!isTerminal(in) || !isTerminal(out)) {
 		return errors.New("the interactive TUI needs a terminal")
 	}
@@ -213,7 +218,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			return err
 		}
 	}
-	opts := core.Options{Mode: "main", Provider: provider, Model: model, Effort: effort, Resume: resume}
+	opts := core.Options{Mode: "main", Custom: mode, Provider: provider, Model: model, Effort: effort, Resume: resume}
 	if configFile != "" {
 		if opts.Config, err = configPath(cwd, configFile); err != nil {
 			return err

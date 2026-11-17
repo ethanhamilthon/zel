@@ -35,7 +35,7 @@ func (s *session) hooksFor(event string) []config.Hook {
 	}
 	var list []config.Hook
 	for _, h := range cfg.Hooks[event] {
-		if (s.mode() == "main" && h.Main) || (s.mode() == "headless" && h.Headless) {
+		if config.InModes(h.Modes, s.modes()) {
 			list = append(list, h)
 		}
 	}

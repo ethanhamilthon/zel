@@ -47,7 +47,7 @@ instructions, hooks and prompt completions.
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
 - Environment of every call, task, hook and `${{ }}`: `ZEL_SESSION_ID`,
-  `ZEL_MODE` (`main` or `headless`), `ZEL_DEPTH`, `ZEL_PARENT` (for a child),
+  `ZEL_MODE` (`main` or `headless`), `ZEL_CUSTOM_MODE` (the `--mode`, when set), `ZEL_DEPTH`, `ZEL_PARENT` (for a child),
   `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG` (the config file),
   `ZEL_PROVIDER`, `ZEL_MODEL`, `ZEL_EFFORT`, `ZEL_TASK` inside a task,
   `ZEL_HOOK` inside a hook, the `[env]` of the config, and the inherited `PATH`
@@ -158,26 +158,20 @@ Settings are not in the UI, you edit the file and Zel follows it.
 
 ```toml
 # top-level keys first: in TOML, keys after a [table] belong to that table
-provider = "openai"            # default for new sessions; the model menu writes here
-model    = "gpt-5"
-effort   = "medium"            # none minimal low medium high xhigh max
-
-instructions = [
-  "You are zel. Short answers.",                              # main session only
-  "${{ cat AGENTS.md }}",                                     # text from a command
-  { text = "You are a subagent.", main = false, headless = true },
-]
+model  = "openai/gpt-5"        # PROVIDER/MODEL, default for new sessions; the model menu writes here
+effort = "medium"              # none minimal low medium high xhigh max
 
 [settings]
 compaction        = 400000     # tokens, 0 = off
 bash_timeout      = 30         # seconds per bash call
 bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
 show_bash         = true       # false: the working line has no command and no `thinking...`
+editor            = "nvim"     # Ctrl+E opens the composer text in it
 
 [colors]                       # the TUI theme; see `zel docs colors`
 accent = "#c3e88d"
 
-[providers.openai]
+[provider.openai]
 base_url = "https://api.openai.com/v1"
 api      = "responses"         # responses | chat
 api_key  = "${{ echo $OPENAI_API_KEY }}"
@@ -185,23 +179,60 @@ api_key  = "${{ echo $OPENAI_API_KEY }}"
 [env]                          # for bash, tasks, hooks and ${{ }}
 EDITOR = "true"
 
-[hooks]
-turn_end    = ['test -z "$(git status --porcelain)" || echo "uncommitted changes, commit them"']
-bash_before = [{ match = 'git push (-f|--force)', run = "echo 'no force push' >&2; exit 2" }]
+[instruction.style]
+text  = "You are zel. Short answers."
+modes = ["main", "headless"]   # default ["main"]
 
-[completions]
+[instruction]
+agents = "${{ cat AGENTS.md }}" # a string is the text; main only
+
+[hook.uncommitted]
+event = "turn_end"
+run   = 'test -z "$(git status --porcelain)" || echo "uncommitted changes, commit them"'
+
+[completion]
 plan = "${{ cat PLAN.md }}"
 ```
+
+- Providers, instructions, hooks and completions are maps: `[provider.NAME]`,
+  `[instruction.NAME]`, `[hook.NAME]`, `[completion.NAME]` (or one
+  `[instruction]` table with `NAME = ...` lines). Names are 1 to 64 letters,
+  digits, `-` or `_`. Instructions and hooks keep file order.
+- `model = "PROVIDER/MODEL"` picks the provider and the model in one key; the
+  model ID may contain `/` itself (`openrouter/anthropic/claude`). Without a `/`
+  the only configured provider is meant.
+
+### Modes
+
+Every session runs in one base mode: `main` (the TUI) or `headless` (`zel -p`).
+`--mode NAME` (`zel --mode plan`, `zel -p --mode plan "..."`) adds one custom
+mode, so the session runs in `main` + `plan` or `headless` + `plan`. A
+`zel -p` started by the agent does not inherit the custom mode; pass `--mode`.
+
+`modes = [...]` on an entry says in which modes it applies; it applies when one
+of them is a mode of the session:
+
+| entry | default `modes` | outside its modes |
+|---|---|---|
+| `[instruction.NAME]` | `["main"]` | not in the system prompt |
+| `[hook.NAME]` | `["main"]` | does not run |
+| `[completion.NAME]` | `["main"]` | `#NAME` is not offered or expanded |
+| `[provider.NAME]` | every mode | not in the model menu; selecting it is an error |
+
+So `modes = ["plan"]` is an entry only for `--mode plan` sessions, and
+`modes = ["main", "headless"]` is one for every session. `zel session` shows the
+modes as `main+plan`.
 
 - `${{ script }}` in any string (not in hook `run`) is replaced by the output
   of `bash -c script`, one trailing newline trimmed; `$${{` is a literal `${{`.
   Each expression has 10 s; a failing one becomes empty and leaves a notice.
   Instructions, providers, settings and env are expanded when the session
   starts and whenever the config changes; completions when they are used.
-- `instructions` entries are strings (main session only) or tables
-  `{text, main = true, headless = false}`; `[[instructions]]` tables work too.
+- `[instruction.NAME]` is a string (the text) or a table `{text, modes}`.
 - Unknown keys and wrong types make the file invalid: it is skipped with a
-  notice naming the file (and the line, for syntax errors).
+  notice naming the file (and the line, for syntax errors). The keys of the
+  0.9.1 format (`provider = "..."`, `[providers.*]`, `instructions`, `[hooks]`,
+  `[completions]`) are errors that name their replacement.
 - Hot reload: Zel watches the file. A change is applied after the
   current turn; a broken file keeps the previous config. The system prompt is
   only your `instructions`: Zel adds nothing of its own to it. It is rebuilt
@@ -210,23 +241,35 @@ plan = "${{ cat PLAN.md }}"
   tool, built fresh for every request; the main session and `zel -p` get
   different texts (a `zel -p` agent has no user to ask and no `zel choice`).
   Files read by `${{ }}` are not watched.
-- Picking a model changes this session and the `provider`/`model`/`effort`
-  lines of the file. Other open sessions keep their model; so does an open
+- Picking a model changes this session and the `model`/`effort` lines of the
+  file. Other open sessions keep their model; so does an open
   session when you edit `model` by hand.
 - `zel config` prints the config and its problems.
 
-Tell the agent about your own tools in `instructions`. Invoke scripts by their
+Tell the agent about your own tools in an instruction. Invoke scripts by their
 paths, or install them on your normal `PATH`; Zel does not manage script folders.
 
 ## Hooks
 
-`[hooks]` maps an event to a list of commands. An entry is a string (the
-command) or a table `{run, match, timeout, async, main, headless}`:
+`[hook.NAME]` is a table `{event, run, match, timeout, async, modes}`:
+`event` is one event or a list of them; `run` is the command;
 `match` is a regexp on the command (`bash_before`, `bash_after`) or the text
 (`message`, `notification`, `turn_start`); the other events have nothing to match,
 so `match` there is a config error; `timeout` is in seconds (default 60); `async = true` starts the
-hook and does not wait; hooks run in the main session only unless
-`headless = true` (`main = false` leaves the main session out).
+hook and does not wait; `modes` (default `["main"]`) are the session modes it
+runs in, see Modes above.
+
+```toml
+[hook.notify]
+event = "idle"
+run   = "osascript -e 'display notification \"done\"'"
+async = true
+
+[hook.no-force-push]
+event = "bash_before"
+match = 'git push (-f|--force)'
+run   = "echo 'no force push' >&2; exit 2"
+```
 
 A hook is `bash -c` with the session environment and `ZEL_HOOK`; the event
 data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
@@ -319,7 +362,8 @@ on `turn_start`, `turn_end`, `error` and `session_closed`.
 
 ## Prompt completions
 
-`[completions] name = "text"` registers `#name` in the main session. Typing
+`[completion] name = "text"` (or `[completion.name]` with `text` and
+`modes`) registers `#name` in the sessions of its modes (default main). Typing
 `#` in the composer lists the names; when you send a message, each `#name`
 is replaced by its text with `${{ }}` expanded (10 s), wrapped in a tag so the
 agent sees where it starts and ends:

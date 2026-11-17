@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -136,7 +136,7 @@ func (m *app) modelItems() {
 }
 func (m *app) fetchModels() {
 	providers := m.ctl.Settings().Providers
-	if !maps.Equal(providers, m.modelProviders) {
+	if !reflect.DeepEqual(providers, m.modelProviders) {
 		m.modelProviders = providers
 		m.models = nil
 		m.modelsAt = time.Time{}
@@ -200,7 +200,7 @@ func (m *app) acceptMenu(r result) {
 	switch r.kind {
 	case "models":
 		loaded := r.value.(modelResult)
-		if !maps.Equal(loaded.providers, m.modelProviders) {
+		if !reflect.DeepEqual(loaded.providers, m.modelProviders) {
 			return
 		}
 		m.modelsLoading = false

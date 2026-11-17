@@ -56,9 +56,12 @@ stays silent for five minutes ends as a retryable failure.
 A session has one config file: `~/.zel/config.toml`, or the `--config` file in
 its place (a `zel -p` child takes its parent's from `ZEL_CONFIG`). Nothing is
 merged or inherited. `config.Load` reads it into one snapshot: settings,
-instructions, hooks by event and completions. The only write is the model
+providers, instructions, hooks by event and completions. Providers,
+instructions, hooks and completions are named entries (`[hook.NAME]`) with
+`modes`; a session keeps those whose modes meet its own (`main` or `headless`,
+plus the `--mode` one), see `config.InModes`. The only write is the model
 selection, made with `config.SetKey`, which replaces or adds just the top-level
-`provider`, `model` and `effort` lines.
+`model` (`PROVIDER/MODEL`) and `effort` lines.
 In the main session `config.Watch` polls the file; a change goes through the
 controller, which applies it between turns. A file with errors keeps the old
 snapshot. `config.EnsureHome` creates `~/.zel` with a default `config.toml`

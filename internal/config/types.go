@@ -2,21 +2,51 @@ package config
 
 import "time"
 
-// Instruction is one entry of instructions: text for the system prompt, already
-// expanded. Main and Headless say in which session modes it applies.
+// Instruction is one [instruction.NAME]: text for the system prompt, already
+// expanded, and the session modes it applies in.
 type Instruction struct {
-	Text           string
-	Main, Headless bool
+	Name, Text string
+	Modes      []string
 }
 
-// Hook is one command run on an event. Run is never expanded: it is bash already.
+// Completion is one [completion.NAME]: the raw text (${{ }} is expanded when it
+// is used) and the session modes that offer it.
+type Completion struct {
+	Text  string
+	Modes []string
+}
+
+// The two base session modes: main (the TUI) and headless (zel -p). A session
+// may add one custom mode with --mode; it then runs in both.
+const (
+	ModeMain     = "main"
+	ModeHeadless = "headless"
+)
+
+// InModes reports whether an entry with the modes want applies in a session
+// running in the modes active. An empty want means every mode.
+func InModes(want, active []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	for _, m := range active {
+		for _, w := range want {
+			if m == w {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Hook is one [hook.NAME] for one event. Run is never expanded: it is bash already.
 type Hook struct {
-	Event          string
-	Run            string
-	Match          string        // regexp; empty matches everything
-	Timeout        time.Duration // zero: HookTimeout
-	Async          bool          // start and do not wait; output and exit code are ignored
-	Main, Headless bool          // session modes it runs in (default main only)
+	Name, Event string
+	Run         string
+	Match       string        // regexp; empty matches everything
+	Timeout     time.Duration // zero: HookTimeout
+	Async       bool          // start and do not wait; output and exit code are ignored
+	Modes       []string      // session modes it runs in (default main only)
 }
 
 // HookTimeout is the default limit of one hook.
@@ -45,8 +75,8 @@ type Config struct {
 	Path         string
 	Settings     Settings
 	Instructions []Instruction
-	Hooks        map[string][]Hook // by event, in file order
-	Completions  map[string]string // name -> raw text; ${{ }} is expanded when it is used
-	Warnings     []string          // non-fatal problems, such as a failed ${{ }}
-	Errors       []string          // why the file could not be read ("file:line: msg")
+	Hooks        map[string][]Hook     // by event, in file order
+	Completions  map[string]Completion // by name
+	Warnings     []string              // non-fatal problems, such as a failed ${{ }}
+	Errors       []string              // why the file could not be read ("file:line: msg")
 }

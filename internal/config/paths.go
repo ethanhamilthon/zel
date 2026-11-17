@@ -67,10 +67,9 @@ func File(home string) string { return filepath.Join(home, "config.toml") }
 
 const defaultConfig = `# Zel config. Edits apply by themselves. Reference: zel docs config
 #
-# provider = "openai"
-# model    = "gpt-5"
+# model  = "openai/gpt-5"        # PROVIDER/MODEL
 #
-# [providers.openai]
+# [provider.openai]
 # base_url = "https://api.openai.com/v1"
 # api_key  = "${{ echo $OPENAI_API_KEY }}"
 `

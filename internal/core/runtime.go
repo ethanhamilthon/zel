@@ -20,6 +20,7 @@ import (
 
 type Options struct {
 	Mode                    string               // main (the TUI, default) or headless (zel -p)
+	Custom                  string               // --mode: a custom mode the session runs in besides Mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
 	Config                  string               // absolute path of --config, used instead of ~/.zel/config.toml

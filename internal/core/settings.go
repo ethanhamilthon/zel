@@ -179,6 +179,12 @@ func (s *session) applyLocked(base Settings) error {
 	if sel := s.cfg.sel; sel.Model != "" {
 		st.Provider, st.Model, st.Effort = sel.Provider, sel.Model, sel.Effort
 	}
+	// A provider with modes exists only in the sessions of those modes.
+	maps.DeleteFunc(st.Providers, func(_ string, p Provider) bool { return !config.InModes(p.Modes, s.modes()) })
+	_, kept := st.Providers[st.Provider]
+	if _, known := base.Providers[st.Provider]; known && !kept {
+		return fmt.Errorf("provider %q is not available in mode %s", st.Provider, strings.Join(s.modes(), "+"))
+	}
 	if st.Effort == "" {
 		st.Effort = "medium"
 	}
@@ -232,7 +238,11 @@ func (s *session) saveDefault(sel selection) error {
 	s.cfg.mu.Lock()
 	base := s.cfg.base
 	s.cfg.mu.Unlock()
-	for _, kv := range [][3]string{{"provider", sel.Provider, base.Provider}, {"model", sel.Model, base.Model}, {"effort", sel.Effort, base.Effort}} {
+	model, was := sel.Provider+"/"+sel.Model, base.Provider+"/"+base.Model
+	if sel.Model == "" {
+		model = ""
+	}
+	for _, kv := range [][3]string{{"model", model, was}, {"effort", sel.Effort, base.Effort}} {
 		if kv[1] == "" || kv[1] == kv[2] {
 			continue
 		}

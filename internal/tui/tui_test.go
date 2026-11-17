@@ -21,7 +21,7 @@ func testApp(t *testing.T) *app {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	if err := os.WriteFile(config.File(home), []byte("[completions]\nplan=\"expanded\"\n"), 0600); err != nil {
+	if err := os.WriteFile(config.File(home), []byte("[completion]\nplan=\"expanded\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})

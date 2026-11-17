@@ -1,13 +1,15 @@
 zel - minimal AI coding agent
 
 USAGE
-  zel [--config FILE]     open the TUI
+  zel [--mode NAME] [--config FILE]     open the TUI
   zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL] [--resume ID]
-         [--cwd DIR] [--timeout SECONDS] [--json] [--config FILE]
+         [--cwd DIR] [--timeout SECONDS] [--json] [--mode NAME] [--config FILE]
                           run without the TUI: "zel: session ID" goes to stderr,
                           the final answer to stdout (exit 0, nonzero on error,
                           130 when cancelled). PROMPT may come on stdin. Run from
                           the agent's bash, zel -p is a subagent of that session.
+                          --mode NAME adds a custom mode to main or headless:
+                          config entries with modes = ["NAME"] apply too.
   zel config [--config FILE]     the config and its problems
   zel models [--json]     the models of the configured providers
   zel docs [TOPIC]        the reference (bash tool, commands, config.toml, hooks)
@@ -26,25 +28,28 @@ CONFIG
   ~/.zel/config.toml (or --config FILE instead of it). Changes apply by
   themselves (hot reload). Any string may contain ${{ bash }}.
 
-    provider = "openai"
-    model = "gpt-5"
-    instructions = ["Read code first.", "${{ cat AGENTS.md }}"]
+    model = "openai/gpt-5"
 
-    [providers.openai]
+    [provider.openai]
     base_url = "https://api.openai.com/v1"
     api_key = "${{ echo $OPENAI_API_KEY }}"
 
-    [hooks]
-    turn_end = ["./scripts/check-git"]
+    [instruction]
+    rules = "Read code first."
+    agents = { text = "${{ cat AGENTS.md }}", modes = ["main", "headless"] }
 
-    [completions]
+    [hook.check-git]
+    event = "turn_end"
+    run = "./scripts/check-git"
+
+    [completion]
     plan = "${{ cat PLAN.md }}"
 
   Scripts use your normal PATH, or can be invoked by their paths.
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
-  Ctrl+T tracing  Ctrl+D stop the turn  Ctrl+Q quit
+  Ctrl+T tracing  Ctrl+E edit the input in the editor  Ctrl+D stop the turn  Ctrl+Q quit
   @ completes paths, # completes prompt completions
 
 ENVIRONMENT

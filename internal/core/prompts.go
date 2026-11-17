@@ -67,12 +67,19 @@ func PromptAt(runes []rune, cursor int) (start, end int, query string, ok bool) 
 	return begin - 1, end, string(runes[begin:i]), true
 }
 
-// completions of the session: none outside the main session.
+// completions of the session: those of its modes.
 func (s *session) completions() map[string]string {
-	if cfg := s.conf.get(); cfg != nil && s.mode() == "main" {
-		return cfg.Completions
+	cfg := s.conf.get()
+	if cfg == nil {
+		return nil
 	}
-	return nil
+	out := map[string]string{}
+	for name, c := range cfg.Completions {
+		if config.InModes(c.Modes, s.modes()) {
+			out[name] = c.Text
+		}
+	}
+	return out
 }
 
 // PromptNames lists the completion names, sorted.

@@ -15,6 +15,8 @@ const (
 	BashTimeout = 30
 	// BashOutput is the default byte limit of one bash call's output; 0 = no cut.
 	BashOutput = 8000
+	// Editor is the default editor of Ctrl+E.
+	Editor = "nvim"
 )
 
 var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -29,6 +31,8 @@ type Provider struct {
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
 	API     string `json:"api"`
+	// Modes lists the session modes that may use it; empty means every mode.
+	Modes []string `json:"modes,omitempty"`
 }
 
 // Settings is what the config file sets besides instructions, hooks and
@@ -39,6 +43,7 @@ type Settings struct {
 	BashTimeout             int    // seconds per bash call of the agent
 	BashOutput              int    // bytes of one bash call's output the agent gets, 0 = no cut
 	ShowBash                bool   // show the running command in the working line
+	Editor                  string // the command Ctrl+E opens the composer text in
 	Colors                  Colors // [colors]: the TUI theme, defaults filled in
 	Providers               map[string]Provider
 	Env                     map[string]string // [env]: extra variables for bash, tasks, hooks and ${{ }}
@@ -46,7 +51,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
-		ShowBash: true, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
+		ShowBash: true, Editor: Editor, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 // Redact hides the API keys of the providers in text.

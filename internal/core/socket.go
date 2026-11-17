@@ -176,7 +176,7 @@ func (s *session) sessionInfo() ipc.Response {
 		title = firstUserLine(s.History)
 	}
 	s.histMu.RUnlock()
-	info := map[string]any{"id": s.id, "cwd": s.dir, "parent": parent, "depth": s.depth, "mode": s.mode(),
+	info := map[string]any{"id": s.id, "cwd": s.dir, "parent": parent, "depth": s.depth, "mode": strings.Join(s.modes(), "+"),
 		"provider": st.Provider, "model": st.Model, "effort": st.Effort, "title": title, "dir": s.sessionDir(), "config": s.path}
 	if bash := s.bashCwd(); bash != s.dir {
 		info["bash_cwd"] = bash

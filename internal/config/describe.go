@@ -30,13 +30,13 @@ func (c *Config) Describe() string {
 	s := c.Settings
 	p("Settings:")
 	for _, row := range [][2]string{
-		{"provider", strconv.Quote(s.Provider)},
-		{"model", strconv.Quote(s.Model)},
+		{"model", strconv.Quote(strings.TrimPrefix(s.Provider+"/"+s.Model, "/"))},
 		{"effort", strconv.Quote(s.Effort)},
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
 		{"settings.show_bash", strconv.FormatBool(s.ShowBash)},
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
 		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
+		{"settings.editor", strconv.Quote(s.Editor)},
 	} {
 		p("  %-26s = %s", row[0], row[1])
 	}
@@ -55,7 +55,7 @@ func (c *Config) Describe() string {
 			if api == "" {
 				api = APIResponses
 			}
-			p("  %s: base_url=%s api=%s api_key=%s", name, pr.BaseURL, api, key)
+			p("  %s: base_url=%s api=%s api_key=%s%s", name, pr.BaseURL, api, key, modes(pr.Modes, nil))
 		}
 	}
 	if len(s.Env) > 0 {
@@ -66,14 +66,14 @@ func (c *Config) Describe() string {
 		p("Instructions:")
 		for _, in := range c.Instructions {
 			first, _, _ := strings.Cut(strings.TrimSpace(in.Text), "\n")
-			p("  - %s%s", clip(first, 70), modes(in.Main, in.Headless))
+			p("  %s: %s%s", in.Name, clip(first, 60), modes(in.Modes, []string{ModeMain}))
 		}
 	}
 	if len(c.Hooks) > 0 {
 		p("Hooks:")
 		for _, ev := range Events {
 			for _, h := range c.Hooks[ev] {
-				flags := modes(h.Main, h.Headless)
+				flags := modes(h.Modes, []string{ModeMain})
 				if h.Match != "" {
 					flags += " match=" + strconv.Quote(h.Match)
 				}
@@ -84,29 +84,24 @@ func (c *Config) Describe() string {
 					flags += " async"
 				}
 				first, _, _ := strings.Cut(strings.TrimSpace(h.Run), "\n")
-				p("  %s: %s%s", ev, clip(first, 60), flags)
+				p("  %s (%s): %s%s", h.Name, ev, clip(first, 50), flags)
 			}
 		}
 	}
 	if len(c.Completions) > 0 {
 		names := slices.Sorted(maps.Keys(c.Completions))
 		for i, n := range names {
-			names[i] = "#" + n
+			names[i] = "#" + n + modes(c.Completions[n].Modes, []string{ModeMain})
 		}
 		p("Completions: %s", strings.Join(names, " "))
 	}
 	return b.String()
 }
 
-// modes marks entries that do not run in the default (main only) set of modes.
-func modes(main, headless bool) string {
-	switch {
-	case main && !headless:
+// modes shows the modes of an entry when they differ from the default.
+func modes(list, def []string) string {
+	if slices.Equal(list, def) {
 		return ""
-	case main:
-		return " [main, headless]"
-	case headless:
-		return " [headless]"
 	}
-	return " [off]"
+	return " [" + strings.Join(list, ", ") + "]"
 }

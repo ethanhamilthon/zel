@@ -260,11 +260,9 @@ func TestBashTimeoutAndCancel(t *testing.T) {
 
 func TestMessageHooksRewriteAndBlock(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hooks]
-message = [
-  { match = "secret", run = "echo 'no secrets' >&2; exit 2" },
-  { match = "PING", run = "cat >/dev/null; echo PONG-REWRITTEN" },
-]
+	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hook]
+block = { event = "message", match = "secret", run = "echo 'no secrets' >&2; exit 2" }
+ping = { event = "message", match = "PING", run = "cat >/dev/null; echo PONG-REWRITTEN" }
 `))
 	if _, err := turn(t, a, "PING please"); err != nil {
 		t.Fatal(err)
@@ -288,17 +286,13 @@ message = [
 }
 
 func TestBashHooks(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
-bash_before = [
-  { match = 'rm -rf', run = "echo 'no rm' >&2; exit 2" },
-  { match = '^echo original', run = "cat >/dev/null; echo 'echo rewritten'" },
-  "cat >/dev/null; exit 7",
-]
-bash_after = [
-  "cat >/dev/null; echo AFTER",
-  'grep -q "\"code\":3," && echo SAW-EXIT-3 || true',
-  { match = '^exit 3', run = "cat >/dev/null; echo MATCHED-AFTER" },
-]
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook]
+rm = { event = "bash_before", match = 'rm -rf', run = "echo 'no rm' >&2; exit 2" }
+rewrite = { event = "bash_before", match = '^echo original', run = "cat >/dev/null; echo 'echo rewritten'" }
+fail = { event = "bash_before", run = "cat >/dev/null; exit 7" }
+after = { event = "bash_after", run = "cat >/dev/null; echo AFTER" }
+code = { event = "bash_after", run = 'grep -q "\"code\":3," && echo SAW-EXIT-3 || true' }
+matched = { event = "bash_after", match = '^exit 3', run = "cat >/dev/null; echo MATCHED-AFTER" }
 `))
 	s, ctx := a.session(), context.Background()
 	for command, want := range map[string]string{
@@ -319,8 +313,9 @@ bash_after = [
 
 func TestTurnEndHookContinuesTheTurnAtMostThreeTimes(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hooks]
-turn_end = ['grep -q "\"answer\":\"ok\"" && echo keep going']
+	a := newTestAgentWith(t, fp, Options{}, withLocal(`[hook.keep]
+event = "turn_end"
+run = 'grep -q "\"answer\":\"ok\"" && echo keep going'
 `))
 	if _, err := turn(t, a, "go"); err != nil {
 		t.Fatal(err)
@@ -332,11 +327,9 @@ turn_end = ['grep -q "\"answer\":\"ok\"" && echo keep going']
 }
 
 func TestNotificationHookGetsPlainTextAndIsWrapped(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
-notification = [
-  'jq -r .text | sed "s/\$/, run make test/"',
-  'jq -r .text | sed "s/^/[/; s/\$/]/"',
-]
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook]
+a = { event = "notification", run = 'jq -r .text | sed "s/\$/, run make test/"' }
+b = { event = "notification", run = 'jq -r .text | sed "s/^/[/; s/\$/]/"' }
 `))
 	s := a.session()
 	in := notification("t1 finished")
@@ -347,8 +340,9 @@ notification = [
 }
 
 func TestNotificationHookPrintingTagsIsNotWrappedAgain(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
-notification = ['cat >/dev/null; echo "<notification>t1 finished, run make test</notification>"']
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook.tagged]
+event = "notification"
+run = 'cat >/dev/null; echo "<notification>t1 finished, run make test</notification>"'
 `))
 	got, ok := a.session().hookInput(context.Background(), notification("t1 finished"), func(TurnEvent) {})
 	if !ok || got.Text != "<notification>t1 finished, run make test</notification>" {
@@ -357,20 +351,23 @@ notification = ['cat >/dev/null; echo "<notification>t1 finished, run make test<
 }
 
 func TestHooksInstructionsAndCompletionsFollowTheMode(t *testing.T) {
-	conf := withLocal(`instructions = [
-  "MAIN-ONLY",
-  { text = "BOTH-MODES", headless = true },
-  { text = "HEADLESS-ONLY", main = false, headless = true },
-]
-[hooks]
-bash_after = [
-  "cat >/dev/null; echo MAIN",
-  { run = "cat >/dev/null; echo BOTH", headless = true },
-  { run = "cat >/dev/null; echo HEADLESS", main = false, headless = true },
-]
-[completions]
+	conf := withLocal(`[instruction]
+main = "MAIN-ONLY"
+both = { text = "BOTH-MODES", modes = ["main", "headless"] }
+headless = { text = "HEADLESS-ONLY", modes = ["headless"] }
+plan = { text = "PLAN-ONLY", modes = ["plan"] }
+[hook]
+a-main = { event = "bash_after", run = "cat >/dev/null; echo MAIN" }
+b-both = { event = "bash_after", run = "cat >/dev/null; echo BOTH", modes = ["main", "headless"] }
+c-headless = { event = "bash_after", run = "cat >/dev/null; echo HEADLESS", modes = ["headless"] }
+d-plan = { event = "bash_after", run = "cat >/dev/null; echo PLAN", modes = ["plan"] }
+[completion]
 hi = "say ${{ echo $((40 + 2)) }}"
 bad = "${{ exit 3 }}"
+planned = { text = "PLANNED", modes = ["plan"] }
+[provider.q]
+base_url = "http://127.0.0.1:1"
+modes = ["plan"]
 `)
 	ctx := context.Background()
 	main := newTestAgentWith(t, &fakeProvider{}, Options{}, conf)
@@ -387,7 +384,7 @@ bad = "${{ exit 3 }}"
 		t.Errorf("main prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
 	prompt, desc = headless.session().assemblePrompt(), headless.session().toolDescription()
-	if strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || !strings.Contains(prompt, "HEADLESS-ONLY") ||
+	if strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || !strings.Contains(prompt, "HEADLESS-ONLY") || strings.Contains(prompt, "PLAN-ONLY") ||
 		strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "no user to ask") || strings.Contains(desc, "Ask the user before") ||
 		strings.Contains(desc, "{") || !strings.Contains(desc, `zel -p "prompt"`) {
 		t.Errorf("headless prompt:\n%s\ntool:\n%s", prompt, desc)
@@ -402,12 +399,35 @@ bad = "${{ exit 3 }}"
 	if got, err := headless.ExpandPrompt(ctx, "#hi"); err != nil || got != "#hi" {
 		t.Errorf("headless expansion: %q %v", got, err)
 	}
+	// --mode plan: main plus plan.
+	plan := newTestAgentWith(t, &fakeProvider{}, Options{Custom: "plan"}, conf)
+	if got := plan.session().runBash(ctx, "echo x"); got != "x\nMAIN\nBOTH\nPLAN" {
+		t.Errorf("plan hooks: %q", got)
+	}
+	if prompt := plan.session().assemblePrompt(); !strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "PLAN-ONLY") || strings.Contains(prompt, "HEADLESS-ONLY") {
+		t.Errorf("plan prompt:\n%s", prompt)
+	}
+	if got, err := plan.ExpandPrompt(ctx, "#planned"); err != nil || !strings.Contains(got, "PLANNED") {
+		t.Errorf("plan completion: %q %v", got, err)
+	}
+	if got, _ := main.ExpandPrompt(ctx, "#planned"); got != "#planned" {
+		t.Errorf("a plan completion in main: %q", got)
+	}
+	if _, ok := main.Settings().Providers["q"]; ok {
+		t.Error("a plan provider in main")
+	}
+	if _, ok := plan.Settings().Providers["q"]; !ok {
+		t.Error("no plan provider in plan")
+	}
+	if err := main.SelectSession(ctx, "q", "x", "high"); err == nil || !strings.Contains(err.Error(), "not available in mode main") {
+		t.Errorf("select a plan provider in main: %v", err)
+	}
 }
 
 func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
 	dir := t.TempDir()
 	started, release := filepath.Join(dir, "started"), filepath.Join(dir, "release")
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf("[hooks]\nmodel_changed = [{run = 'touch %s; while [ ! -f %s ]; do sleep 0.01; done'}]\n", started, release)))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf("[hook.slow]\nevent = \"model_changed\"\nrun = 'touch %s; while [ ! -f %s ]; do sleep 0.01; done'\n", started, release)))
 	ctl := NewController(a, func(Event) {})
 	defer ctl.Close()
 	done := make(chan error, 1)
@@ -447,7 +467,7 @@ func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
 }
 
 func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hooks]\nturn_start = [{run = 'touch hook-started; sleep 30; touch survived', async = true}]\n"))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hook.slow]\nevent = \"turn_start\"\nrun = 'touch hook-started; sleep 30; touch survived'\nasync = true\n"))
 	s := a.session()
 	s.fireHooks("turn_start", map[string]any{})
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
@@ -474,7 +494,7 @@ func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
 }
 
 func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hooks]\nidle = ['touch idle-started; sleep 30']\n"))
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal("[hook.slow]\nevent = \"idle\"\nrun = 'touch idle-started; sleep 30'\n"))
 	s := a.session()
 	s.checkIdle()
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
@@ -494,8 +514,10 @@ func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
 }
 
 func TestAsyncHookDoesNotBlock(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hooks]
-bash_after = [{ run = "sleep 1; echo IGNORED; touch async-done", async = true }]
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`[hook.async]
+event = "bash_after"
+run = "sleep 1; echo IGNORED; touch async-done"
+async = true
 `))
 	s := a.session()
 	done := filepath.Join(s.dir, "async-done")
@@ -662,17 +684,17 @@ func TestSocketSessionAndView(t *testing.T) {
 
 func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	fp := okProvider()
-	a := newTestAgentWith(t, fp, Options{}, withLocal("instructions = [\"RULE-ONE\"]\n"))
+	a := newTestAgentWith(t, fp, Options{}, withLocal("instruction.rule = \"RULE-ONE\"\n"))
 	local := a.ConfigFile()
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	provider := "provider = \"p\"\nmodel = \"m\"\n[providers.p]\nbase_url = \"" + a.Settings().Providers["p"].BaseURL + "\"\n"
-	writeFile(t, local, "instructions = [\"RULE-ONE\"]\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
+	provider := "model = \"p/m\"\n[provider.p]\nbase_url = \"" + a.Settings().Providers["p"].BaseURL + "\"\n"
+	writeFile(t, local, "instruction.rule = \"RULE-ONE\"\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || a.Settings().Colors.Get("accent") != "#aa00aa" || instructionItems(a) != 1 {
 		t.Fatalf("reload: %v accent %q, %d prompts", err, a.Settings().Colors.Get("accent"), instructionItems(a))
 	}
-	writeFile(t, local, "instructions = [\"RULE-TWO\"]\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
+	writeFile(t, local, "instruction.rule = \"RULE-TWO\"\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || instructionItems(a) != 2 {
 		t.Fatalf("reload: %v, %d prompts", err, instructionItems(a))
 	}
@@ -706,7 +728,7 @@ func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, `model = "picked"`) || !strings.Contains(got, `effort = "high"`) ||
+	if !strings.Contains(got, `model = "p/picked"`) || !strings.Contains(got, `effort = "high"`) ||
 		!strings.Contains(got, "bash_timeout = 5") {
 		t.Fatalf("config:\n%s", got)
 	}
@@ -836,10 +858,11 @@ func TestLifecycleHooks(t *testing.T) {
 		status: func(n int) int { return map[bool]int{true: 400}[n == 2] }}
 	hook := `'echo "$ZEL_HOOK $(cat)" >> hooks.log'`
 	var conf strings.Builder
-	conf.WriteString("[hooks]\n")
+	conf.WriteString("[hook.log]\nrun = " + hook + "\nevent = [")
 	for _, event := range []string{"session_created", "session_resumed", "session_closed", "config_changed", "turn_start", "turn_end", "idle", "model_changed", "error"} {
-		conf.WriteString(event + " = [" + hook + "]\n")
+		conf.WriteString(`"` + event + `", `)
 	}
+	conf.WriteString("]\n")
 	a := newTestAgentWith(t, fp, Options{}, withLocal(conf.String()))
 	logFile := filepath.Join(a.session().dir, "hooks.log")
 	read := func() string {
@@ -902,7 +925,7 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 	home := t.TempDir()
 	isolate(t, home)
 	extra := filepath.Join(t.TempDir(), "other.toml")
-	writeFile(t, extra, "provider = \"p\"\nmodel = \"m\"\n[env]\nFROM_EXTRA = \"yes\"\n[providers.p]\nbase_url = \""+server.URL+"\"\n")
+	writeFile(t, extra, "model = \"p/m\"\n[env]\nFROM_EXTRA = \"yes\"\n[provider.p]\nbase_url = \""+server.URL+"\"\n")
 	parent, err := New(t.TempDir(), Options{Config: extra})
 	if err != nil {
 		t.Fatal(err)

@@ -9,7 +9,7 @@ background tasks and subagents, view images, work with files, and more.
 
 One file, `~/.zel/config.toml`, lets you tailor Zel to yourself, including the
 look of the terminal interface. A project's own rules come in through your
-instructions, for example `"${{ cat AGENTS.md }}"`. The TUI is as minimal as it
+instructions, for example `[instruction] agents = "${{ cat AGENTS.md }}"`. The TUI is as minimal as it
 gets: just you and your agent.
 
 ## Install
@@ -29,7 +29,8 @@ provider there (`zel docs config`), run `zel` in your project folder, and choose
 a model with Ctrl+M. Without a provider Zel exits with an error.
 
 Ctrl+K opens the menu for models, sessions and Info. Type `@` for files
-or `#` for prompt completions. Ctrl+D stops the current turn; Ctrl+Q saves
+or `#` for prompt completions. Ctrl+E opens what you typed in your editor
+(`nvim` by default, `[settings] editor`). Ctrl+D stops the current turn; Ctrl+Q saves
 and quits. Bash calls and other details live in Tracing, not the chat.
 
 The composer follows the conversation and working indicator, rather than being
@@ -49,11 +50,13 @@ Zel reads one file, `~/.zel/config.toml`. `--config FILE` uses another file
 instead (not on top of it). Everything else Zel writes is in `~/.zel/.sessions/`.
 
 Use the file to set instructions, providers, colors, hooks and prompt
-completions. Describe your own tools in your instructions and invoke scripts
+completions; each of them is a named entry such as `[provider.openai]` or
+`[hook.notify]`. An entry's `modes` says where it applies: `main` (the TUI),
+`headless` (`zel -p`), or a custom mode you start with `zel --mode plan`. Describe your own tools in your instructions and invoke scripts
 by their paths, or install them on your normal `PATH`. No plugin framework needed.
 
 The config reloads automatically; Zel only reads it, except that choosing a
-model writes `provider`, `model` and `effort`. `zel config` shows the result.
+model writes `model` and `effort`. `zel config` shows the result.
 See [configuration examples](docs/examples/) for a starting point.
 
 ## Documentation

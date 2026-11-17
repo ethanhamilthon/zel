@@ -61,29 +61,46 @@ func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	path, bad, syntax := filepath.Join(dir, "c.toml"), filepath.Join(dir, "bad.toml"), filepath.Join(dir, "syn.toml")
 	writeFile(t, path, `
-provider = "openai"
-model = "m1"
-instructions = ["global ${{ hi }}", { text = "headless only", main = false, headless = true }, ""]
+model = "openai/m1"
+[instruction.global]
+text = "global ${{ hi }}"
+[instruction.sub]
+text = "headless only"
+modes = ["headless", "plan"]
+[instruction]
+empty = ""
 [settings]
 compaction = 1000
 bash_timeout = 5
 bash_output = 2000
+editor = "code -w"
 [colors]
 accent = "${{ fail }}#123456"
 user = "#111111"
 [colors.trace]
 bash = "#010203"
-[providers.openai]
+[provider.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "${{ env KEY }}"
 [env]
 KEY = "k-${{ one }}"
 OTHER = "${{ env KEY }}"
-[hooks]
-bash_before = ["echo a", { run = "echo b", match = "^git", timeout = 1.5, async = true, headless = true }]
-idle = "echo idle"
-[completions]
+[hook.a]
+event = "bash_before"
+run = "echo a"
+[hook.b]
+event = ["bash_before", "bash_after"]
+run = "echo b"
+match = "^git"
+timeout = 1.5
+async = true
+modes = ["main", "headless"]
+[hook.idle]
+event = "idle"
+run = "echo idle"
+[completion]
 fix = "Fix ${{ x }}"
+plan = { text = "plan", modes = ["plan"] }
 `)
 	writeFile(t, bad, "[settings]\ncompaction = 1\nunknown = 2\n")
 	writeFile(t, syntax, "model = \"x\"\n\nmodel = = 3\n")
@@ -93,7 +110,7 @@ fix = "Fix ${{ x }}"
 		t.Fatalf("path %q, errors %q", cfg.Path, cfg.Errors)
 	}
 	s := cfg.Settings
-	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 {
+	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 || s.Editor != "code -w" {
 		t.Fatalf("settings: %+v", s)
 	}
 	wantColors := DefaultColors()
@@ -109,24 +126,24 @@ fix = "Fix ${{ x }}"
 	if s.Env["KEY"] != "k-X:one" || s.Env["OTHER"] != "k-X:one" {
 		t.Fatalf("env: %v", s.Env)
 	}
-	want := []Instruction{{"global X:hi", true, false}, {"headless only", false, true}}
+	want := []Instruction{{"global", "global X:hi", []string{"main"}}, {"sub", "headless only", []string{"headless", "plan"}}}
 	if !reflect.DeepEqual(cfg.Instructions, want) {
 		t.Fatalf("instructions = %+v", cfg.Instructions)
 	}
 	hooks := cfg.Hooks["bash_before"]
-	if len(hooks) != 2 || hooks[0] != (Hook{Event: "bash_before", Run: "echo a", Main: true}) ||
-		hooks[1] != (Hook{Event: "bash_before", Run: "echo b", Match: "^git", Timeout: 1500 * time.Millisecond, Async: true, Main: true, Headless: true}) ||
-		len(cfg.Hooks["idle"]) != 1 {
+	b := Hook{Name: "b", Event: "bash_before", Run: "echo b", Match: "^git", Timeout: 1500 * time.Millisecond, Async: true, Modes: []string{"main", "headless"}}
+	if len(hooks) != 2 || !reflect.DeepEqual(hooks[0], Hook{Name: "a", Event: "bash_before", Run: "echo a", Modes: []string{"main"}}) ||
+		!reflect.DeepEqual(hooks[1], b) || len(cfg.Hooks["idle"]) != 1 || len(cfg.Hooks["bash_after"]) != 1 {
 		t.Fatalf("hooks = %+v", cfg.Hooks)
 	}
-	if cfg.Completions["fix"] != "Fix ${{ x }}" {
+	if cfg.Completions["fix"].Text != "Fix ${{ x }}" || !reflect.DeepEqual(cfg.Completions["plan"].Modes, []string{"plan"}) {
 		t.Fatalf("completions = %v", cfg.Completions)
 	}
 	if len(cfg.Warnings) != 1 || !strings.HasPrefix(cfg.Warnings[0], "colors.accent: ${{ fail }}: boom") {
 		t.Fatalf("warnings = %q", cfg.Warnings)
 	}
 	desc := cfg.Describe()
-	for _, part := range []string{"model", "m1", "api_key=set", "Env: KEY, OTHER", "#fix", "bash_before: echo b [main, headless]",
+	for _, part := range []string{"model", "m1", "api_key=set", "Env: KEY, OTHER", "#fix", "#plan [plan]", "b (bash_before): echo b [main, headless]", "sub: headless only [headless, plan]",
 		`colors.trace.bash          = "#010203"`, `colors.bg                  = ""`} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("Describe lacks %q:\n%s", part, desc)
@@ -135,7 +152,7 @@ fix = "Fix ${{ x }}"
 
 	// Without an expander, the raw text stays; completions are always raw.
 	raw := Load(context.Background(), path, nil)
-	if raw.Instructions[0].Text != "global ${{ hi }}" || raw.Completions["fix"] != "Fix ${{ x }}" || len(raw.Warnings) != 0 {
+	if raw.Instructions[0].Text != "global ${{ hi }}" || raw.Completions["fix"].Text != "Fix ${{ x }}" || len(raw.Warnings) != 0 {
 		t.Fatalf("raw: %+v", raw)
 	}
 	// A file that cannot be read or is invalid gives the defaults and one error.
@@ -147,9 +164,10 @@ fix = "Fix ${{ x }}"
 		}
 	}
 	for _, content := range []string{
-		"[hooks]\nnope = \"x\"", "[hooks]\nidle = [{ run = \"x\", match = \"(\" }]", "[settings]\ncompaction = -1",
-		"[providers.x]\nbase_url = \"ftp://x\"", "instructions = [{ main = true }]", "[completions]\n\"a b\" = \"x\"",
-		"[settings]\naccent = \"#123456\"", "[hooks]\nidle = [{ run = \"x\", match = \"y\" }]",
+		"[hook.x]\nevent = \"nope\"\nrun = \"x\"", "[hook.x]\nevent = \"idle\"\nrun = \"x\"\nmatch = \"(\"", "[settings]\ncompaction = -1",
+		"[provider.x]\nbase_url = \"ftp://x\"", "[instruction.x]\nmodes = [\"main\"]", "[completion]\n\"a b\" = \"x\"",
+		"[settings]\naccent = \"#123456\"", "[hook.x]\nevent = \"idle\"\nrun = \"x\"\nmatch = \"y\"", "[hook]\nx = \"echo\"",
+		"[instruction.x]\ntext = \"a\"\nmodes = []", "provider = \"openai\"", "[providers.x]\nbase_url = \"https://x\"",
 	} {
 		writeFile(t, bad, content)
 		if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 {
