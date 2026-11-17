@@ -260,12 +260,16 @@ func (p *parser) settings(v any) error {
 				return fmt.Errorf("%s: must be a command", where)
 			}
 			st.Editor = s
-		case "show_bash":
+		case "show_bash", "trace_hooks":
 			b, ok := v.(bool)
 			if !ok {
 				return fmt.Errorf("%s: must be true or false", where)
 			}
-			st.ShowBash = b
+			if k == "show_bash" {
+				st.ShowBash = b
+			} else {
+				st.TraceHooks = b
+			}
 		default:
 			return fmt.Errorf("unknown key %q", where)
 		}

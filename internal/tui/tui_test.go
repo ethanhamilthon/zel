@@ -449,6 +449,76 @@ func TestMenuPagesShareOneBoxAndScrollUnderTheTitle(t *testing.T) {
 	}
 }
 
+// Tracing groups entries by turn, Tab filters them, the arrows of an entry go
+// through the filter only, Esc returns to the same row and h hides the hooks.
+func TestTracingFiltersTurnsAndEntries(t *testing.T) {
+	m := testApp(t)
+	m.screen.(tcell.SimulationScreen).SetSize(100, 30)
+	at := time.Date(2026, 1, 1, 10, 0, 0, 0, time.Local)
+	req := &core.TraceRequest{N: 1, Duration: 1500 * time.Millisecond, Usage: &core.Usage{Input: 16000, Output: 780, Cached: 14000}}
+	m.openMenu("trace")
+	mu := m.menu
+	mu.loading = false
+	mu.trace = []core.TraceEntry{
+		{Kind: "system", Text: "prompt"},
+		{Kind: "hook", Text: "session_created: x -> exit 0, 5ms", At: at, Duration: 5 * time.Millisecond},
+		{Kind: "user", Text: "list the files", At: at, Turn: 1},
+		{Kind: "bash", Text: "ls", Output: "a.go", At: at.Add(time.Second), Turn: 1, Duration: 300 * time.Millisecond, Request: req, First: true},
+		{Kind: "agent", Text: "Two files.", At: at.Add(2 * time.Second), Turn: 1, Request: req},
+		{Kind: "user", Text: "fail", At: at.Add(3 * time.Second), Turn: 2},
+		{Kind: "bash", Text: "false", Output: "[exit 1]", Status: "exit 1", At: at.Add(4 * time.Second), Turn: 2, Duration: 10 * time.Millisecond},
+	}
+	m.showTrace()
+	key := func(k tcell.Key, r rune) { m.menuKey(tcell.NewEventKey(k, r, 0)); m.draw() }
+	view := func() string { m.draw(); return strings.Join(screenRows(m), "\n") }
+	if v := view(); !strings.Contains(v, "Tracing · All") || !strings.Contains(v, "Turn 1 · list the files") ||
+		!strings.Contains(v, "Turn 2 · fail") || !strings.Contains(v, "exit 1 · 10ms") || !strings.Contains(v, "300ms") {
+		t.Fatalf("the list has turn rows and the durations:\n%s", v)
+	}
+	if it, _ := mu.list.current(); it.id != "6" {
+		t.Fatalf("Tracing opens at the latest entry: %+v", it)
+	}
+	key(tcell.KeyUp, 0)
+	key(tcell.KeyUp, 0)
+	if it, _ := mu.list.current(); it.id != "4" {
+		t.Fatalf("Up skips the turn row: %+v", it)
+	}
+	key(tcell.KeyDown, 0)
+	key(tcell.KeyTab, 0)
+	v := view()
+	if !strings.Contains(v, "Tracing · Bash") || strings.Contains(v, "Two files") || !strings.Contains(v, "false") {
+		t.Fatalf("Tab shows the bash entries only:\n%s", v)
+	}
+	key(tcell.KeyEnter, 0)
+	if v := view(); !strings.Contains(v, "Tracing / bash · 2/2 · turn 2") || !strings.Contains(v, "exit 1 · 10ms") {
+		t.Fatalf("Enter opens the selected bash:\n%s", v)
+	}
+	key(tcell.KeyLeft, 0)
+	key(tcell.KeyLeft, 0)
+	v = view()
+	if !strings.Contains(v, "Tracing / bash · 1/2 · turn 1") || !strings.Contains(v, "── output") || !strings.Contains(v, "a.go") ||
+		!strings.Contains(v, "exit 0 · 300ms") || !strings.Contains(v, "request 1 · 1.5s · 16.0k in (14.0k cached) · 780 out") {
+		t.Fatalf("the entry has its command, output, time and tokens:\n%s", v)
+	}
+	key(tcell.KeyEscape, 0)
+	if it, _ := mu.list.current(); mu.page != "trace" || it.id != "3" {
+		t.Fatalf("Esc returns to the row of the entry: %s %+v", mu.page, it)
+	}
+	key(tcell.KeyBacktab, 0)
+	if v := view(); !strings.Contains(v, "Tracing · All") || !strings.Contains(v, "session_created") {
+		t.Fatalf("Shift+Tab goes back to All:\n%s", v)
+	}
+	key(tcell.KeyRune, 'h')
+	if v := view(); !strings.Contains(v, "hooks hidden") || strings.Contains(v, "session_created") || mu.search.text != "" {
+		t.Fatalf("h hides the hooks:\n%s", v)
+	}
+	key(tcell.KeyRune, 'f')
+	key(tcell.KeyRune, 'h')
+	if mu.search.text != "fh" || m.traceHooksShown() {
+		t.Fatalf("after a letter, h is part of the search: %q", mu.search.text)
+	}
+}
+
 func abs(n int) int { return max(n, -n) }
 
 func TestWorkingRowColorsAndSingleLine(t *testing.T) {

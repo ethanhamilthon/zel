@@ -50,6 +50,75 @@ func TestContextProjectionInvalidation(t *testing.T) {
 	}
 }
 
+// The trace pairs a bash call with its output, numbers the turns and the model
+// requests, reads failures and puts logged events in the turn they happened in.
+func TestTraceEntries(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	call := func(id, cmd string) json.RawMessage {
+		return raw(map[string]any{"type": "function_call", "name": "bash", "call_id": id, "arguments": `{"command":"` + cmd + `"}`})
+	}
+	usage := &Usage{Input: 1000, Output: 50, Cached: 800}
+	s := &session{History: []json.RawMessage{
+		raw(map[string]any{"type": "instructions", "text": "system"}),
+		raw(map[string]any{"role": "user", "content": "first"}),
+		raw(map[string]any{"type": "reasoning", "summary": []any{map[string]any{"text": "thinking"}}}),
+		call("a", "ls"), call("b", "false"),
+		callOutput("b", "[exit 1]"), callOutput("a", "files\n[exit 0]\nhook line"),
+		raw(map[string]any{"role": "assistant", "content": "done"}),
+		raw(map[string]any{"role": "user", "content": "second"}),
+	}, itemMeta: map[int]*Metadata{
+		1: {At: at(1)},
+		2: {At: at(2), RequestSeq: 3, TurnSeq: 1, Duration: 2 * time.Second, Usage: usage},
+		3: {At: at(2), RequestSeq: 3, TurnSeq: 1, Duration: 2 * time.Second, Usage: usage},
+		4: {At: at(2), RequestSeq: 3, TurnSeq: 1, Duration: 2 * time.Second, Usage: usage},
+		5: {At: at(3), Duration: 300 * time.Millisecond},
+		6: {At: at(3), Duration: 100 * time.Millisecond},
+		7: {At: at(5), RequestSeq: 8, TurnSeq: 1, Duration: time.Second},
+		8: {At: at(6)},
+	}}
+	events := []TraceEntry{
+		{Kind: "hook", Text: "turn_end: x -> exit 127, 5ms", At: at(5).Add(time.Millisecond), Turn: -1},
+		{Kind: "notice", Text: "later", At: at(9), Turn: -1},
+	}
+	for i := range events {
+		events[i].Status, events[i].Duration = hookResult(events[i].Text)
+	}
+	got := mergeTrace(s.historyTrace(), events)
+	var kinds []string
+	for _, e := range got {
+		kinds = append(kinds, fmt.Sprintf("%s/%d", e.Kind, e.Turn))
+	}
+	if want := "system/0 user/1 thinking/1 bash/1 bash/1 agent/1 hook/1 user/2 notice/2"; strings.Join(kinds, " ") != want {
+		t.Fatalf("entries %s, want %s", strings.Join(kinds, " "), want)
+	}
+	ls, f := got[3], got[4]
+	if ls.Text != "ls" || ls.Output != "files\n[exit 0]\nhook line" || ls.Status != "exit 0" || ls.Duration != 100*time.Millisecond {
+		t.Fatalf("ls: %+v", ls)
+	}
+	if f.Text != "false" || f.Output != "[exit 1]" || f.Status != "exit 1" || f.Duration != 300*time.Millisecond {
+		t.Fatalf("false: %+v", f)
+	}
+	think, answer := got[2], got[5]
+	if !think.First || ls.First || think.Request != ls.Request || think.Request.N != 1 || think.Request.Usage != usage || think.Request.Duration != 2*time.Second {
+		t.Fatalf("the records of a response share its request, the first is marked: %+v %+v", think, ls)
+	}
+	if !answer.First || answer.Request.N != 2 {
+		t.Fatalf("the answer is request 2: %+v", answer)
+	}
+	if hook := got[6]; hook.Status != "exit 127" || hook.Duration != 5*time.Millisecond {
+		t.Fatalf("hook: %+v", hook)
+	}
+	if st, _ := hookResult("message: x -> exit 2, 1ms"); st != "" {
+		t.Fatal("exit 2 of a hook blocks on purpose, it is no failure")
+	}
+	for out, want := range map[string]string{"ok": "", "error: bash: EINVAL: x": "error", "x\n[timeout after 30s]": "timeout", "[cancelled]": "cancelled"} {
+		if got := bashStatus(out); got != want {
+			t.Fatalf("bashStatus(%q) = %q, want %q", out, got, want)
+		}
+	}
+}
+
 func BenchmarkUnchangedSave(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {

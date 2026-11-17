@@ -74,6 +74,7 @@ compaction = 1000
 bash_timeout = 5
 bash_output = 2000
 editor = "code -w"
+trace_hooks = false
 [colors]
 accent = "${{ fail }}#123456"
 user = "#111111"
@@ -110,7 +111,7 @@ plan = { text = "plan", modes = ["plan"] }
 		t.Fatalf("path %q, errors %q", cfg.Path, cfg.Errors)
 	}
 	s := cfg.Settings
-	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 || s.Editor != "code -w" {
+	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 || s.Editor != "code -w" || s.TraceHooks || !DefaultSettings().TraceHooks {
 		t.Fatalf("settings: %+v", s)
 	}
 	wantColors := DefaultColors()
@@ -144,7 +145,7 @@ plan = { text = "plan", modes = ["plan"] }
 	}
 	desc := cfg.Describe()
 	for _, part := range []string{"model", "m1", "api_key=set", "Env: KEY, OTHER", "#fix", "#plan [plan]", "b (bash_before): echo b [main, headless]", "sub: headless only [headless, plan]",
-		`colors.trace.bash          = "#010203"`, `colors.bg                  = ""`} {
+		`colors.trace.bash          = "#010203"`, `colors.bg                  = ""`, "settings.trace_hooks       = false"} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("Describe lacks %q:\n%s", part, desc)
 		}

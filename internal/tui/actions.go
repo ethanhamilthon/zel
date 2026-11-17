@@ -81,16 +81,9 @@ func (m *app) activate(it item) {
 		provider, model := mu.provider, mu.model
 		m.operationTo("", func() error { return m.ctl.SelectModel(provider, model, it.id) })
 	case "trace":
-		i, _ := strconv.Atoi(it.id)
-		if i >= len(mu.trace) {
-			return
+		if i, err := strconv.Atoi(it.id); err == nil && !it.header() {
+			m.openTraceEntry(i)
 		}
-		mu.page = "entry"
-		mu.traceIndex = i
-		mu.title = "Tracing / " + mu.trace[i].Kind
-		mu.body = mu.trace[i].Text
-		mu.list = list{}
-		mu.offset = 0
 	}
 }
 func (m *app) formKey(k *tcell.EventKey) {

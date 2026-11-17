@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"zel/internal/core"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -35,6 +37,9 @@ func (m *app) drawList(x, y, width int, items []item, selected int, spread bool)
 	}
 	for i, it := range items {
 		label, detail := grayColor, darkGray
+		if it.header() {
+			label = traceColors["user"]
+		}
 		if i == selected {
 			label, detail = accentColor, accentColor
 			m.at(x+rowW+1, y+i, "‹", 1, accentColor)
@@ -110,23 +115,47 @@ func (m *app) bodyRows(w int) []row {
 	mu := m.menu
 	if mu.page == "entry" && mu.traceIndex < len(mu.trace) {
 		t := mu.trace[mu.traceIndex]
-		if t.Kind == "bash" && len(t.Text) <= 64<<10 {
-			if highlighted, ok := highlightBash(t.Text, w); ok {
-				return styledRows(strings.Join(highlighted, "\n"), w, style(traceColors["bash"]))
+		rows := plainRows(traceHeader(t), w, darkGray)
+		rows = append(rows, row{})
+		rows = append(rows, entryRows(t, w)...)
+		if t.Kind == "bash" {
+			rows = append(rows, row{})
+			rows = append(rows, plainRows("── output", w, darkGray)...)
+			out, color := t.Output, traceColors["output"]
+			if t.Status != "" {
+				color = traceColors["error"]
 			}
-		}
-		if t.Kind == "assistant" && len(t.Text) <= 64<<10 {
-			if text, ok := renderMarkdown(t.Text, w, false); ok {
-				return styledRows(text, w, style(agentColor))
+			if out == "" {
+				out, color = "(none yet)", darkGray
+				if t.Duration > 0 {
+					out = "(empty)"
+				}
 			}
+			rows = append(rows, plainRows(out, w, color)...)
 		}
-		color := traceColors[t.Kind]
-		if color == "" {
-			color = grayColor
-		}
-		return plainRows(t.Text, w, color)
+		return rows
 	}
 	return plainRows(mu.body, w, grayColor)
+}
+
+// entryRows is the text of a trace entry: a bash command highlighted, an agent
+// answer as Markdown, the rest plain in the color of its kind.
+func entryRows(t core.TraceEntry, w int) []row {
+	if t.Kind == "bash" && len(t.Text) <= 64<<10 {
+		if highlighted, ok := highlightBash(t.Text, w); ok {
+			return styledRows(strings.Join(highlighted, "\n"), w, style(traceColors["bash"]))
+		}
+	}
+	if t.Kind == "agent" && len(t.Text) <= 64<<10 {
+		if text, ok := renderMarkdown(t.Text, w, false); ok {
+			return styledRows(text, w, style(agentColor))
+		}
+	}
+	color := traceColors[t.Kind]
+	if color == "" {
+		color = grayColor
+	}
+	return plainRows(t.Text, w, color)
 }
 func (m *app) at(x, y int, text string, width int, color lipgloss.Color) {
 	rows := plainRows(text, width, color)

@@ -43,6 +43,18 @@ instructions, hooks and prompt completions.
   (`12s · 3 bashs`), with no command and no `thinking...`, also after a call
   ends. Tracing and task rows are unchanged. The command is cut to one line
   with `...` at its end, in the dark gray color.
+- `settings.trace_hooks` (default `true`) shows the hook runs in Tracing. With
+  `false` Tracing opens without them; `h` in Tracing shows or hides them until
+  zel quits.
+- Tracing (Ctrl+T) lists the session by turn: a row per turn with its first
+  message and how long it took, then its entries with a failure (`exit 1`),
+  their duration and time. Tab cycles the view: All, Bash, Agent (the answers)
+  and Errors (failed bash calls and hooks, errors); Shift+Tab goes back. Typing
+  searches; `h` with an empty search line toggles the hooks. Enter opens an
+  entry: a bash call shows its command and output together, every entry its
+  time, exit and duration, and the model request it came from with its tokens.
+  Left and Right go to the previous and next entry of the view; Esc returns to
+  the same row of the list.
 - A running background task has a line of its own above the working line, in
   the same style with another sprite: `◐ 6s · test background`, the time in the
   accent color and the task's name in dark gray; one empty line separates the
@@ -170,6 +182,7 @@ compaction        = 400000     # tokens, 0 = off
 bash_timeout      = 30         # seconds per bash call
 bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
 show_bash         = true       # false: the working line has no command and no `thinking...`
+trace_hooks       = true       # false: Tracing opens without the hook runs (h toggles them)
 editor            = "nvim"     # Ctrl+E opens the composer text in it
 
 [colors]                       # the TUI theme; see `zel docs colors`

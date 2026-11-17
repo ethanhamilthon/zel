@@ -31,7 +31,9 @@ a model with Ctrl+M. Without a provider Zel exits with an error.
 Ctrl+K opens the menu for models, sessions and Info. Type `@` for files
 or `#` for prompt completions. Ctrl+E opens what you typed in your editor
 (`nvim` by default, `[settings] editor`). Ctrl+D stops the current turn; Ctrl+Q saves
-and quits. Bash calls and other details live in Tracing, not the chat.
+and quits. Bash calls and other details live in Tracing (Ctrl+T), not the chat:
+grouped by turn, with Tab to show only bash calls, answers or errors, and `h`
+to hide the hooks.
 
 The composer follows the conversation and working indicator, rather than being
 pinned to the bottom. Model and context details are in Info, not in the chat;

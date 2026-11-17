@@ -10,6 +10,7 @@ type Record = entities.Record
 type Input = entities.Input
 
 type TraceEntry = entities.TraceEntry
+type TraceRequest = entities.TraceRequest
 type SessionSummary = entities.SessionSummary
 type TurnEvent = entities.Event
 

@@ -42,6 +42,7 @@ class Provider(BaseHTTPRequestHandler):
         elif last == 'attach-image' and 'image' not in calls: output = [command(f'{BIN} view {OUT}/fixture.png', 'image')]
         elif last == 'view-relative' and 'rel' not in calls: output = [command(f'mkdir -p {OUT}/relsub && cp {OUT}/fixture.png {OUT}/relsub/rel.png && cd {OUT}/relsub && {BIN} view rel.png', 'rel')]
         elif last == 'hook-check' and 'hook' not in calls: output = [command('echo hooked', 'hook')]
+        elif last == 'trace-check' and 'tr1' not in calls: output = [command('echo traced', 'tr1'), command('false', 'tr2')]
         elif last == 'task-run' and 'task' not in calls: output = [command(f'{BIN} task run --name bg-check -- sleep 90', 'task')]
         elif last == 'spawn-sub' and 'spawn' not in calls: output = [command(f'{BIN} -p sub-work', 'spawn')]
         elif last == 'sub-work' and 'subsleep' not in calls: output = [command('sleep 12', 'subsleep')]
@@ -350,5 +351,35 @@ rows = t.rows(); y = next((y for y, r in enumerate(rows) if r.strip() == 'Info')
 check(y == (ROWS - 16) // 2 and rows[y].index('Info') == (COLS - 60) // 2, 'Info: a centered half-screen box, title at its top left', (y, rows[y] if y is not None else t.view())); t.shot('29-info-box')
 t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit after the 0.9.3 checks')
+
+# 0.9.5: Tracing by turn, Tab filters, bash with its output, arrows of the view, Esc, h and trace_hooks
+home6 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-095-'))
+(home6 / 'config.toml').write_text(CONFIG + '\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+t = Term(home6, cwd); t.pump(1.5)
+t.send('stream-check\r'); t.wait('Hello from the fake provider.', 'turn 1 answered')
+t.send('trace-check\r'); t.wait('Ready for the next check', 'turn 2: two bash calls in one response, then an answer', 20); t.pump(.8)
+t.send('\x14', 1.0); v = t.view(); t.shot('30-tracing-turns')
+check('Tracing · All' in v and 'Turn 2 · trace-check' in v and v.rstrip().endswith('‹'), 'Ctrl+T: Tracing with a row per turn, at the latest entry', v)
+t.send('\x1b[5~', .5); check('Turn 1 · stream-check' in t.view(), 'PgUp: the first turn has its row too', t.view()); t.send('\x1b[6~', .5)
+check(re.search(r'hook\s+turn_start: ', v) is not None and re.search(r'bash\s+false\s+exit 1 · \d+ms', v) is not None and 'output ' not in v, 'hooks shown, the failed bash says exit 1 with its duration, no separate output row', v)
+t.send('\t', .5); v = t.view(); t.shot('31-tracing-bash')
+check('Tracing · Bash' in v and 'echo traced' in v and 'false' in v and 'Hello from' not in v and 'turn_start' not in v, 'Tab: only bash entries', v)
+t.send('\r', .6); v = t.view(); t.shot('32-tracing-entry')
+check('Tracing / bash · 2/2 · turn 2' in v and '── output' in v and '[exit 1]' in v and re.search(r'exit 1 · \d+ms', v) is not None and re.search(r'request \d+ · .*200 in · 40 out', v) is not None, 'an entry: command and output together, exit, duration, request tokens', v)
+t.send('\x1b[D', .5); v = t.view(); t.shot('33-tracing-previous')
+check('Tracing / bash · 1/2 · turn 2' in v and 'echo traced' in v and 'exit 0 · ' in v and 'traced' in v.split('── output')[-1], 'Left: the previous bash of the view', v)
+t.send('\x1b', .6); rows = t.rows(); sel = next((r for r in rows if r.endswith('‹')), '')
+check('Tracing · Bash' in '\n'.join(rows) and 'echo traced' in sel, 'Esc: back on the same row', rows)
+t.send('\t\t\t', .5); t.send('h', .6); v = t.view(); t.shot('34-tracing-hooks-hidden')
+check('Tracing · All · hooks hidden' in v and 'turn_start' not in v and 'Turn 2' in v, 'h hides the hooks', v)
+t.send('\x1b', .4); t.send('\x1b', .4)
+check(t.close() == 0, 'clean quit after the 0.9.5 checks')
+(home6 / 'config.toml').write_text(CONFIG + '\n[settings]\ntrace_hooks = false\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+t = Term(home6, cwd); t.pump(1.5); t.send('\x12', .8); t.send('\r', 1.2)
+t.send('\x14', 1.0); v = t.view(); t.shot('35-trace-hooks-false')
+check('hooks hidden' in v and 'turn_start' not in v and 'Turn 2 · trace-check' in v, 'trace_hooks = false: a resumed session opens Tracing without hooks', v)
+t.send('h', .6); check(re.search(r'hook\s+', t.view()) is not None, 'h shows them again', t.view())
+t.send('\x1b', .4); t.send('\x1b', .4)
+check(t.close() == 0, 'clean quit after trace_hooks')
 
 (OUT / 'terminal-checks.log').write_text('\n'.join(log) + '\n'); print('ALL PASS')

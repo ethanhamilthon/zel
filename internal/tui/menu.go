@@ -3,7 +3,6 @@ package tui
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,6 +14,12 @@ import (
 )
 
 type item struct{ label, detail, id string }
+
+// headerID marks the turn rows of Tracing: they are shown, never selected.
+const headerID = "turn"
+
+func (it item) header() bool { return it.id == headerID }
+
 type list struct {
 	items    []item
 	selected int
@@ -25,10 +30,14 @@ func (l *list) visible() []item {
 	if l.query == "" {
 		return l.items
 	}
+	// A search shows matching entries only, without the turn rows.
 	// Items whose label matches come first, then those that match only with
 	// the detail, so a typed name is not shadowed by another item's text.
 	var out, byDetail []item
 	for _, it := range l.items {
+		if it.header() {
+			continue
+		}
 		if fuzzyMatches(it.label, l.query) {
 			out = append(out, it)
 		} else if fuzzyMatches(it.label+" "+it.detail, l.query) {
@@ -37,13 +46,32 @@ func (l *list) visible() []item {
 	}
 	return append(out, byDetail...)
 }
-func (l *list) clamp() { l.selected = max(0, min(l.selected, len(l.visible())-1)) }
-func (l *list) move(delta int) {
-	n := len(l.visible())
-	if n > 0 {
-		l.selected = (l.selected + delta + n) % n
+
+// clamp keeps the selection in the list and off header rows: on the next
+// row below a header, or above it at the end.
+func (l *list) clamp() {
+	v := l.visible()
+	l.selected = max(0, min(l.selected, len(v)-1))
+	for dir := 1; dir >= -1; dir -= 2 {
+		for i := l.selected; i >= 0 && i < len(v); i += dir {
+			if !v[i].header() {
+				l.selected = i
+				return
+			}
+		}
 	}
 }
+func (l *list) move(delta int) {
+	v := l.visible()
+	n := len(v)
+	for range n {
+		l.selected = (l.selected + delta + n) % n
+		if !v[l.selected].header() {
+			return
+		}
+	}
+}
+
 func (l *list) current() (item, bool) {
 	l.clamp()
 	v := l.visible()
@@ -63,6 +91,7 @@ type menu struct {
 	provider, model           string
 	trace                     []core.TraceEntry
 	traceIndex                int
+	traceList                 list // the Tracing list behind an open entry
 	loading                   bool
 	refreshed                 time.Time
 	x, y, width, top, visible int
@@ -89,6 +118,8 @@ Editing a queued message withdraws it
 @files and #prompts: arrows select, Tab or Enter completes
 PgUp/PgDn: scroll the chat; Up/Down scroll it when the input is one line
 Esc: go back or dismiss
+Tracing: Tab: all, bash, agent or errors · h: show the hooks
+  Left/Right in an entry: the previous or next of the view
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.
 The config file (~/.zel/config.toml) reloads automatically.
@@ -126,7 +157,10 @@ func (m *app) openMenu(page string) {
 		}
 	case "help":
 		mu.body = keyboardHelp
-	case "sessions", "trace", "info":
+	case "trace":
+		mu.title = m.traceTitle()
+		m.loadPage()
+	case "sessions", "info":
 		m.loadPage()
 	}
 	m.dirty = true
@@ -196,9 +230,6 @@ func (m *app) loadPage() {
 			out.body = infoText(info)
 		case "trace":
 			out.trace = m.ctl.Trace()
-			for i, t := range out.trace {
-				out.items = append(out.items, item{t.Kind + "  " + firstLine(t.Text), t.At.Format("15:04:05"), fmt.Sprint(i)})
-			}
 		}
 		return out, nil
 	})
@@ -239,6 +270,13 @@ func (m *app) acceptMenu(r result) {
 		m.menu.loading = false
 		if r.err != nil {
 			m.menu.body = r.err.Error()
+			return
+		}
+		if m.menu.page == "trace" || m.menu.page == "entry" {
+			if m.menu.page == "trace" { // an open entry keeps the trace it was opened from
+				m.menu.trace = out.trace
+				m.showTrace()
+			}
 			return
 		}
 		m.menu.list.items = out.items
@@ -282,7 +320,8 @@ func (m *app) menuKey(k *tcell.EventKey) {
 			parent := "main"
 			switch mu.page {
 			case "entry":
-				parent = "trace"
+				m.closeTraceEntry()
+				return
 			case "effort":
 				parent = "models"
 			}
@@ -316,15 +355,31 @@ func (m *app) menuKey(k *tcell.EventKey) {
 		mu.list.clamp()
 		return
 	case tcell.KeyLeft, tcell.KeyRight:
-		if mu.page == "entry" && len(mu.trace) > 0 {
+		if mu.page == "entry" {
 			delta := 1
 			if k.Key() == tcell.KeyLeft {
 				delta = -1
 			}
-			mu.traceIndex = max(0, min(mu.traceIndex+delta, len(mu.trace)-1))
-			mu.body = mu.trace[mu.traceIndex].Text
-			mu.title = "Tracing / " + mu.trace[mu.traceIndex].Kind
-			mu.offset = 0
+			m.stepTraceEntry(delta)
+			return
+		}
+	case tcell.KeyTab, tcell.KeyBacktab:
+		if mu.page == "trace" {
+			delta := 1
+			if k.Key() == tcell.KeyBacktab {
+				delta = len(traceFilters) - 1
+			}
+			m.traceFilter = (m.traceFilter + delta) % len(traceFilters)
+			m.showTrace()
+			return
+		}
+	case tcell.KeyRune:
+		// h toggles the hooks while the search line is empty; after a first
+		// letter it is part of the search.
+		if mu.page == "trace" && k.Rune() == 'h' && mu.search.text == "" {
+			shown := !m.traceHooksShown()
+			m.traceHooks = &shown
+			m.showTrace()
 			return
 		}
 	case tcell.KeyEnter:

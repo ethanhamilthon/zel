@@ -6,6 +6,7 @@ effort = "medium"
 compaction   = 400000
 bash_timeout = 30
 show_bash    = true     # false hides the running command in the working line (time and steps stay)
+trace_hooks  = true     # false: Tracing opens without the hook runs; h in Tracing toggles them
 bash_output  = 8000     # bytes per bash call; longer output is cut, the full text goes to a file
 editor       = "nvim"   # Ctrl+E opens the composer text in it
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.5
+
+Tracing is easier to find your way in.
+
+- The list is grouped by turn: a row per turn with its first message and how
+  long it took. It opens at the latest entry.
+- A bash call and its output are one entry: the command, then the output.
+- Rows show a failure (`exit 1`, `timeout`) and the duration of a bash call,
+  hook or model request; hook rows lose the repeated `-> exit 0, 5ms`.
+- An entry starts with its time, exit and duration, and the model request it
+  came from: its number, time and tokens (in, cached, out). Its title says
+  where you are: `Tracing / bash · 3/12 · turn 4`.
+- Tab (Shift+Tab back) cycles the view: All, Bash, Agent and Errors. Left and
+  Right in an entry go through the entries of the view only; Esc returns to
+  the same row of the list.
+- `h` hides or shows the hook runs; `settings.trace_hooks = false` opens
+  Tracing without them.
+
 ## 0.9.4
 
 - Menu lists fill the whole box: the details (session dates, providers,

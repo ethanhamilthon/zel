@@ -62,9 +62,22 @@ func (input Input) Display() string {
 }
 
 type TraceEntry struct {
-	Kind string // system, user, assistant, thinking, bash, output, error, notice, task, event
-	Text string
-	At   time.Time
+	Kind     string // system, user, agent, thinking, bash, output, error, notice, hook, task, event
+	Text     string // a bash entry: the command
+	Output   string // a bash entry: what the call returned, empty while it runs
+	Status   string // a failure: "exit N", "timeout", "cancelled" or "error"; empty otherwise
+	At       time.Time
+	Turn     int           // the turn the entry belongs to, 1 for the first message; 0 before it
+	Duration time.Duration // a bash or hook run
+	Request  *TraceRequest // the model response a thinking, agent or bash entry came from
+	First    bool          // the first entry of its Request
+}
+
+// TraceRequest is one model request of a session trace.
+type TraceRequest struct {
+	N        int // the request number in the session, from 1
+	Duration time.Duration
+	Usage    *Usage
 }
 
 type SessionSummary struct {

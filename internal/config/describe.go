@@ -34,6 +34,7 @@ func (c *Config) Describe() string {
 		{"effort", strconv.Quote(s.Effort)},
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
 		{"settings.show_bash", strconv.FormatBool(s.ShowBash)},
+		{"settings.trace_hooks", strconv.FormatBool(s.TraceHooks)},
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
 		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
 		{"settings.editor", strconv.Quote(s.Editor)},
