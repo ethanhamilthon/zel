@@ -43,6 +43,10 @@ instructions, hooks and prompt completions.
   (`12s · 3 steps`), with no command and no `thinking...`, also after a call
   ends. Tracing and task rows are unchanged. The command is cut to one line
   with `...` at its end, in the dark gray color.
+- A running background task has a line of its own above the working line, in
+  the same style with another sprite: `◐ 6s · test background`, the time in the
+  accent color and the task's name in dark gray; one empty line separates the
+  tasks from the working line.
 - stdin is empty; pagers are off (`PAGER=cat`, `GIT_PAGER=cat`).
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
@@ -426,7 +430,7 @@ error   = "#e27878"
 - `gray`: time and steps, the working line, inactive menu rows, Info
   keys, the `+ N more` row, the composer placeholder, punctuation in bash.
 - `dark_gray`: the "context compacted" divider, the command in the working
-  line, hotkeys in menus, Tracing row numbers, bash comments, the pulse of a
+  line, the name in a task line, hotkeys in menus, Tracing row numbers, bash comments, the pulse of a
   queued composer.
 - `error`: failed turns, prompt errors, form errors.
 - `trace.*`: the kind labels and bodies in Tracing, one per kind; `trace.bash`

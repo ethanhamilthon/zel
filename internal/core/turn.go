@@ -122,6 +122,7 @@ func (h *turnHost) CommitResponse(items []json.RawMessage) error {
 	if e := s.saveHistory(); e != nil {
 		return e
 	}
+	s.reportUsage()
 	return nil
 }
 func (h *turnHost) Execute(ctx context.Context, call entities.ToolCall) error {
@@ -146,5 +147,6 @@ func (h *turnHost) Execute(ctx context.Context, call entities.ToolCall) error {
 	if e := s.saveHistory(); e != nil {
 		return e
 	}
+	s.reportUsage()
 	return nil
 }

@@ -46,10 +46,14 @@ type SubagentRun struct {
 	Parent   string
 	Started  time.Time
 	Steps    int
+	Provider string
 	Model    string
 	Effort   string
 	Command  string
 	Activity string
+	Context  int64 // estimated context tokens, as the child last reported
+	Usage    Usage // the child's spend so far
+	Requests int   // its model requests with usage
 }
 
 // ActiveSubagents lists the running zel -p children, oldest first.
@@ -117,8 +121,33 @@ func (s *session) announceChild() {
 		return
 	}
 	st := s.Settings()
-	s.parent.call("child.start", map[string]any{"session": s.id, "model": st.Model, "effort": st.Effort,
+	s.parent.call("child.start", map[string]any{"session": s.id, "provider": st.Provider, "model": st.Model, "effort": st.Effort,
 		"prompt": oneLine(s.opts.Prompt), "pid": os.Getpid()})
+}
+
+// reportUsage tells the parent this child's model, context and spend, for its
+// Info page. It runs after every model response and does not wait.
+func (s *session) reportUsage() {
+	if s.parent == nil || s.id == "" {
+		return
+	}
+	st := s.Settings()
+	usage, requests := s.SessionUsage()
+	args := map[string]any{"session": s.id, "provider": st.Provider, "model": st.Model, "effort": st.Effort,
+		"context": s.ContextTokens(), "input": usage.Input, "output": usage.Output, "cached": usage.Cached, "n": requests}
+	go s.parent.call("child.usage", args)
+}
+
+// childUsage records what a running child reported; a late report of one
+// that ended is ignored.
+func (s *session) childUsage(id string, update func(*SubagentRun)) {
+	s.childMu.Lock()
+	run, ok := s.children[id]
+	if ok {
+		update(&run)
+		s.children[id] = run
+	}
+	s.childMu.Unlock()
 }
 
 // leaveParent tells the parent that this child ended.

@@ -58,6 +58,7 @@ type Info struct {
 	Messages, Requests, Tasks int   // user messages, model requests with usage, running tasks
 	Context                   int64 // estimated context tokens
 	Usage                     Usage
+	Subagents                 []SubagentRun // the zel -p children that run now, oldest first
 }
 
 type Status struct {

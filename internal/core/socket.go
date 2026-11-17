@@ -39,11 +39,12 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		return bad("EFAIL", "the session has ended")
 	}
 	var a struct {
-		ID, Name, Cmd, Cwd, Dir, Title, Session, Model, Effort, Prompt string
-		IDs, Options, Paths                                            []string
-		Timeout                                                        float64
-		N                                                              int
-		PID                                                            int
+		ID, Name, Cmd, Cwd, Dir, Title, Session, Provider, Model, Effort, Prompt string
+		IDs, Options, Paths                                                      []string
+		Timeout                                                                  float64
+		N                                                                        int
+		PID                                                                      int
+		Context, Input, Output, Cached                                           int64
 	}
 	if len(req.Args) > 0 {
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -154,7 +155,13 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		}
 		return ok("")
 	case "child.start":
-		s.childStarted(SubagentRun{ID: a.Session, Parent: s.id, Started: time.Now(), Model: a.Model, Effort: a.Effort, Command: a.Prompt}, a.PID)
+		s.childStarted(SubagentRun{ID: a.Session, Parent: s.id, Started: time.Now(), Provider: a.Provider, Model: a.Model, Effort: a.Effort, Command: a.Prompt}, a.PID)
+		return ok("")
+	case "child.usage":
+		s.childUsage(a.Session, func(r *SubagentRun) {
+			r.Provider, r.Model, r.Effort = cmp.Or(a.Provider, r.Provider), cmp.Or(a.Model, r.Model), cmp.Or(a.Effort, r.Effort)
+			r.Context, r.Usage, r.Requests = a.Context, Usage{Input: a.Input, Output: a.Output, Cached: a.Cached}, a.N
+		})
 		return ok("")
 	case "child.end":
 		s.childEnded(a.Session)

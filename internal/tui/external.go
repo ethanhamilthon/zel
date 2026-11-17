@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-
-	"zel/internal/config"
 )
 
 // openEditor hands the composer text to the configured editor (Ctrl+E). The
@@ -30,7 +28,7 @@ func (m *app) openEditor() {
 		m.notice(err)
 		return
 	}
-	editor := cmp.Or(strings.TrimSpace(m.ctl.Settings().Editor), config.Editor)
+	editor := cmp.Or(strings.TrimSpace(m.ctl.Settings().Editor), "nvim")
 	if err := m.screen.Suspend(); err != nil {
 		os.Remove(path)
 		m.notice(err)

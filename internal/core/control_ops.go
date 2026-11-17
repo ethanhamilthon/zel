@@ -226,6 +226,7 @@ func (c *Controller) Info() (info Info, err error) {
 	s := session.Settings()
 	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
 	info.Usage, info.Requests = session.SessionUsage()
+	info.Subagents = session.ActiveSubagents()
 	return info, nil
 }
 

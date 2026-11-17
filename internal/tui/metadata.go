@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"time"
@@ -33,14 +34,6 @@ func formatContext(n int64) string {
 // infoText is the Info page: the session name, then aligned key/value rows (id,
 // dir, config, model, context and spend).
 func infoText(info core.Info) string {
-	cache := "cache hit unavailable"
-	if info.Usage.Cached >= 0 {
-		percent := float64(0)
-		if info.Usage.Input > 0 {
-			percent = float64(info.Usage.Cached) * 100 / float64(info.Usage.Input)
-		}
-		cache = fmt.Sprintf("%.0f%% cache hit", percent)
-	}
 	title := info.Title
 	if title == "" {
 		title = "Session"
@@ -53,9 +46,32 @@ func infoText(info core.Info) string {
 		{"Config", core.DisplayPath(info.Config)},
 		{"Model", info.Provider + " · " + info.Model + " · " + info.Effort},
 		{"Context", formatContext(info.Context)},
-		{"Spend", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
+		{"Spend", spend(info.Usage)},
 	} {
 		fmt.Fprintf(&b, "%-8s%s\n", r[0], r[1])
 	}
+	if len(info.Subagents) > 0 {
+		fmt.Fprintf(&b, "\nSubagents (%d)\n", len(info.Subagents))
+		for _, c := range info.Subagents {
+			b.WriteString("\n" + firstLine(cmp.Or(c.Command, c.ID)) + "\n")
+			fmt.Fprintf(&b, "%-8s%s\n", "ID", c.ID)
+			fmt.Fprintf(&b, "%-8s%s\n", "Model", strings.TrimPrefix(c.Provider+" · ", " · ")+c.Model+" · "+c.Effort)
+			fmt.Fprintf(&b, "%-8s%s · running %s\n", "Context", formatContext(c.Context), formatDuration(time.Since(c.Started)))
+			fmt.Fprintf(&b, "%-8s%s\n", "Spend", spend(c.Usage))
+		}
+	}
 	return b.String()
+}
+
+// spend is the token use: input, output and the share of the input that hit the cache.
+func spend(u core.Usage) string {
+	cache := "cache hit unavailable"
+	if u.Cached >= 0 {
+		percent := float64(0)
+		if u.Input > 0 {
+			percent = float64(u.Cached) * 100 / float64(u.Input)
+		}
+		cache = fmt.Sprintf("%s cached, %.0f%% hit", formatTokens(u.Cached), percent)
+	}
+	return fmt.Sprintf("%s in · %s out · %s", formatTokens(u.Input), formatTokens(u.Output), cache)
 }

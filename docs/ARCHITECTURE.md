@@ -86,7 +86,8 @@ request there: tasks (`bash -c` jobs owned by the session, logged in
 shows; the answer comes back as a notification), view, session info and rename.
 A `zel -p` started by that bash finds the socket in its environment, becomes a
 child (headless, depth + 1, at most 3) and reports `child.start`/`child.end`
-for the parent's lifecycle/idle tracking (not separate child chat rows). Children are separate processes in the caller's
+for the parent's lifecycle/idle tracking, and `child.usage` (model, context,
+spend) after each model response for the parent's Info page (not separate child chat rows). Children are separate processes in the caller's
 process group, so a killed call or task takes them down.
 
 Hooks are commands from the config: the event data goes to stdin as JSON, exit

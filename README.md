@@ -34,7 +34,8 @@ or `#` for prompt completions. Ctrl+E opens what you typed in your editor
 and quits. Bash calls and other details live in Tracing, not the chat.
 
 The composer follows the conversation and working indicator, rather than being
-pinned to the bottom. Model and context details are in Info, not in the chat.
+pinned to the bottom. Model and context details are in Info, not in the chat;
+Info also lists the running subagents with their model, effort, context and spend.
 
 The interface uses tcell and leaves the mouse to the terminal: select and copy
 text, and open links, the way your terminal does. PgUp/PgDn scroll the chat.

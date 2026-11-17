@@ -773,6 +773,16 @@ func TestChildrenAreTrackedHiddenAndResumedOnlyByTheirParent(t *testing.T) {
 	if _, err := turn(t, child, "work"); err != nil {
 		t.Fatal(err)
 	}
+	// After each response the child reports its model, context and spend for the parent's Info.
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		list := parent.ActiveSubagents()
+		if len(list) == 1 && list[0].Provider == "p" && list[0].Context > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no usage report: %+v", list)
+		}
+	}
 	childID := child.SessionID()
 	child.Close()
 	if list := parent.ActiveSubagents(); len(list) != 0 {
