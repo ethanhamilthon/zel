@@ -202,6 +202,8 @@ plan = "${{ cat PLAN.md }}"
   `[instruction.NAME]`, `[hook.NAME]`, `[completion.NAME]` (or one
   `[instruction]` table with `NAME = ...` lines). Names are 1 to 64 letters,
   digits, `-` or `_`. Instructions and hooks keep file order.
+  Name a hook after what it does and give it all its events
+  (`event = [...]`, the script switches on `$ZEL_HOOK`), see Hooks.
 - `model = "PROVIDER/MODEL"` picks the provider and the model in one key; the
   model ID may contain `/` itself (`openrouter/anthropic/claude`). Without a `/`
   the only configured provider is meant.
@@ -275,8 +277,24 @@ match = 'git push (-f|--force)'
 run   = "echo 'no force push' >&2; exit 2"
 ```
 
-A hook is `bash -c` with the session environment and `ZEL_HOOK`; the event
-data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
+Group hooks by purpose, not by event: one `[hook.<namespace>]` with a list of
+events and one script that tells them apart by `$ZEL_HOOK`, not a `[hook.X]`
+block per event. When you (the agent) add hooks to a config, do it this way.
+
+```toml
+[hook.progress]
+event = ["turn_start", "turn_end", "error", "session_closed"]
+run   = '''
+case "$ZEL_HOOK" in
+  turn_start) printf "\033]9;4;3\a" ;;
+  error)      printf "\033]9;4;2;100\a" ;;
+  *)          printf "\033]9;4;0\a" ;;
+esac > /dev/tty
+'''
+```
+
+A hook is `bash -c` with the session environment and `ZEL_HOOK` (the event's
+name); the event data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
 blockable event, with stderr as the reason. Any other exit is recorded in
 session diagnostics and the hook is skipped. Every hook run (event, command, exit
 code, time) is a `hook` entry in Tracing, not a row in the chat. Hooks run one

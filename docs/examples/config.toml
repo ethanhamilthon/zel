@@ -62,18 +62,17 @@ async = true
 
 # progress in the terminal tab (OSC 9;4: Ghostty, iTerm2, Windows Terminal); zel itself
 # writes no title or progress. A turn stopped with Ctrl+D fires neither turn_end nor
-# error, so its bar stays until the next turn ends.
-[hook.progress-start]
-event = "turn_start"
-run   = 'printf "\033]9;4;3\a" > /dev/tty'
-
-[hook.progress-end]
-event = ["turn_end", "session_closed"]
-run   = 'printf "\033]9;4;0\a" > /dev/tty'
-
-[hook.progress-error]
-event = "error"
-run   = 'printf "\033]9;4;2;100\a" > /dev/tty'
+# error, so its bar stays until the next turn ends. One hook, all its events,
+# told apart by $ZEL_HOOK.
+[hook.progress]
+event = ["turn_start", "turn_end", "error", "session_closed"]
+run   = '''
+case "$ZEL_HOOK" in
+  turn_start) printf "\033]9;4;3\a" ;;
+  error)      printf "\033]9;4;2;100\a" ;;
+  *)          printf "\033]9;4;0\a" ;;
+esac > /dev/tty
+'''
 
 # stop a forced push
 [hook.no-force-push]
