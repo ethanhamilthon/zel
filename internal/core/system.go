@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -64,16 +63,12 @@ func (s *session) assemblePrompt() string {
 // of the session mode. Lines marked [nest] are dropped at the deepest level of
 // zel -p children, which cannot start more of them.
 func (s *session) toolDescription() string {
-	text, timeout, limit := bashMain, config.BashTimeout, config.BashOutput
+	text, timeout := bashMain, config.BashTimeout
 	if s.mode() == "headless" {
 		text = bashHeadless
 	}
 	if s.cfg != nil {
-		timeout, limit = s.Settings().BashTimeout, s.Settings().BashOutput
-	}
-	output := " and never cut"
-	if limit > 0 {
-		output = fmt.Sprintf(", cut to %d bytes (head and tail; the marker names a file with the full output)", limit)
+		timeout = s.Settings().BashTimeout
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
@@ -85,7 +80,7 @@ func (s *session) toolDescription() string {
 		}
 		lines = append(lines, line)
 	}
-	return strings.NewReplacer("{timeout}", strconv.Itoa(timeout), "{output}", output).Replace(strings.Join(lines, "\n"))
+	return strings.ReplaceAll(strings.Join(lines, "\n"), "{timeout}", strconv.Itoa(timeout))
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {

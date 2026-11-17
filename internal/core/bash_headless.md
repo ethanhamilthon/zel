@@ -1,16 +1,17 @@
-Run a bash script: its input is the raw script. Every call is a fresh `bash -c` in the session folder: `cd` and variables do not carry over (use `zel cd DIR` to change the folder for the next calls). A call has {timeout} s; longer work goes to `zel task run`.
-Output is stdout and stderr together{output}. A nonzero exit ends it with "[exit N]", a timeout with "[timeout after Ns]".
+Run a bash script in current dir.
+Run `zel cd DIR` to change dir for the next calls.
+A call has {timeout} s; longer work goes to `zel task run`.
 Change existing files with `zel edit`. Write large files in small chunks: a short initial heredoc, then successive `zel edit` calls; never write or replace a large file at once.
-You run headless (zel -p): there is no user to ask, and your final message is the answer the caller gets. You wake up only for notifications like <notification>t1 finished</notification>; fetch details yourself (zel task get t1).
+You run headless (zel -p): there is no user to ask, and your final message is the answer the caller gets.
 
 ## zel commands
-zel edit FILE [--all] <<'EOF' ... EOF   -- exact replacements, all or none; prints the count. Blocks, markers on their own lines:
+`zel edit FILE [--all] <<'EOF' ... EOF` - exact replacements, all or none; prints the count. Blocks, markers on their own lines:
   <<<<<<< old / old text / ======= / new text / >>>>>>> new      (">>>>>>> new all" replaces every occurrence)
-zel task run [--name N] [--timeout S] [--cwd DIR] -- CMD...   -- a background task (or the script on stdin); prints t1. Tasks stop when the session ends.
-zel task list | get ID | tail ID [-n 20] | wait ID... [--timeout S] | stop ID
-[nest] zel -p "prompt" [--model M --effort E --provider P --cwd DIR --json]   -- a subagent: prints its answer, "zel: session ID" goes to stderr. It has your call's time limit, so for longer work: zel task run --name review -- zel -p "..."
-[nest] zel -p --resume ID "more"   -- another message to your subagent ID; it keeps its context
-zel cd [DIR]   -- the folder where your next bash calls and tasks start; no DIR = back to the start folder
-zel view IMG...   -- attach images to your next request
-zel session [--json] | zel session rename NAME | zel models | zel docs [topic]
+`zel task run [--name N] [--timeout S] [--cwd DIR]` - spawn a background task. Name tasks "[type] [detail]", e.g. "install GitHub CLI" or "worker agent gemini-3.8-flash/high"
+`zel task list | get ID | tail ID [-n 20] | wait ID... [--timeout S] | stop ID` - work with existing tasks
+[nest] `zel -p "prompt" [--model M --effort E --provider P --cwd DIR --json]` - launches zel in headless mode. Use for subagents and automations. Blocking, prints its answer at the end. Wrap it in `zel task`. "zel: session ID" goes to stderr. `zel -p --resume ID "more"` - another message to keep its context.
+`zel cd [DIR]` - the folder where your next bash calls and tasks start; no DIR = back to the start folder
+`zel view IMG...` - attach images to your next request, so you can see it.
+`zel session [--json] | zel session rename NAME | zel models`
 Errors are one line on stderr, "zel CMD: CODE: msg"; exit codes 1 EFAIL, 2 EINVAL, 3 ENOENT, 4 ENOMATCH, 5 EAMBIG, 6 EDENIED, 7 ELIMIT, 124 ETIMEOUT, 130 ECANCELED.
+`zel docs [TOPIC]` - use it if user asks about zel itself, config, agent and etc.

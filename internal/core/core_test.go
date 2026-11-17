@@ -184,9 +184,6 @@ func TestBashOutputExitCodeAndEnvironment(t *testing.T) {
 func TestBashOutputCut(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, nil)
 	s, ctx := a.session(), context.Background()
-	if !strings.Contains(s.toolDescription(), "cut to 8000 bytes") {
-		t.Fatal("the prompt does not say the output limit")
-	}
 	// Under the limit: as is, no file.
 	if got := s.runBash(ctx, "head -c 7000 /dev/zero | tr '\\0' a"); got != strings.Repeat("a", 7000) {
 		t.Fatalf("short output changed: %d bytes", len(got))
@@ -224,9 +221,6 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 	s := a.session()
 	if got := s.runBash(context.Background(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) != 13000 {
 		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
-	}
-	if strings.Contains(s.toolDescription(), "cut to") || !strings.Contains(s.toolDescription(), "never cut") {
-		t.Fatal("the prompt does not say the output is never cut")
 	}
 	for _, bad := range []string{"-1", "500"} {
 		path := filepath.Join(t.TempDir(), "config.toml")
@@ -380,12 +374,12 @@ modes = ["plan"]
 	}
 	prompt, desc := main.session().assemblePrompt(), main.session().toolDescription()
 	if !strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || strings.Contains(prompt, "HEADLESS-ONLY") ||
-		strings.Contains(prompt, "zel choice") || !strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "Ask the user before") {
+		strings.Contains(prompt, "zel choice") || !strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "zel docs") {
 		t.Errorf("main prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
 	prompt, desc = headless.session().assemblePrompt(), headless.session().toolDescription()
 	if strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || !strings.Contains(prompt, "HEADLESS-ONLY") || strings.Contains(prompt, "PLAN-ONLY") ||
-		strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "no user to ask") || strings.Contains(desc, "Ask the user before") ||
+		strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "no user to ask") ||
 		strings.Contains(desc, "{") || !strings.Contains(desc, `zel -p "prompt"`) {
 		t.Errorf("headless prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
