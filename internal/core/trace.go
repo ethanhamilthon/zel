@@ -21,16 +21,12 @@ func traceKind(kind string) string {
 }
 
 // Trace merges history and logged notices/errors chronologically. Stable ties preserve source order; undated
-// legacy history and the system prompt stay before timestamped entries.
+// history items and the system prompt stay before timestamped entries.
 func (a *Runtime) Trace() []TraceEntry { return a.session().Trace() }
 
 func (s *session) Trace() []TraceEntry {
 	history, slow := s.traceSources()
 	return mergeTrace(history, slow())
-}
-
-func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
-	return a.session().traceSources()
 }
 
 // traceSources splits the trace by cost: the history is copied from memory now,
@@ -39,7 +35,7 @@ func (a *Runtime) traceSources() ([]TraceEntry, func() []TraceEntry) {
 func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
 	history := s.historyTrace()
 	path := ""
-	if s.id != "" && s.db != nil {
+	if s.id != "" && s.store != nil {
 		path = s.eventsLog()
 	}
 	return history, func() []TraceEntry { return s.cachedEventTrace(path) }
@@ -115,15 +111,7 @@ func eventTrace(path string) (entries []TraceEntry) {
 		}
 		at, err := time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {
-			// Legacy logs used local wall time, without an offset or subseconds.
-			if len(line) < 21 {
-				continue
-			}
-			at, err = time.ParseInLocation(time.DateTime, line[:19], time.Local)
-			if err != nil {
-				continue
-			}
-			rest = line[20:]
+			continue
 		}
 		kind, text, _ := strings.Cut(rest, " ")
 		entries = append(entries, TraceEntry{Kind: kind, Text: text, At: at})

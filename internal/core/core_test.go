@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -218,10 +217,11 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 		t.Fatal("the prompt does not say the output is never cut")
 	}
 	for _, bad := range []string{"-1", "500"} {
-		s := config.DefaultSettings()
-		n, _ := strconv.Atoi(bad)
-		s.BashOutput = n
-		if config.Validate(s) == nil {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte("[settings]\nbash_output = "+bad+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if cfg := config.Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
 			t.Fatalf("bash_output = %s accepted", bad)
 		}
 	}
@@ -285,6 +285,7 @@ bash_before = [
 bash_after = [
   "cat >/dev/null; echo AFTER",
   'grep -q "\"code\":3," && echo SAW-EXIT-3 || true',
+  { match = '^exit 3', run = "cat >/dev/null; echo MATCHED-AFTER" },
 ]
 `))
 	s, ctx := a.session(), context.Background()
@@ -292,7 +293,7 @@ bash_after = [
 		"echo original":       "rewritten\nAFTER",
 		"rm -rf /no/such/zel": "[blocked by a hook: no rm]",
 		"echo other":          "other\nAFTER",
-		"exit 3":              "[exit 3]\nAFTER\nSAW-EXIT-3",
+		"exit 3":              "[exit 3]\nAFTER\nSAW-EXIT-3\nMATCHED-AFTER",
 	} {
 		if got := s.runBash(ctx, command); got != want {
 			t.Errorf("%q: got %q, want %q", command, got, want)
@@ -975,12 +976,6 @@ func TestPromptTokens(t *testing.T) {
 }
 
 // The working indicator gets the command as is: no "$ ", no special labels, no comments.
-func TestBashLabel(t *testing.T) {
-	if got := bashLabel("# look\n\nzel choice \"Q\" \"A\"\n  ls -la  \n"); got != "zel choice \"Q\" \"A\"\nls -la" {
-		t.Fatalf("label = %q", got)
-	}
-}
-
 func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgent(t, fp, Options{})

@@ -27,7 +27,7 @@ const (
 )
 
 type tasks struct {
-	db               *store.Store
+	store            *store.Store
 	project, session string
 	s                *session
 	queue            *Steering
@@ -49,9 +49,9 @@ type tasks struct {
 
 func (s *session) newTasks() *tasks {
 	// Tasks of an earlier run of this session died with its process.
-	_ = s.db.LoseTasks(s.project, s.id)
+	_ = s.store.LoseTasks(s.project, s.id)
 	life, stopLife := context.WithCancel(context.Background())
-	return &tasks{db: s.db, project: s.project, session: s.id, s: s,
+	return &tasks{store: s.store, project: s.project, session: s.id, s: s,
 		queue: s.queue, report: func(text string) { s.LogEvent("error", text) }, running: map[string]*proc{}, stopped: map[string]bool{}, jobs: map[string]*job{},
 		life: life, stopLife: stopLife, changed: func() { s.changes.notify(); s.checkIdle() }}
 }
@@ -106,12 +106,12 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 	if len(t.running)+t.queue.noticeCount() >= maxQueued {
 		return "", errors.New("too many unresolved task results; wait for the model to read them")
 	}
-	list, err := t.db.Tasks(t.project, t.session)
+	list, err := t.store.Tasks(t.project, t.session)
 	if err != nil {
 		return "", err
 	}
 	id := fmt.Sprintf("t%d", len(list)+1)
-	logPath := t.db.TaskLog(t.project, t.session, id)
+	logPath := t.store.TaskLog(t.project, t.session, id)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
 		return "", err
 	}
@@ -120,7 +120,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 		return "", err
 	}
 	started := time.Now()
-	if err := t.db.CreateTask(t.project, t.session, id, o.name, command, started); err != nil {
+	if err := t.store.CreateTask(t.project, t.session, id, o.name, command, started); err != nil {
 		file.Close()
 		return "", err
 	}
@@ -196,7 +196,7 @@ func (t *tasks) start(command string, o startOpts, launch func(io.Writer, *job) 
 }
 
 func (t *tasks) finish(id, status string, exit *int) error {
-	return t.db.FinishTask(t.project, t.session, id, status, exit)
+	return t.store.FinishTask(t.project, t.session, id, status, exit)
 }
 
 func (t *tasks) Running() int {
@@ -270,7 +270,7 @@ func (a *Runtime) LogEvent(kind, text string) { a.session().LogEvent(kind, text)
 
 // LogEvent appends one notice or error to the session's events log; failures are ignored.
 func (s *session) LogEvent(kind, text string) {
-	if s.home == "" || s.id == "" || s.db == nil {
+	if s.home == "" || s.id == "" || s.store == nil {
 		return
 	}
 	path := s.eventsLog()

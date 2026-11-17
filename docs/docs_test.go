@@ -11,13 +11,12 @@ import (
 	"testing"
 )
 
-// Every section of bash-api.md has a topic and every topic returns text, so the
-// agent can reach the whole reference through zel docs.
+// The packages keep to the dependency graph of ARCHITECTURE.md.
 func TestProductionPackageBoundaries(t *testing.T) {
 	allowed := map[string][]string{
 		"entities": {}, "config": {}, "store": {}, "edit": {}, "ipc": {},
 		"shell": {"entities"}, "provider": {"entities"},
-		"tui": {"core", "config", "entities"},
+		"tui": {"core"},
 		"cli": {"core", "config", "ipc", "edit", "shell"},
 	}
 	for pkg, deps := range allowed {
@@ -52,8 +51,14 @@ func TestProductionPackageBoundaries(t *testing.T) {
 	}
 }
 
+// Every section of bash-api.md has a topic and every topic returns text, so the
+// agent can reach the whole reference through zel docs.
 func TestEverySectionIsReachable(t *testing.T) {
-	for _, h := range Sections() {
+	src, err := files.ReadFile("bash-api.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for h := range parse(string(src)) {
 		if h == "Examples" {
 			continue // examples has its own topic
 		}

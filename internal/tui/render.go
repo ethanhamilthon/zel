@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/rivo/uniseg"
 	"zel/internal/core"
-	"zel/internal/entities"
+
+	"github.com/rivo/uniseg"
 )
 
 func (m *app) draw() {
@@ -165,7 +165,7 @@ func (m *app) historyRows(width int) {
 			c.rows = plainRows(answerHeader(r), width, accentColor)
 			c.rows = append(c.rows, styledRows(text, width, style(agentColor))...)
 		case "choice":
-			question, answer, _ := strings.Cut(r.Text, entities.ChoiceSeparator)
+			question, answer, _ := strings.Cut(r.Text, core.ChoiceSeparator)
 			c.rows = styledRows(lipgloss.NewStyle().Foreground(accentColor).Render(question+": ")+lipgloss.NewStyle().Foreground(userColor).Render(answer), width, style(userColor))
 		case "compaction":
 			c.rows = plainRows(r.Text, width, darkGray)

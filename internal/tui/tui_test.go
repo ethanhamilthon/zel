@@ -11,8 +11,9 @@ import (
 	"zel/internal/config"
 	"zel/internal/entities"
 
-	"github.com/gdamore/tcell/v2"
 	"zel/internal/core"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 func testApp(t *testing.T) *app {
@@ -347,11 +348,6 @@ func TestEventQueueOrderingAndOverflow(t *testing.T) {
 	if e.Agent.Text != "onetwo" {
 		t.Fatal("stream coalescing")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, ok := q.Pop(ctx); ok {
-		t.Fatal("cancelled pop")
-	}
 }
 func TestFormattingAndValidation(t *testing.T) {
 	m := testApp(t)
@@ -467,4 +463,12 @@ func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	if hidden := rowText(workingRow(status, 2, false, 40)); strings.Contains(hidden, "go test") {
 		t.Fatalf("show_bash = false must hide the command: %q", hidden)
 	}
+}
+
+func rowText(r row) string {
+	var b strings.Builder
+	for _, c := range r {
+		b.WriteString(c.text)
+	}
+	return b.String()
 }

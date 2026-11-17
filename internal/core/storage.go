@@ -36,7 +36,7 @@ func (s *session) openSession(id string) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID: %s", id)
 	}
-	v, items, err := s.db.Load(s.project, id)
+	v, items, err := s.store.Load(s.project, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("session not found in this project: %s", id)
 	}
@@ -69,7 +69,7 @@ func (s *session) openSession(id string) error {
 		return err
 	}
 	s.readItems(items)
-	choices, _ := s.db.Choices(s.project, id)
+	choices, _ := s.store.Choices(s.project, id)
 	s.histMu.Lock()
 	s.choices = choices
 	s.histMu.Unlock()
@@ -160,7 +160,7 @@ func (s *session) Save() error {
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}
-	if err := s.db.Append(v, items, saved, total); err != nil {
+	if err := s.store.Append(v, items, saved, total); err != nil {
 		return err
 	}
 	s.histMu.Lock()
@@ -177,7 +177,7 @@ func (s *session) Save() error {
 func (a *Runtime) Sessions() ([]SessionSummary, error) { return a.session().Sessions() }
 
 func (s *session) Sessions() ([]SessionSummary, error) {
-	list, err := s.db.Sessions(s.project)
+	list, err := s.store.Sessions(s.project)
 	out := make([]SessionSummary, 0, len(list))
 	for _, v := range list {
 		out = append(out, SessionSummary{ID: v.ID, Title: v.Title, Project: v.Project, Updated: v.Updated})

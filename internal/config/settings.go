@@ -73,21 +73,10 @@ func (s Settings) SetupHint() string {
 	return "No model selected: choose one with Ctrl+M or set model in the config file"
 }
 
+// Validate checks what the parser cannot: the effort, the providers after their
+// ${{ }} were expanded, and that the selected model has a provider. The numbers
+// and colors are checked when the file is read.
 func Validate(s Settings) error {
-	if s.CompactionThreshold < 0 {
-		return fmt.Errorf("compaction threshold must be >= 0 tokens (0 = off)")
-	}
-	if s.BashTimeout <= 0 {
-		return fmt.Errorf("bash_timeout must be > 0 seconds")
-	}
-	if s.BashOutput < 0 || (s.BashOutput > 0 && s.BashOutput < 1000) {
-		return fmt.Errorf("bash_output must be 0 (no cut) or >= 1000 bytes")
-	}
-	for i, key := range ColorKeys {
-		if err := CheckColor(key, s.Colors[i]); err != nil {
-			return err
-		}
-	}
 	if !slices.Contains(Efforts, s.Effort) {
 		return fmt.Errorf("unsupported effort %q", s.Effort)
 	}

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-	"zel/internal/config"
 	"zel/internal/core"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 var Version = "dev"
@@ -23,7 +23,7 @@ type result struct {
 type cachedRecord struct {
 	source core.Record
 	width  int
-	theme  config.Colors
+	theme  core.Colors
 	rows   []row
 	plain  bool
 }

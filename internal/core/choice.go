@@ -137,8 +137,8 @@ func (s *session) recordChoice(title, answer string, ok bool) (Record, bool) {
 	c := store.Choice{Seq: len(s.History), Title: title, Answer: answer, At: time.Now().UTC()}
 	s.choices = append(s.choices, c)
 	s.histMu.Unlock()
-	if s.db != nil && s.id != "" {
-		if err := s.db.AppendChoice(s.project, s.id, c); err != nil {
+	if s.store != nil && s.id != "" {
+		if err := s.store.AppendChoice(s.project, s.id, c); err != nil {
 			s.LogEvent("error", "Could not save the answer: "+err.Error())
 		}
 	}

@@ -33,6 +33,13 @@ var Events = []string{
 	"compaction", "model_changed", "error",
 }
 
+// MatchField is the field of the event data a hook's match regexp is tested
+// against; hooks of other events cannot have a match.
+var MatchField = map[string]string{
+	"message": "text", "notification": "text", "turn_start": "text",
+	"bash_before": "command", "bash_after": "command",
+}
+
 // Config is the snapshot of the config file of a session.
 type Config struct {
 	Path         string

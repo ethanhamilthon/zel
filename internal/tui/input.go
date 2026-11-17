@@ -8,8 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gdamore/tcell/v2"
 	"zel/internal/core"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 type submission struct {

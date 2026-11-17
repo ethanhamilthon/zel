@@ -52,12 +52,12 @@ func fail(code, format string, args ...any) error {
 
 // Info describes the current session for the TUI information page.
 type Info struct {
-	Session, Title, Project, DB string
-	Provider, Model, Effort     string
-	Config                      string
-	Messages, Requests, Tasks   int   // user messages, model requests with usage, running tasks
-	Context                     int64 // estimated context tokens
-	Usage                       Usage
+	Session, Title, Project   string
+	Provider, Model, Effort   string
+	Config                    string
+	Messages, Requests, Tasks int   // user messages, model requests with usage, running tasks
+	Context                   int64 // estimated context tokens
+	Usage                     Usage
 }
 
 type Status struct {

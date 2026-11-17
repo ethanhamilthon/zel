@@ -34,8 +34,6 @@ func Open(home string) (*Store, error) {
 	return &Store{Root: root, last: map[string]Session{}}, nil
 }
 
-func (s *Store) Close() error { return nil }
-
 // ProjectKey names the folder of a project: its absolute path with "/" as "-".
 func ProjectKey(project string) string {
 	return strings.ReplaceAll(filepath.Clean(project), string(filepath.Separator), "-")

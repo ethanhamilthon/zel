@@ -74,13 +74,6 @@ func IsHelper(args []string) bool {
 	return false
 }
 
-// removed are the commands and flags 0.7 dropped, with what to do instead.
-var removed = map[string]string{
-	"init":   "put your settings in ~/.zel/config.toml (see zel help)",
-	"events": "notices and errors are in Tracing (Ctrl+T)",
-	"agent":  "a subagent is zel -p \"prompt\" run from the agent's bash",
-}
-
 type failedWriter struct {
 	w   io.Writer
 	err error
@@ -119,10 +112,6 @@ func Run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 
 func run(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	if len(args) > 0 {
-		name, _, _ := strings.Cut(args[0], "=")
-		if hint, ok := removed[name]; ok {
-			return fmt.Errorf("%s was removed in zel 0.7: %s", name, hint)
-		}
 		rest := args[1:]
 		switch args[0] {
 		case "version", "help", "--help", "-h":

@@ -5,12 +5,12 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"zel/internal/core"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
 	"github.com/muesli/termenv"
-	"zel/internal/config"
 )
 
 var (
@@ -19,7 +19,7 @@ var (
 	markdownStyle                                                                               string
 )
 
-func init() { lipgloss.SetColorProfile(termenv.TrueColor); applyTheme(config.DefaultColors()) }
+func init() { lipgloss.SetColorProfile(termenv.TrueColor); applyTheme(core.DefaultColors()) }
 func style(color lipgloss.Color) tcell.Style {
 	return tcell.StyleDefault.Foreground(tcell.GetColor(string(color))).Background(tcell.GetColor(string(bgColor)))
 }
@@ -192,11 +192,4 @@ func displayText(text string) string {
 }
 func plainRows(text string, width int, color lipgloss.Color) []row {
 	return styledRows(cleanInput(displayText(text)), width, style(color))
-}
-func rowText(r row) string {
-	var b strings.Builder
-	for _, c := range r {
-		b.WriteString(c.text)
-	}
-	return b.String()
 }

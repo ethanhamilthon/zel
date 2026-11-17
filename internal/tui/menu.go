@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"zel/internal/core"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 type item struct{ label, detail, id string }

@@ -93,16 +93,6 @@ func Get(name string) (string, bool) {
 	return "", false
 }
 
-// Sections returns the headings of bash-api.md, for the tests.
-func Sections() []string {
-	src, _ := files.ReadFile("bash-api.md")
-	var list []string
-	for h := range parse(string(src)) {
-		list = append(list, h)
-	}
-	return list
-}
-
 func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")

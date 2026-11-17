@@ -2,6 +2,8 @@ package core
 
 import "zel/internal/entities"
 
+const ChoiceSeparator = entities.ChoiceSeparator
+
 type Usage = entities.Usage
 type Metadata = entities.Metadata
 type Record = entities.Record

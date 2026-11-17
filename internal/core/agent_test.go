@@ -19,6 +19,7 @@ import (
 	"zel/internal/config"
 	"zel/internal/provider"
 	"zel/internal/shell"
+	"zel/internal/store"
 )
 
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
@@ -491,7 +492,7 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 	if time.Since(start) > 5*time.Second || a.RunningTasks() != 0 || len(a.Queue().Take()) != 0 {
 		t.Fatal("session change did not stop the task quietly")
 	}
-	if list, err := a.db.Tasks(a.project, old); err != nil || len(list) != 2 || list[0].Status != "stopped" || list[1].Status != "stopped" {
+	if list, err := a.store.Tasks(a.project, old); err != nil || len(list) != 2 || list[0].Status != "stopped" || list[1].Status != "stopped" {
 		t.Fatalf("tasks %+v %v", list, err)
 	}
 }
@@ -659,7 +660,7 @@ func tinyPNG() []byte {
 func storedItems(t *testing.T, a *Runtime) []string {
 	t.Helper()
 	s := a.session()
-	_, items, err := s.db.Load(s.project, s.id)
+	_, items, err := s.store.Load(s.project, s.id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,14 +698,14 @@ func TestSessionUsageCountsEachRequestOnce(t *testing.T) {
 		return json.RawMessage(`{"type":"message","role":"` + role + `","content":"x"}`)
 	}
 	a := &Runtime{cur: &session{History: []json.RawMessage{msg("user"), msg("assistant"), msg("assistant"), msg("assistant")}}}
-	a.setItemMeta(1, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}})
-	a.setItemMeta(2, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}}) // same request
-	a.setItemMeta(3, Metadata{RequestSeq: 4, Usage: &Usage{Input: 200, Output: 20, Cached: 160}})
+	a.session().setItemMeta(1, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}})
+	a.session().setItemMeta(2, Metadata{RequestSeq: 2, Usage: &Usage{Input: 100, Output: 10, Cached: 40}}) // same request
+	a.session().setItemMeta(3, Metadata{RequestSeq: 4, Usage: &Usage{Input: 200, Output: 20, Cached: 160}})
 	total, requests := a.SessionUsage()
 	if requests != 2 || total != (Usage{Input: 300, Output: 30, Cached: 200}) || a.UserMessages() != 1 {
 		t.Fatalf("usage %+v over %d requests", total, requests)
 	}
-	a.setItemMeta(3, Metadata{RequestSeq: 4, Usage: &Usage{Input: 200, Output: 20, Cached: -1}})
+	a.session().setItemMeta(3, Metadata{RequestSeq: 4, Usage: &Usage{Input: 200, Output: 20, Cached: -1}})
 	if total, _ = a.SessionUsage(); total.Cached != -1 {
 		t.Fatalf("unknown cache kept: %+v", total)
 	}
@@ -1369,7 +1370,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	}
 	s := a.session()
 	want := s.compacted
-	_, items, err := s.db.Load(s.project, s.id)
+	_, items, err := s.store.Load(s.project, s.id)
 	resumed := &session{}
 	resumed.readItems(items)
 	if err != nil || resumed.compacted != want || want.Drop == 0 {
@@ -1383,7 +1384,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 // store of its own.
 func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	t.Helper()
-	db, err := openDB(a.Home())
+	db, err := store.Open(a.Home())
 	if err != nil {
 		return nil, err
 	}

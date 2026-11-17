@@ -224,7 +224,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	session := c.a.session()
 	s := session.Settings()
-	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, DB: session.sessionDir(), Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
+	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
 	info.Usage, info.Requests = session.SessionUsage()
 	return info, nil
 }

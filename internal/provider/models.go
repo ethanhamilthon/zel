@@ -38,8 +38,3 @@ func AllModels(ctx context.Context, providers map[string]*Client) (choices []ent
 	})
 	return choices, errs
 }
-
-// SelectSession changes the model of this session and makes it the default for new
-// sessions by persisting the selection in zel.toml (see saveDefault in core).
-// Saved sessions keep their own model. Call between turns. Failed validation or
-// persistence of the session restores the old selection.

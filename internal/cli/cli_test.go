@@ -49,34 +49,6 @@ func zel(t *testing.T, stdin string, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func TestIsHelper(t *testing.T) {
-	for _, args := range [][]string{{"version"}, {"help"}, {"--help"}, {"-h"}, {"task", "list"}, {"choice"}, {"view"},
-		{"session"}, {"cd"}, {"edit", "f"}, {"docs"}, {"models"}, {"config"}} {
-		if !IsHelper(args) {
-			t.Errorf("IsHelper(%v) = false", args)
-		}
-	}
-	for _, args := range [][]string{nil, {}, {"-p", "x"}, {"update"}, {"tasks"}, {"init"}, {"unknown"}} {
-		if IsHelper(args) {
-			t.Errorf("IsHelper(%v) = true", args)
-		}
-	}
-}
-
-func TestRemovedCommands(t *testing.T) {
-	for _, args := range [][]string{{"init"}, {"events"}, {"agent", "x"}, {"init=x"}} {
-		if _, err := zel(t, "", args...); err == nil || !strings.Contains(err.Error(), "removed in zel 0.7") {
-			t.Errorf("%v: err = %v", args, err)
-		}
-	}
-	if _, err := zel(t, "", "frobnicate"); err == nil || !strings.Contains(err.Error(), "unknown command") {
-		t.Errorf("unknown command: %v", err)
-	}
-	if _, err := zel(t, "", "version", "x"); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
-		t.Errorf("version x: %v", err)
-	}
-}
-
 func TestParseFlags(t *testing.T) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	n := fs.Int("n", 20, "")
@@ -90,21 +62,6 @@ func TestParseFlags(t *testing.T) {
 	}
 	if _, err := parseFlags(fs, []string{"a", "--bogus"}); err == nil {
 		t.Fatal("unknown flag accepted")
-	}
-}
-
-func TestShellJoin(t *testing.T) {
-	if got := shellJoin([]string{"echo $HOME | wc -c"}); got != "echo $HOME | wc -c" {
-		t.Fatalf("one argument is a script: %q", got)
-	}
-	argv := []string{"printf", "<%s>", "a b", "it's", "", "$HOME", "x;y", "./a-b_c=1:2,3+@%"}
-	joined := shellJoin(argv)
-	if !strings.HasPrefix(joined, "printf '<%s>' 'a b' 'it'\\''s' '' '$HOME'") || !strings.HasSuffix(joined, " ./a-b_c=1:2,3+@%") {
-		t.Fatalf("joined = %q", joined)
-	}
-	out, err := exec.Command("bash", "-c", joined).Output()
-	if want := "<a b><it's><><$HOME><x;y><./a-b_c=1:2,3+@%>"; err != nil || string(out) != want {
-		t.Fatalf("bash got %q (%v), want %q", out, err, want)
 	}
 }
 

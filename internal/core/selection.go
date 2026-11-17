@@ -22,6 +22,10 @@ func (a *Runtime) SelectSession(ctx context.Context, provider, model, effort str
 	return a.session().SelectSession(ctx, provider, model, effort)
 }
 
+// SelectSession changes the model of this session and makes it the default for
+// new sessions by writing provider, model and effort into the config file. Saved
+// sessions keep their own model. Call between turns. A failed validation
+// restores the old selection.
 func (s *session) SelectSession(ctx context.Context, provider, model, effort string) error {
 	if err := s.ConfigureSession(ctx, provider, model, effort); err != nil {
 		return err

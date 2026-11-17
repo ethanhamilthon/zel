@@ -17,7 +17,7 @@ import (
 // MaxDepth is how deep zel -p children nest.
 const MaxDepth = 3
 
-func (s *session) sessionDir() string { return s.db.Dir(s.project, s.id) }
+func (s *session) sessionDir() string { return s.store.Dir(s.project, s.id) }
 
 func (s *session) lockPath() string { return filepath.Join(s.sessionDir(), "lock") }
 
@@ -102,19 +102,10 @@ func (s *session) shutdown(reason string) {
 
 func (a *Runtime) HasSavedSession() bool { return a.session().HasSavedSession() }
 
-func (a *Runtime) closeDB() {
-	a.closeOnce.Do(func() {
-		if a.db != nil {
-			a.db.Close()
-		}
-	})
-}
-
 func (a *Runtime) Close() {
 	if s := a.session(); s != nil {
 		s.shutdown("quit")
 	}
-	a.closeDB()
 }
 
 // NewSession and Resume are called only when no turn is running.

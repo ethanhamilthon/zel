@@ -34,7 +34,7 @@ type Options struct {
 type Runtime struct {
 	opts      Options
 	home      string
-	db        *store.Store
+	store     *store.Store
 	project   string
 	ask       *chooser
 	changes   *notifier // running tasks or children changed
@@ -53,7 +53,7 @@ type session struct {
 	opts         Options
 	home         string
 	dir          string
-	db           *store.Store // shared handle; never cleared so late callers see closed DB cleanly
+	store        *store.Store // shared handle of the sessions folder
 	project      string
 	id           string
 	created      time.Time
@@ -146,7 +146,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 			}
 		}
 	}
-	if a.db, err = openDB(home); err != nil {
+	if a.store, err = store.Open(home); err != nil {
 		return nil, err
 	}
 	s := a.newSessionState(dir, nil, nil)
@@ -165,14 +165,12 @@ func New(dir string, opts Options) (*Runtime, error) {
 		st := s.Settings()
 		if err := s.ConfigureSession(context.Background(), cmp.Or(provider, st.Provider), cmp.Or(model, st.Model), cmp.Or(effort, st.Effort)); err != nil {
 			s.shutdown("quit")
-			a.closeDB()
 			return nil, err
 		}
 	}
 	if opts.SessionReady != nil {
 		if err := opts.SessionReady(a); err != nil {
 			s.shutdown("quit")
-			a.closeDB()
 			return nil, err
 		}
 	}
@@ -192,7 +190,7 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		opts:    a.opts,
 		home:    a.home,
 		dir:     dir,
-		db:      a.db,
+		store:   a.store,
 		project: a.project,
 		ask:     a.ask,
 		changes: a.changes,
@@ -210,8 +208,6 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 }
 
 func raw(v any) json.RawMessage { data, _ := json.Marshal(v); return data }
-
-func (a *Runtime) message(role, text string) { a.session().message(role, text) }
 
 func (s *session) message(role, text string) {
 	s.histMu.Lock()
@@ -480,8 +476,6 @@ func bashParameters() map[string]any {
 		"additionalProperties": false,
 	}
 }
-
-func (a *Runtime) setItemMeta(seq int, m Metadata) { a.session().setItemMeta(seq, m) }
 
 func (s *session) setItemMeta(seq int, m Metadata) {
 	s.histMu.Lock()

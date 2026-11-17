@@ -5,6 +5,7 @@ package ipc
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -59,7 +60,7 @@ func Path(runDir, session string) string {
 // Token is a new random key for a session socket.
 func Token() string {
 	var b [16]byte
-	if _, err := io.ReadFull(randReader, b[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
 		panic(err)
 	}
 	return hex.EncodeToString(b[:])

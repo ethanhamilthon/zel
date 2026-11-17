@@ -55,10 +55,7 @@ func (s *session) runHooks(ctx context.Context, event string, input map[string]a
 			break
 		}
 		if h.Match != "" {
-			subject, _ := res.input[field].(string)
-			if field == "" {
-				subject, _ = res.input["text"].(string)
-			}
+			subject, _ := res.input[config.MatchField[event]].(string)
 			if re, err := regexp.Compile(h.Match); err != nil || !re.MatchString(subject) {
 				continue
 			}
@@ -189,7 +186,7 @@ func (s *session) hookInput(ctx context.Context, input Input, emit func(TurnEven
 	case !wrapped:
 		input.Text = out
 	case out != text:
-		// The hook rewrote the plain text; an old hook may print the tags itself.
+		// The hook rewrote the plain text; it may print the tags itself.
 		if _, tagged := unwrapNotification(out); tagged {
 			input.Text = strings.TrimSpace(out)
 		} else {

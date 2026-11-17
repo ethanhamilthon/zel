@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -85,20 +84,6 @@ func (q *eventQueue) TryPop() (item core.Event, ok bool) {
 		return item, true
 	}
 	return item, false
-}
-
-func (q *eventQueue) Pop(ctx context.Context) (core.Event, bool) {
-	for {
-		if item, ok := q.TryPop(); ok {
-			return item, true
-		}
-		select {
-		case <-ctx.Done():
-			var zero core.Event
-			return zero, false
-		case <-q.wake:
-		}
-	}
 }
 
 // Overflow is spooled to an unlinked private file, bounding queue memory while

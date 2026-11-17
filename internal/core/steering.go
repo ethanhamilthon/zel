@@ -18,8 +18,6 @@ func (s *session) addInput(input Input, emit func(TurnEvent)) {
 	emit(e)
 }
 
-func (a *Runtime) commitInput(input Input) { a.session().commitInput(input) }
-
 func (s *session) commitInput(input Input) {
 	if input.SentAt.IsZero() {
 		input.SentAt = time.Now()

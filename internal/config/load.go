@@ -428,6 +428,9 @@ func (p *parser) hooks(v any) error {
 				if f.err != nil {
 					return f.err
 				}
+				if _, ok := MatchField[event]; h.Match != "" && !ok {
+					return fmt.Errorf("%s.match: only message, notification, turn_start, bash_before and bash_after have text to match", where)
+				}
 				if _, err := regexp.Compile(h.Match); err != nil {
 					return fmt.Errorf("%s.match: %v", where, err)
 				}

@@ -14,10 +14,7 @@ import (
 	"zel/internal/config"
 	"zel/internal/provider"
 	"zel/internal/shell"
-	"zel/internal/store"
 )
-
-func openDB(home string) (*store.Store, error) { return store.Open(home) }
 
 // confHolder keeps the config snapshot of a session. It is shared by pointer
 // so a session switch sees the same notice handler.
@@ -50,8 +47,6 @@ func (h *confHolder) setNotice(fn func(string)) {
 	h.notice = fn
 	h.mu.Unlock()
 }
-
-// SetNoticeHandler routes config notices (a broken file, failed ${{ }}) to the UI.
 
 func (s *session) notify(msg string) {
 	s.LogEvent("notice", msg)

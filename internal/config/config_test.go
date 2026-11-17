@@ -149,7 +149,7 @@ fix = "Fix ${{ x }}"
 	for _, content := range []string{
 		"[hooks]\nnope = \"x\"", "[hooks]\nidle = [{ run = \"x\", match = \"(\" }]", "[settings]\ncompaction = -1",
 		"[providers.x]\nbase_url = \"ftp://x\"", "instructions = [{ main = true }]", "[completions]\n\"a b\" = \"x\"",
-		"[settings]\naccent = \"#123456\"",
+		"[settings]\naccent = \"#123456\"", "[hooks]\nidle = [{ run = \"x\", match = \"y\" }]",
 	} {
 		writeFile(t, bad, content)
 		if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 {
