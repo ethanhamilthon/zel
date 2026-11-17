@@ -38,7 +38,7 @@ func (m *app) drawList(x, y, width int, items []item, selected int, spread bool)
 	for i, it := range items {
 		label, detail := grayColor, darkGray
 		if it.header() {
-			label = traceColors["user"]
+			label = darkGray
 		}
 		if i == selected {
 			label = accentColor

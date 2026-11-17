@@ -533,7 +533,7 @@ func TestMenuPagesShareOneBoxAndScrollUnderTheTitle(t *testing.T) {
 }
 
 // Tracing groups entries by turn, Tab filters them, the arrows of an entry go
-// through the filter only, Esc returns to the same row and h hides the hooks.
+// through the filter only, Esc returns to the same row and Ctrl+H hides the hooks.
 func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 	m := testApp(t)
 	m.screen.(tcell.SimulationScreen).SetSize(100, 30)
@@ -591,14 +591,31 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 	if v := view(); !strings.Contains(v, "Tracing · All") || !strings.Contains(v, "session_created") {
 		t.Fatalf("Shift+Tab goes back to All:\n%s", v)
 	}
-	key(tcell.KeyRune, 'h')
-	if v := view(); !strings.Contains(v, "hooks hidden") || strings.Contains(v, "session_created") || mu.search.text != "" {
-		t.Fatalf("h hides the hooks:\n%s", v)
+	rows := screenRows(m)
+	turnRow, sysRow := "", ""
+	for y, r := range rows {
+		if strings.Contains(r, "Turn 1 · list the files") {
+			turnRow = r
+			x := strings.Index(r, "Turn 1")
+			_, _, style, _ := m.screen.GetContent(x, y)
+			if fg, _, _ := style.Decompose(); fg != tcell.GetColor(string(darkGray)) {
+				t.Fatalf("turn header color = %v, want darkGray", fg)
+			}
+		}
+		if strings.Contains(r, "system   prompt") {
+			sysRow = r
+		}
 	}
-	key(tcell.KeyRune, 'f')
+	if turnRow == "" || sysRow == "" || strings.Index(turnRow, "Turn 1") != strings.Index(sysRow, "system") {
+		t.Fatalf("entry rows must align with turn headers without left indent:\n%q\n%q", turnRow, sysRow)
+	}
+	key(tcell.KeyCtrlH, 0)
+	if v := view(); !strings.Contains(v, "hooks hidden") || strings.Contains(v, "session_created") || mu.search.text != "" {
+		t.Fatalf("Ctrl+H hides the hooks:\n%s", v)
+	}
 	key(tcell.KeyRune, 'h')
-	if mu.search.text != "fh" || m.traceHooksShown() {
-		t.Fatalf("after a letter, h is part of the search: %q", mu.search.text)
+	if mu.search.text != "h" || m.traceHooksShown() {
+		t.Fatalf("h types into the search: %q", mu.search.text)
 	}
 }
 

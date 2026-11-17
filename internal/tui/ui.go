@@ -68,7 +68,7 @@ type app struct {
 	modelsLoading                  bool
 	completions                    list
 	traceFilter                    int   // the Tracing view: an index of traceFilters
-	traceHooks                     *bool // the h toggle of Tracing; nil until pressed
+	traceHooks                     *bool // the Ctrl+H toggle of Tracing; nil until pressed
 	completionStart, completionEnd int
 	completionKind                 byte
 	completionHidden               string

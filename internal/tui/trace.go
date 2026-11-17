@@ -29,7 +29,7 @@ func traceShown(t core.TraceEntry, filter int, hooks bool) bool {
 	return true
 }
 
-// traceHooksShown is the h toggle of Tracing; until it is pressed, the
+// traceHooksShown is the Ctrl+H toggle of Tracing; until it is pressed, the
 // trace_hooks setting decides.
 func (m *app) traceHooksShown() bool {
 	if m.traceHooks != nil {
@@ -95,7 +95,7 @@ func traceItems(trace []core.TraceEntry, filter int, hooks bool) []item {
 		if t.Kind == "hook" { // the exit and the time are in the detail column
 			text, _, _ = strings.Cut(text, " -> exit ")
 		}
-		items = append(items, item{fmt.Sprintf("  %-8s %s", t.Kind, firstLine(text)), traceDetail(t), fmt.Sprint(i)})
+		items = append(items, item{fmt.Sprintf("%-8s %s", t.Kind, firstLine(text)), traceDetail(t), fmt.Sprint(i)})
 	}
 	return items
 }
