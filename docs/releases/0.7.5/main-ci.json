@@ -1,1 +1,0 @@
-{"conclusion":"success","headSha":"4fa798762200ab12a67b08a940e2dd9785985442","jobs":[{"conclusion":"success","name":"test (macos-latest)","status":"completed"},{"conclusion":"success","name":"test (ubuntu-latest)","status":"completed"}],"status":"completed","url":"https://github.com/ethanhamilthon/zel/actions/runs/43826327836"}

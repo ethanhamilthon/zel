@@ -1,4 +1,0 @@
-PASS build darwin/arm64
-PASS build darwin/amd64
-PASS build linux/arm64
-PASS build linux/amd64

@@ -1,8 +1,0 @@
-=== RUN   TestFileImagesAndCompleteCommandsAcrossProviders
-=== RUN   TestFileImagesAndCompleteCommandsAcrossProviders/responses
-=== RUN   TestFileImagesAndCompleteCommandsAcrossProviders/chat
---- PASS: TestFileImagesAndCompleteCommandsAcrossProviders (0.13s)
-    --- PASS: TestFileImagesAndCompleteCommandsAcrossProviders/responses (0.06s)
-    --- PASS: TestFileImagesAndCompleteCommandsAcrossProviders/chat (0.07s)
-PASS
-ok  	zel/internal/core	0.825s
