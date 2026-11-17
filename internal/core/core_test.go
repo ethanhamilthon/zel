@@ -851,6 +851,9 @@ func TestChildrenAreTrackedHiddenAndResumedOnlyByTheirParent(t *testing.T) {
 	if list := parent.ActiveSubagents(); len(list) != 0 {
 		t.Fatalf("child end not announced: %+v", list)
 	}
+	if all := parent.Subagents(); len(all) != 2 || all[0].ID != "kid" || all[0].Ended.IsZero() || all[1].ID != childID || all[1].Ended.IsZero() || all[1].Context <= 0 {
+		t.Fatalf("finished subagents must stay for Info: %+v", all)
+	}
 	list, err := parent.Sessions()
 	if err != nil || len(list) != 1 || list[0].ID != ps.id {
 		t.Fatalf("sessions: %+v %v", list, err)

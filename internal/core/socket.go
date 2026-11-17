@@ -164,6 +164,12 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		})
 		return ok("")
 	case "child.end":
+		if a.Model != "" || a.Context > 0 || a.Input > 0 || a.Output > 0 || a.N > 0 {
+			s.childUsage(a.Session, func(r *SubagentRun) {
+				r.Provider, r.Model, r.Effort = cmp.Or(a.Provider, r.Provider), cmp.Or(a.Model, r.Model), cmp.Or(a.Effort, r.Effort)
+				r.Context, r.Usage, r.Requests = a.Context, Usage{Input: a.Input, Output: a.Output, Cached: a.Cached}, a.N
+			})
+		}
 		s.childEnded(a.Session)
 		return ok("")
 	}

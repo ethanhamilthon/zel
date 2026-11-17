@@ -53,10 +53,14 @@ func infoText(info core.Info) string {
 	if len(info.Subagents) > 0 {
 		fmt.Fprintf(&b, "\nSubagents (%d)\n", len(info.Subagents))
 		for _, c := range info.Subagents {
+			state := "running " + formatDuration(time.Since(c.Started))
+			if !c.Ended.IsZero() {
+				state = "done " + formatDuration(max(0, c.Ended.Sub(c.Started)))
+			}
 			b.WriteString("\n" + firstLine(cmp.Or(c.Command, c.ID)) + "\n")
 			fmt.Fprintf(&b, "%-8s%s\n", "ID", c.ID)
 			fmt.Fprintf(&b, "%-8s%s\n", "Model", strings.TrimPrefix(c.Provider+" · ", " · ")+c.Model+" · "+c.Effort)
-			fmt.Fprintf(&b, "%-8s%s · running %s\n", "Context", formatContext(c.Context), formatDuration(time.Since(c.Started)))
+			fmt.Fprintf(&b, "%-8s%s · %s\n", "Context", formatContext(c.Context), state)
 			fmt.Fprintf(&b, "%-8s%s\n", "Spend", spend(c.Usage))
 		}
 	}

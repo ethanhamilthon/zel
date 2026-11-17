@@ -442,6 +442,17 @@ func TestFormattingAndValidation(t *testing.T) {
 		m.checkField(&form{kind: "model", fields: []string{"Provider"}, values: []string{"nope"}}, 0) == "" {
 		t.Fatal("accepted an invalid model form")
 	}
+	started := time.Now().Add(-5 * time.Second)
+	info := infoText(core.Info{
+		Session: "s1", Title: "My Session", Project: "/tmp/p", Config: "/tmp/c", Provider: "p", Model: "m", Effort: "medium",
+		Subagents: []core.SubagentRun{
+			{ID: "c1", Command: "first task", Provider: "p", Model: "m", Effort: "low", Context: 12000, Started: started, Ended: started.Add(3 * time.Second)},
+			{ID: "c2", Command: "second task", Provider: "p", Model: "m", Effort: "high", Context: 4000, Started: started},
+		},
+	})
+	if !strings.Contains(info, "Subagents (2)") || !strings.Contains(info, "first task") || !strings.Contains(info, "12K · done 3s") || !strings.Contains(info, "second task") || !strings.Contains(info, "4K · running ") {
+		t.Fatalf("infoText subagents:\n%s", info)
+	}
 	text, ok := renderMarkdown("# Heading\n\n**bold** and `code`\n\n- item", 30, false)
 	if !ok || !strings.Contains(text, "Heading") || !strings.Contains(text, "item") {
 		t.Fatal("markdown rendering")

@@ -40,11 +40,12 @@ func (n *notifier) call() bool {
 
 func (n *notifier) notify() { n.call() }
 
-// SubagentRun describes a zel -p child of this session that runs now.
+// SubagentRun describes a zel -p child of this session.
 type SubagentRun struct {
 	ID       string
 	Parent   string
 	Started  time.Time
+	Ended    time.Time // zero while running
 	Steps    int
 	Provider string
 	Model    string
@@ -59,25 +60,87 @@ type SubagentRun struct {
 // ActiveSubagents lists the running zel -p children, oldest first.
 func (a *Runtime) ActiveSubagents() []SubagentRun { return a.session().ActiveSubagents() }
 
-func (s *session) ActiveSubagents() []SubagentRun {
-	s.childMu.Lock()
-	list := make([]SubagentRun, 0, len(s.children))
+// Subagents lists all zel -p children of the session (running and finished), oldest first.
+func (a *Runtime) Subagents() []SubagentRun { return a.session().Subagents() }
+
+func (s *session) reapChildrenLocked() {
 	for id, run := range s.children {
-		// A child killed with its bash call or task never says child.end.
-		if pid := s.childPIDs[id]; pid > 0 && syscall.Kill(pid, 0) == syscall.ESRCH {
-			delete(s.children, id)
-			delete(s.childPIDs, id)
+		if !run.Ended.IsZero() {
 			continue
 		}
-		list = append(list, run)
+		// A child killed with its bash call or task never says child.end.
+		if pid := s.childPIDs[id]; pid > 0 && syscall.Kill(pid, 0) == syscall.ESRCH {
+			run.Ended = time.Now()
+			s.children[id] = run
+			delete(s.childPIDs, id)
+		}
 	}
-	s.childMu.Unlock()
+}
+
+func sortSubagents(list []SubagentRun) {
 	slices.SortFunc(list, func(a, b SubagentRun) int {
 		if c := a.Started.Compare(b.Started); c != 0 {
 			return c
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
+}
+
+func (s *session) ActiveSubagents() []SubagentRun {
+	s.childMu.Lock()
+	s.reapChildrenLocked()
+	list := make([]SubagentRun, 0, len(s.children))
+	for _, run := range s.children {
+		if run.Ended.IsZero() {
+			list = append(list, run)
+		}
+	}
+	s.childMu.Unlock()
+	sortSubagents(list)
+	return list
+}
+
+func (s *session) Subagents() []SubagentRun {
+	if s.store != nil && s.project != "" && s.id != "" {
+		if stored, err := s.store.Children(s.project, s.id); err == nil {
+			for _, sum := range stored {
+				s.childMu.Lock()
+				_, known := s.children[sum.ID]
+				s.childMu.Unlock()
+				if known {
+					continue
+				}
+				v, items, err := s.store.Load(s.project, sum.ID)
+				if err != nil {
+					continue
+				}
+				tmp := &session{acts: &activities{}}
+				tmp.readItems(items)
+				usage, reqs := tmp.SessionUsage()
+				run := SubagentRun{
+					ID: v.ID, Parent: s.id, Started: v.Created, Ended: sum.Updated,
+					Provider: v.Provider, Model: v.Model, Effort: v.Effort,
+					Command: sum.Title, Context: tmp.ContextTokens(), Usage: usage, Requests: reqs,
+				}
+				s.childMu.Lock()
+				if s.children == nil {
+					s.children, s.childPIDs = map[string]SubagentRun{}, map[string]int{}
+				}
+				if _, known := s.children[sum.ID]; !known {
+					s.children[sum.ID] = run
+				}
+				s.childMu.Unlock()
+			}
+		}
+	}
+	s.childMu.Lock()
+	s.reapChildrenLocked()
+	list := make([]SubagentRun, 0, len(s.children))
+	for _, run := range s.children {
+		list = append(list, run)
+	}
+	s.childMu.Unlock()
+	sortSubagents(list)
 	return list
 }
 
@@ -150,10 +213,13 @@ func (s *session) childUsage(id string, update func(*SubagentRun)) {
 	s.childMu.Unlock()
 }
 
-// leaveParent tells the parent that this child ended.
+// leaveParent tells the parent that this child ended, with its final spend.
 func (s *session) leaveParent() {
 	if s.parent != nil && s.id != "" {
-		s.parent.call("child.end", map[string]any{"session": s.id})
+		st := s.Settings()
+		usage, requests := s.SessionUsage()
+		s.parent.call("child.end", map[string]any{"session": s.id, "provider": st.Provider, "model": st.Model, "effort": st.Effort,
+			"context": s.ContextTokens(), "input": usage.Input, "output": usage.Output, "cached": usage.Cached, "n": requests})
 	}
 }
 
@@ -161,6 +227,15 @@ func (s *session) childStarted(run SubagentRun, pid int) {
 	s.childMu.Lock()
 	if s.children == nil {
 		s.children, s.childPIDs = map[string]SubagentRun{}, map[string]int{}
+	}
+	if prev, ok := s.children[run.ID]; ok {
+		if !prev.Started.IsZero() {
+			run.Started = prev.Started
+		}
+		if run.Command == "" {
+			run.Command = prev.Command
+		}
+		run.Context, run.Usage, run.Requests = prev.Context, prev.Usage, prev.Requests
 	}
 	s.children[run.ID], s.childPIDs[run.ID] = run, pid
 	s.childMu.Unlock()
@@ -170,7 +245,12 @@ func (s *session) childStarted(run SubagentRun, pid int) {
 
 func (s *session) childEnded(id string) {
 	s.childMu.Lock()
-	delete(s.children, id)
+	if run, ok := s.children[id]; ok {
+		if run.Ended.IsZero() {
+			run.Ended = time.Now()
+		}
+		s.children[id] = run
+	}
 	delete(s.childPIDs, id)
 	s.childMu.Unlock()
 	s.changes.notify()

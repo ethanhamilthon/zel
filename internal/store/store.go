@@ -243,6 +243,18 @@ func (s *Store) Append(v Session, items []Item, saved, total int) error {
 // Sessions lists the sessions of a project, newest first. Sessions started by
 // another session (zel -p children) are left out.
 func (s *Store) Sessions(project string) ([]Summary, error) {
+	return s.listSessions(project, "")
+}
+
+// Children lists the stored zel -p children of parent in project.
+func (s *Store) Children(project, parent string) ([]Summary, error) {
+	if parent == "" {
+		return nil, nil
+	}
+	return s.listSessions(project, parent)
+}
+
+func (s *Store) listSessions(project, parent string) ([]Summary, error) {
 	base := filepath.Join(s.Root, ProjectKey(project))
 	entries, err := os.ReadDir(base)
 	if errors.Is(err, os.ErrNotExist) {
@@ -257,14 +269,14 @@ func (s *Store) Sessions(project string) ([]Summary, error) {
 			continue
 		}
 		m, err := readMeta(filepath.Join(base, e.Name()))
-		if err != nil || m.Parent != "" {
+		if err != nil || m.Parent != parent {
 			continue
 		}
 		title := m.Title
 		if title == "" {
 			title = m.First
 		}
-		list = append(list, Summary{ID: e.Name(), Title: title, Project: project, Updated: m.Updated})
+		list = append(list, Summary{ID: e.Name(), Title: title, Project: project, Parent: m.Parent, Updated: m.Updated})
 	}
 	sortSummaries(list)
 	return list, nil
