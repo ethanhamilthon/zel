@@ -214,8 +214,8 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 	if got := s.runBash(context.Background(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) != 13000 {
 		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
 	}
-	if strings.Contains(s.toolDescription(), "cut to") || !strings.Contains(s.toolDescription(), "never truncated") {
-		t.Fatal("the prompt does not keep the old text when the cut is off")
+	if strings.Contains(s.toolDescription(), "cut to") || !strings.Contains(s.toolDescription(), "never cut") {
+		t.Fatal("the prompt does not say the output is never cut")
 	}
 	for _, bad := range []string{"-1", "500"} {
 		s := config.DefaultSettings()
@@ -370,12 +370,13 @@ bad = "${{ exit 3 }}"
 	}
 	prompt, desc := main.session().assemblePrompt(), main.session().toolDescription()
 	if !strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || strings.Contains(prompt, "HEADLESS-ONLY") ||
-		strings.Contains(prompt, "zel choice") || !strings.Contains(desc, `zel choice "Question"`) {
+		strings.Contains(prompt, "zel choice") || !strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "Ask the user before") {
 		t.Errorf("main prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
 	prompt, desc = headless.session().assemblePrompt(), headless.session().toolDescription()
 	if strings.Contains(prompt, "MAIN-ONLY") || !strings.Contains(prompt, "BOTH-MODES") || !strings.Contains(prompt, "HEADLESS-ONLY") ||
-		strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "zel choice is not available") {
+		strings.Contains(desc, `zel choice "Question"`) || !strings.Contains(desc, "no user to ask") || strings.Contains(desc, "Ask the user before") ||
+		strings.Contains(desc, "{") || !strings.Contains(desc, `zel -p "prompt"`) {
 		t.Errorf("headless prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
 	hi := "<completion name=\"hi\">\nsay 42\n</completion>"
@@ -1182,4 +1183,16 @@ func setKey(path, key string, value any) error {
 	}
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(data)
+}
+
+func TestDeepestChildCannotStartSubagents(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{Mode: "headless"}, nil)
+	s := a.session()
+	if !strings.Contains(s.toolDescription(), `zel -p "prompt"`) {
+		t.Fatal("a child below the limit is not told about subagents")
+	}
+	s.depth = MaxDepth
+	if strings.Contains(s.toolDescription(), `zel -p "`) || strings.Contains(s.toolDescription(), "--resume") {
+		t.Fatalf("the deepest child is told about subagents:\n%s", s.toolDescription())
+	}
 }

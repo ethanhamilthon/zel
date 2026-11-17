@@ -11,11 +11,13 @@ import (
 	"zel/internal/config"
 )
 
-//go:embed bash.md
-var bashMD string
+// The description of the bash tool, one text per session mode.
+//
+//go:embed bash_main.md
+var bashMain string
 
-// BashToolDescription is the description of the one tool the model gets.
-const BashToolDescription = "Run a bash script: its input is the raw script. Output is stdout and stderr together."
+//go:embed bash_headless.md
+var bashHeadless string
 
 // instructions returns the session's system prompt. It is assembled once and stored
 // in the history, so a resumed session keeps its prompt until the config changes.
@@ -58,43 +60,32 @@ func (s *session) assemblePrompt() string {
 }
 
 // toolDescription is everything Zel itself tells the model: how the bash tool
-// and the zel commands work. It is built live for every request.
+// and the zel commands work. It is built live for every request, from the text
+// of the session mode. Lines marked [nest] are dropped at the deepest level of
+// zel -p children, which cannot start more of them.
 func (s *session) toolDescription() string {
-	return BashToolDescription + "\n\n" + s.builtin()
-}
-
-// builtin is bash.md for this session: headless sessions cannot ask the user,
-// and the deepest children cannot start more of them.
-func (s *session) builtin() string {
-	timeout, limit := 30, config.BashOutput
+	text, timeout, limit := bashMain, config.BashTimeout, config.BashOutput
+	if s.mode() == "headless" {
+		text = bashHeadless
+	}
 	if s.cfg != nil {
 		timeout, limit = s.Settings().BashTimeout, s.Settings().BashOutput
 	}
+	output := " and never cut"
+	if limit > 0 {
+		output = fmt.Sprintf(", cut to %d bytes (head and tail; the marker names a file with the full output)", limit)
+	}
 	var lines []string
-	for _, line := range strings.Split(strings.TrimSpace(bashMD), "\n") {
-		switch {
-		case strings.HasPrefix(line, "[main] "):
-			if s.mode() != "main" {
-				continue
-			}
-			line = strings.TrimPrefix(line, "[main] ")
-		case strings.HasPrefix(line, "[nest] "):
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if rest, ok := strings.CutPrefix(line, "[nest] "); ok {
 			if s.depth >= MaxDepth {
 				continue
 			}
-			line = strings.TrimPrefix(line, "[nest] ")
-		}
-		line = strings.ReplaceAll(line, "{timeout}", strconv.Itoa(timeout))
-		if strings.HasPrefix(line, "Output = ") && limit > 0 {
-			line = strings.Replace(line, "never truncated", fmt.Sprintf("cut to %d bytes (head and tail; the marker gives a file with the full output)", limit), 1)
+			line = rest
 		}
 		lines = append(lines, line)
 	}
-	text := strings.Join(lines, "\n")
-	if s.mode() == "headless" {
-		text += "\nThis session is headless (zel -p): there is no user to ask, zel choice is not available."
-	}
-	return text
+	return strings.NewReplacer("{timeout}", strconv.Itoa(timeout), "{output}", output).Replace(strings.Join(lines, "\n"))
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {
