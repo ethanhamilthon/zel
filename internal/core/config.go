@@ -4,7 +4,6 @@ import "zel/internal/config"
 
 type Settings = config.Settings
 type Provider = config.Provider
-type UI = config.UI
 
 const APIResponses = config.APIResponses
 const APIChat = config.APIChat

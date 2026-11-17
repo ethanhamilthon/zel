@@ -96,11 +96,11 @@ func (c *Controller) Sessions() (sessions []SessionSummary, err error) {
 }
 
 // Appearance is an immutable, map-free snapshot for the hot UI path.
-func (c *Controller) Appearance() (config.Colors, UI) {
+func (c *Controller) Appearance() (config.Colors, bool) {
 	s := c.a.session()
 	s.cfg.mu.Lock()
 	defer s.cfg.mu.Unlock()
-	return s.cfg.s.Colors, s.cfg.s.UI
+	return s.cfg.s.Colors, s.cfg.s.ShowBash
 }
 
 func (c *Controller) Settings() (s Settings) {

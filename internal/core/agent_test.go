@@ -584,14 +584,14 @@ func writeConfig(home string, s Settings) error {
 			if v == "" {
 				continue
 			}
-			if err := config.SetKey(path, "providers."+name+"."+k, v); err != nil {
+			if err := setKey(path, "providers."+name+"."+k, v); err != nil {
 				return err
 			}
 		}
 	}
 	for k, v := range map[string][2]string{"provider": {s.Provider, cfg.Settings.Provider}, "model": {s.Model, cfg.Settings.Model}} {
 		if v[0] != "" && v[1] == "" {
-			if err := config.SetKey(path, k, v[0]); err != nil {
+			if err := setKey(path, k, v[0]); err != nil {
 				return err
 			}
 		}
@@ -854,7 +854,7 @@ func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				return sse(events...)
 			}}
 			a := newTestAgent(t, fp, Options{})
-			if err := config.SetKey(a.ConfigFile(), "providers.p.api", api); err != nil {
+			if err := setKey(a.ConfigFile(), "providers.p.api", api); err != nil {
 				t.Fatal(err)
 			}
 			if err := a.Reload(); err != nil {
@@ -1025,10 +1025,10 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.inFlight(2)
-	if err := config.SetKey(global, "instructions", "INSTRUCTIONS-V2"); err != nil {
+	if err := setKey(global, "instructions", "INSTRUCTIONS-V2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.SetKey(global, "settings.compaction", 4242); err != nil {
+	if err := setKey(global, "settings.compaction", 4242); err != nil {
 		t.Fatal(err)
 	}
 	h.ctl.Reload()
@@ -1351,7 +1351,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 		return textReply("ok")
 	}}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		if err := config.SetKey(config.File(home), "settings.compaction", 100); err != nil {
+		if err := setKey(config.File(home), "settings.compaction", 100); err != nil {
 			t.Fatal(err)
 		}
 	})

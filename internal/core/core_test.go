@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,6 +16,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/BurntSushi/toml"
 
 	"zel/internal/config"
 	"zel/internal/ipc"
@@ -674,7 +678,7 @@ func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 }
 
 func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("# mine\n[settings]\nbash_timeout = 5\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("[settings]\nbash_timeout = 5\n"))
 	if err := a.SelectSession(context.Background(), "p", "picked", "high"); err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +687,7 @@ func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, `model = "picked"`) || !strings.Contains(got, `effort = "high"`) || !strings.Contains(got, "# mine\n") ||
+	if !strings.Contains(got, `model = "picked"`) || !strings.Contains(got, `effort = "high"`) ||
 		!strings.Contains(got, "bash_timeout = 5") {
 		t.Fatalf("config:\n%s", got)
 	}
@@ -1153,4 +1157,29 @@ func TestChoiceAnswersStayInTheChat(t *testing.T) {
 	if got := kinds(again.Records()); got != want {
 		t.Fatalf("resumed records %q", got)
 	}
+}
+
+// setKey sets a dotted key in a TOML file for the tests; unlike config.SetKey it
+// rewrites the whole file (comments are lost) and takes any value.
+func setKey(path, key string, value any) error {
+	data := map[string]any{}
+	if _, err := toml.DecodeFile(path, &data); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	table, segs := data, strings.Split(key, ".")
+	for _, seg := range segs[:len(segs)-1] {
+		next, ok := table[seg].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			table[seg] = next
+		}
+		table = next
+	}
+	table[segs[len(segs)-1]] = value
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(data)
 }

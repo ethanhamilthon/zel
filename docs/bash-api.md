@@ -170,8 +170,6 @@ instructions = [
 
 [settings]
 compaction        = 400000     # tokens, 0 = off
-reasoning_summary = true
-slash_menu        = true
 bash_timeout      = 30         # seconds per bash call
 bash_output       = 8000       # bytes of one bash call the agent gets, 0 = no cut
 show_bash         = true       # false: the working line has no command and no `thinking...`

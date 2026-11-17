@@ -7,7 +7,6 @@ type Request struct {
 	Model, Instructions, Effort string
 	Input                       []json.RawMessage
 	Tools                       []Tool
-	ReasoningSummary            bool
 }
 type Tool struct {
 	Name, Description string
@@ -35,15 +34,10 @@ func (r Request) payload(custom bool) map[string]any {
 	if r.Instructions != "" {
 		body["instructions"] = r.Instructions
 	}
-	reasoning := map[string]any{}
+	reasoning := map[string]any{"summary": "auto"}
 	if r.Effort != "" {
 		reasoning["effort"] = r.Effort
 	}
-	if r.ReasoningSummary {
-		reasoning["summary"] = "auto"
-	}
-	if len(reasoning) > 0 {
-		body["reasoning"] = reasoning
-	}
+	body["reasoning"] = reasoning
 	return body
 }

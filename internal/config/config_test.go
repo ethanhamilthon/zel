@@ -68,7 +68,6 @@ instructions = ["global ${{ hi }}", { text = "headless only", main = false, head
 compaction = 1000
 bash_timeout = 5
 bash_output = 2000
-slash_menu = false
 [colors]
 accent = "${{ fail }}#123456"
 user = "#111111"
@@ -94,8 +93,7 @@ fix = "Fix ${{ x }}"
 		t.Fatalf("path %q, errors %q", cfg.Path, cfg.Errors)
 	}
 	s := cfg.Settings
-	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 ||
-		s.UI.SlashMenu || !s.ReasoningSummary {
+	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 {
 		t.Fatalf("settings: %+v", s)
 	}
 	wantColors := DefaultColors()
@@ -184,7 +182,7 @@ func TestExpand(t *testing.T) {
 }
 
 func TestEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "zel.toml")
+	path := filepath.Join(t.TempDir(), "sub", "config.toml")
 	read := func() string {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -192,83 +190,57 @@ func TestEdit(t *testing.T) {
 		}
 		return string(data)
 	}
-	if err := SetKey(path, "settings.accent", "blue"); err != nil || read() != "[settings]\naccent = \"blue\"\n" {
+	if err := SetKey(path, "model", "m1"); err != nil || read() != "model = \"m1\"\n" {
 		t.Fatalf("create: %v %q", err, read())
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
 	writeFile(t, path, `# my config
-
-[settings] # ui
-accent = "red" # favourite
-compaction = 5
-note = """
+provider = "openai" # default
+instructions = [
+  """
+[not a table]
 model = "fake"
-"""
-
-# local models
-[providers.local]
-base_url = "http://localhost"
-list = [
-  "x = 1",
+""",
 ]
 
-# keep me
+[settings] # ui
+compaction = 5
+model = "inside a table"
+
 [providers.openai]
 base_url = "https://api.openai.com"
 `)
-	steps := []struct {
-		key   string
-		value any
-	}{
-		{"settings.accent", "gr\"een\n"},
-		{"settings.slash_menu", false},
-		{"model", "m"},
-		{"env.FOO", "bar"},
-		{"providers.openai.api", "chat"},
-	}
-	for _, s := range steps {
-		if err := SetKey(path, s.key, s.value); err != nil {
-			t.Fatalf("%s: %v", s.key, err)
+	for _, kv := range [][2]string{{"model", "gr\"een\n"}, {"effort", "high"}, {"provider", "local"}} {
+		if err := SetKey(path, kv[0], kv[1]); err != nil {
+			t.Fatalf("%s: %v", kv[0], err)
 		}
 	}
 	want := `# my config
-
-model = "m"
+provider = "local"
+instructions = [
+  """
+[not a table]
+model = "fake"
+""",
+]
+model = "gr\"een\n"
+effort = "high"
 
 [settings] # ui
-accent = "gr\"een\n" # favourite
 compaction = 5
-note = """
-model = "fake"
-"""
-slash_menu = false
+model = "inside a table"
 
-# local models
-[providers.local]
-base_url = "http://localhost"
-list = [
-  "x = 1",
-]
-
-# keep me
 [providers.openai]
 base_url = "https://api.openai.com"
-api = "chat"
-
-[env]
-FOO = "bar"
 `
 	if got := read(); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	if err := SetKey(path, "model", "n"); err != nil || !strings.Contains(read(), "\nmodel = \"n\"\n\n[settings]") {
-		t.Fatalf("replace top-level: %v\n%s", err, read())
-	}
-	writeFile(t, path, "settings = { accent = \"x\" }\n")
-	if err := SetKey(path, "settings.accent", "y"); err == nil || !strings.Contains(err.Error(), "edit it by hand") {
-		t.Fatalf("inline table: %v", err)
+	writeFile(t, path, "[settings]\ncompaction = 5\n")
+	if err := SetKey(path, "model", "n"); err != nil || read() != "model = \"n\"\n\n[settings]\ncompaction = 5\n" {
+		t.Fatalf("before the first table: %v\n%s", err, read())
 	}
 }
 

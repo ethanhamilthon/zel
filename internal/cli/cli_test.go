@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 
 	"zel/internal/config"
 	"zel/internal/core"
@@ -375,12 +378,12 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 func writeConfig(home string, s core.Settings) error {
 	path := config.File(home)
 	for name, p := range s.Providers {
-		if err := config.SetKey(path, "providers."+name+".base_url", p.BaseURL); err != nil {
+		if err := setKey(path, "providers."+name+".base_url", p.BaseURL); err != nil {
 			return err
 		}
 	}
 	for k, v := range map[string]string{"provider": s.Provider, "model": s.Model} {
-		if err := config.SetKey(path, k, v); err != nil {
+		if err := setKey(path, k, v); err != nil {
 			return err
 		}
 	}
@@ -697,4 +700,29 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if len(prompts) != 3 || prompts[1] != "child task" {
 		t.Fatalf("requests: %q", prompts)
 	}
+}
+
+// setKey sets a dotted key in a TOML file for the tests; unlike config.SetKey it
+// rewrites the whole file (comments are lost) and takes any value.
+func setKey(path, key string, value any) error {
+	data := map[string]any{}
+	if _, err := toml.DecodeFile(path, &data); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	table, segs := data, strings.Split(key, ".")
+	for _, seg := range segs[:len(segs)-1] {
+		next, ok := table[seg].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			table[seg] = next
+		}
+		table = next
+	}
+	table[segs[len(segs)-1]] = value
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(data)
 }

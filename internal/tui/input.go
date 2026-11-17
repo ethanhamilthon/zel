@@ -137,7 +137,7 @@ func (m *app) key(k *tcell.EventKey) {
 		m.submit()
 		return
 	}
-	if k.Key() == tcell.KeyRune && k.Rune() == '/' && m.input.text == "" && m.ctl.Settings().UI.SlashMenu {
+	if k.Key() == tcell.KeyRune && k.Rune() == '/' && m.input.text == "" {
 		m.openMenu("main")
 		return
 	}

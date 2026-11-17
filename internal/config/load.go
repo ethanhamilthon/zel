@@ -239,19 +239,12 @@ func (p *parser) settings(v any) error {
 			default:
 				st.BashOutput = int(n)
 			}
-		case "reasoning_summary", "slash_menu", "show_bash":
+		case "show_bash":
 			b, ok := v.(bool)
 			if !ok {
 				return fmt.Errorf("%s: must be true or false", where)
 			}
-			switch k {
-			case "slash_menu":
-				st.UI.SlashMenu = b
-			case "show_bash":
-				st.UI.ShowBash = b
-			default:
-				st.ReasoningSummary = b
-			}
+			st.ShowBash = b
 		default:
 			return fmt.Errorf("unknown key %q", where)
 		}

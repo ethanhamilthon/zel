@@ -41,8 +41,8 @@ func (m *app) draw() {
 		indicators = append(indicators, plainRows("● "+cmp.Or(task.Name, task.ID)+" · "+formatDuration(time.Since(task.Started)), width, grayColor)...)
 	}
 	if status.Busy {
-		_, ui := m.ctl.Appearance()
-		indicators = append(indicators, workingRow(status, m.turnSteps(), ui.ShowBash, width))
+		_, showBash := m.ctl.Appearance()
+		indicators = append(indicators, workingRow(status, m.turnSteps(), showBash, width))
 	}
 	if m.promptCancel != nil {
 		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)

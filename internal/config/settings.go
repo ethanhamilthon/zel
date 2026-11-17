@@ -31,29 +31,22 @@ type Provider struct {
 	API     string `json:"api"`
 }
 
-// UI holds application display preferences.
-type UI struct {
-	SlashMenu bool
-	ShowBash  bool // show the running command in the working line
-}
-
-// Settings is the effective configuration merged from the zel.toml layers
-// (see Load); instructions, hooks and completions live in Config.
+// Settings is what the config file sets besides instructions, hooks and
+// completions, which live in Config.
 type Settings struct {
 	Provider, Model, Effort string
-	ReasoningSummary        bool
 	CompactionThreshold     int
-	BashTimeout             int // seconds per bash call of the agent
-	BashOutput              int // bytes of one bash call's output the agent gets, 0 = no cut
-	UI                      UI
+	BashTimeout             int    // seconds per bash call of the agent
+	BashOutput              int    // bytes of one bash call's output the agent gets, 0 = no cut
+	ShowBash                bool   // show the running command in the working line
 	Colors                  Colors // [colors]: the TUI theme, defaults filled in
 	Providers               map[string]Provider
 	Env                     map[string]string // [env]: extra variables for bash, tasks, hooks and ${{ }}
 }
 
 func DefaultSettings() Settings {
-	return Settings{Effort: "medium", ReasoningSummary: true, CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
-		UI: UI{SlashMenu: true, ShowBash: true}, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
+	return Settings{Effort: "medium", CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
+		ShowBash: true, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 func Redact(s Settings, text string, extra ...string) string {
