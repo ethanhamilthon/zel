@@ -10,7 +10,6 @@ const APIChat = config.APIChat
 
 var Efforts = config.Efforts
 var DefaultSettings = config.DefaultSettings
-var Redact = config.Redact
 var ZelHome = config.ZelHome
 var ResolvePath = config.ResolvePath
 var DisplayPath = config.DisplayPath

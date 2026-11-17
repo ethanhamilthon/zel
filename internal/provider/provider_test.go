@@ -186,3 +186,35 @@ func TestFailureRetainsStructuredStatus(t *testing.T) {
 		t.Fatalf("original cause unavailable: %v", err)
 	}
 }
+
+// A long answer that keeps arriving is not cut; one that goes silent is.
+func TestStreamIdleNotTotalTime(t *testing.T) {
+	old := streamIdle
+	streamIdle = 150 * time.Millisecond
+	defer func() { streamIdle = old }()
+	stall := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		for i := 0; i < 10; i++ { // 400 ms in total, more than streamIdle
+			fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n")
+			fl.Flush()
+			time.Sleep(40 * time.Millisecond)
+		}
+		if r.URL.Query().Get("stall") == "" {
+			fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+			return
+		}
+		<-stall
+	}))
+	defer server.Close()
+	defer close(stall)
+	c := New(server.URL, "", "")
+	if err := c.Stream(context.Background(), Request{}, func(StreamEvent) error { return nil }); err != nil {
+		t.Fatalf("a stream with steady data failed: %v", err)
+	}
+	c = New(server.URL+"?stall=1", "", "")
+	err := c.Stream(context.Background(), Request{}, func(StreamEvent) error { return nil })
+	if !errors.Is(err, ErrStreamStalled) {
+		t.Fatalf("a silent stream: %v", err)
+	}
+}

@@ -224,7 +224,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			return err
 		}
 	}
-	opts := core.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort, Resume: resume}
+	opts := core.Options{Mode: "main", Provider: provider, Model: model, Effort: effort, Resume: resume}
 	if configFile != "" {
 		if opts.Config, err = configPath(cwd, configFile); err != nil {
 			return err

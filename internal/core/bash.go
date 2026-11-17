@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"zel/internal/config"
 	"zel/internal/shell"
 )
 
@@ -32,7 +33,7 @@ func (s *session) runBash(ctx context.Context, command string) string {
 		command, _ = res.input["command"].(string)
 	}
 	timeout := time.Duration(s.Settings().BashTimeout) * time.Second
-	end := s.beginActivity(bashLabel(Redact(s.Settings(), command)))
+	end := s.beginActivity(bashLabel(config.Redact(s.Settings(), command)))
 	started := time.Now()
 	out, code, timedOut, capture := s.execBash(ctx, command, timeout)
 	end()

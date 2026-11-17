@@ -56,7 +56,7 @@ func Retryable(err error) bool {
 	if errors.As(err, &network) {
 		return true
 	}
-	for _, target := range []error{syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.EPIPE, io.ErrUnexpectedEOF, io.EOF, ErrIncompleteStream} {
+	for _, target := range []error{syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.EPIPE, io.ErrUnexpectedEOF, io.EOF, ErrIncompleteStream, ErrStreamStalled} {
 		if errors.Is(err, target) {
 			return true
 		}

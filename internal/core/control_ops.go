@@ -167,7 +167,7 @@ func (c *Controller) Models(ctx context.Context) (models []ModelChoice, failures
 	}
 	failures = map[string]string{}
 	for name, err := range errs {
-		failures[name] = Redact(settings, err.Error())
+		failures[name] = err.Error()
 	}
 	return models, failures, nil
 }
@@ -184,7 +184,7 @@ func (c *Controller) selectModel(provider, model, effort string) error {
 		return fail(CodeInvalid, "provider not found: %s", provider)
 	}
 	if err := c.a.SelectSession(context.Background(), provider, model, effort); err != nil {
-		return fail(CodeFailed, "%s", Redact(c.a.Settings(), err.Error()))
+		return fail(CodeFailed, "%s", err)
 	}
 	return nil
 }

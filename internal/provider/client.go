@@ -18,7 +18,35 @@ type Client struct {
 	base, key, api string
 }
 
-var httpClient = &http.Client{Timeout: 10 * time.Minute}
+// The response may take its time to start; once it does, only silence for
+// streamIdle ends it. http.Client.Timeout is not used: it would cut a long
+// answer that is still arriving.
+var httpClient = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	TLSHandshakeTimeout:   30 * time.Second,
+	ResponseHeaderTimeout: 10 * time.Minute,
+	ForceAttemptHTTP2:     true,
+}}
+
+// streamIdle is how long a stream may stay silent; tests make it small.
+var streamIdle = 5 * time.Minute
+
+// ErrStreamStalled is a stream that stopped sending data.
+var ErrStreamStalled = errors.New("provider stream stalled: no data received")
+
+// idleReader tells a watchdog that data arrived.
+type idleReader struct {
+	r     io.Reader
+	timer *time.Timer
+}
+
+func (i *idleReader) Read(p []byte) (int, error) {
+	n, err := i.r.Read(p)
+	if n > 0 {
+		i.timer.Reset(streamIdle)
+	}
+	return n, err
+}
 
 func New(baseURL, key, api string) *Client {
 	return &Client{base: strings.TrimRight(baseURL, "/"), key: key, api: api}
@@ -171,13 +199,22 @@ const (
 )
 
 // sse posts body and passes the data of each server-sent event to fn.
-func (c *Client) sse(ctx context.Context, path string, body map[string]any, fn func(data string) error) error {
+func (c *Client) sse(parent context.Context, path string, body map[string]any, fn func(data string) error) (err error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	defer func() {
+		if err != nil && parent.Err() == nil && ctx.Err() != nil {
+			err = ErrStreamStalled
+		}
+	}()
 	resp, err := c.send(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	budget := &io.LimitedReader{R: resp.Body, N: MaxStreamBytes + 1}
+	stalled := time.AfterFunc(streamIdle, cancel) // starts when the response does
+	defer stalled.Stop()
+	budget := &io.LimitedReader{R: &idleReader{r: resp.Body, timer: stalled}, N: MaxStreamBytes + 1}
 	scanner := bufio.NewScanner(budget)
 	scanner.Buffer(make([]byte, 64<<10), MaxStreamEvent)
 	var data strings.Builder

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -215,10 +216,5 @@ func (s *session) shellEnv() map[string]string {
 	return env
 }
 
-// mode is how the session runs: "headless" for zel -p, "main" for the TUI.
-func (s *session) mode() string {
-	if s.opts.Mode == "headless" {
-		return "headless"
-	}
-	return "main"
-}
+// mode is how the session runs: "main" (the TUI) or "headless" (zel -p).
+func (s *session) mode() string { return cmp.Or(s.opts.Mode, "main") }

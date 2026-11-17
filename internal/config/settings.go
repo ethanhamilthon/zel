@@ -49,8 +49,9 @@ func DefaultSettings() Settings {
 		ShowBash: true, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
-func Redact(s Settings, text string, extra ...string) string {
-	secrets := extra
+// Redact hides the API keys of the providers in text.
+func Redact(s Settings, text string) string {
+	var secrets []string
 	for _, p := range s.Providers {
 		secrets = append(secrets, p.APIKey)
 	}

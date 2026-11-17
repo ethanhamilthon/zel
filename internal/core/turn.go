@@ -16,7 +16,58 @@ type turnHost struct {
 	skipBash bool // discard the rest of this response after typed steering
 }
 
-func (h *turnHost) AcceptSteering() bool { return h.accept() }
+// run is the model/tool loop of one turn: steering is accepted only at safe
+// boundaries, a response is committed before its tools execute, and
+// cancellation is checked before every request and tool call.
+func (h *turnHost) run(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		h.accept()
+		if err := h.Save(); err != nil {
+			return err
+		}
+		items, err := h.Request(ctx)
+		if err != nil {
+			return err
+		}
+		if err := h.CommitResponse(items); err != nil {
+			return err
+		}
+		calls := 0
+		for _, item := range items {
+			var call entities.ToolCall
+			if err := json.Unmarshal(item, &call); err != nil {
+				return err
+			}
+			if call.Type != "function_call" {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			calls++
+			if err := h.Execute(ctx, call); err != nil {
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if calls > 0 {
+			if err := h.Compact(); err != nil {
+				return err
+			}
+		}
+		if steered := h.accept(); calls == 0 && !steered {
+			if h.TurnEnd(ctx) {
+				continue // a turn_end hook added a message
+			}
+			return nil
+		}
+	}
+}
 
 // maxTurnInjections bounds how often turn_end hooks may keep a turn going.
 const maxTurnInjections = 3

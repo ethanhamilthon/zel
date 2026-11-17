@@ -206,7 +206,7 @@ func (m *app) work(kind string, fn func() (any, error)) {
 }
 func (m *app) notice(err error) {
 	if err != nil {
-		m.records = append(m.records, core.Record{Kind: "error", Text: core.Redact(m.ctl.Settings(), err.Error())})
+		m.records = append(m.records, core.Record{Kind: "error", Text: err.Error()})
 		m.dirty = true
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"zel/internal/agent"
 	"zel/internal/config"
 	"zel/internal/entities"
 	"zel/internal/ipc"
@@ -20,7 +19,7 @@ import (
 )
 
 type Options struct {
-	Mode                    string               // tui or headless; see session.mode
+	Mode                    string               // main (the TUI, default) or headless (zel -p)
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
 	Config                  string               // absolute path of --config, used instead of ~/.zel/config.toml
@@ -127,7 +126,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 		return nil, err
 	}
 	if opts.Mode == "" {
-		opts.Mode = "tui"
+		opts.Mode = "main"
 	}
 	if opts.Config == "" {
 		if err := config.EnsureHome(home); err != nil {
@@ -241,7 +240,6 @@ func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 	s.idleSent.Store(false)
 	defer s.turning.Store(false)
 	defer func() {
-		err = s.safeError(err)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			emit(TurnEvent{Kind: "error", Text: err.Error()})
 			s.fireHooks("error", map[string]any{"kind": "turn", "message": err.Error()})
@@ -305,7 +303,7 @@ func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 	emit(shown)
 	s.fireHooks("turn_start", map[string]any{"text": input.Text})
 
-	return agent.Run(ctx, &turnHost{s: s, emit: emit, accept: acceptSteering, turnSeq: turnSeq})
+	return (&turnHost{s: s, emit: emit, accept: acceptSteering, turnSeq: turnSeq}).run(ctx)
 }
 
 // turnEndType is the history item that closes a turn ending with an error or a stop.

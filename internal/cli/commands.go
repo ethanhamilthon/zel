@@ -330,7 +330,7 @@ func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		fmt.Fprintf(out, "%s: error: %s\n", name, core.Redact(cfg.Settings, failures[name].Error()))
+		fmt.Fprintf(out, "%s: error: %s\n", name, failures[name])
 	}
 	return nil
 }

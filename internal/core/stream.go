@@ -13,7 +13,6 @@ import (
 // Stream handling lives at the provider boundary; only complete tool calls
 // become display records. Partial arguments belong to the provider adapter.
 func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []json.RawMessage, err error) {
-	defer func() { err = s.safeError(err) }()
 	settings, client := s.snapshot()
 	if hint := settings.SetupHint(); hint != "" {
 		return nil, errors.New(hint)
@@ -45,7 +44,7 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	err = client.Stream(ctx, request, func(event provider.StreamEvent) error {
 		switch event.Type {
 		case "retry":
-			emit(TurnEvent{Kind: "notice", Text: Redact(settings, event.Message)})
+			emit(TurnEvent{Kind: "notice", Text: event.Message})
 		case "response.output_item.added", "response.output_item.done":
 			var item struct{ Type string }
 			_ = json.Unmarshal(event.Item, &item)

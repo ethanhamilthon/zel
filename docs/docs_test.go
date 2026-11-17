@@ -16,7 +16,7 @@ import (
 func TestProductionPackageBoundaries(t *testing.T) {
 	allowed := map[string][]string{
 		"entities": {}, "config": {}, "store": {}, "edit": {}, "ipc": {},
-		"agent": {"entities"}, "shell": {"entities"}, "provider": {"entities"},
+		"shell": {"entities"}, "provider": {"entities"},
 		"tui": {"core", "config", "entities"},
 		"cli": {"core", "config", "ipc", "edit", "shell"},
 	}
