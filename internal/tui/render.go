@@ -52,8 +52,10 @@ func (m *app) draw() {
 	}
 	e := &m.input
 	inputRows := e.rows(width)
-	inputHeight := min(len(inputRows), max(1, height/3))
 	completionRows := min(6, min(len(m.completions.items), max(0, height/3)))
+	// The input grows with its text up to the whole screen, less one line above
+	// it and the completions panel under it.
+	inputHeight := min(len(inputRows), max(1, height-1-min(1, completionRows)-completionRows))
 	choiceRows := 0
 	if m.choice != nil {
 		completionRows = 0
