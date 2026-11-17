@@ -257,7 +257,7 @@ check(any('hooked\nHOOK-SAW-IT' in o for o in outputs), 'bash_after with match a
 t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8); t.shot('14-hook-in-tracing')
 check(re.search(r'hook\s+bash_after: ', t.view()) is not None, 'the hook run is an entry in Tracing', t.view())
 t.send('\x1b', .4); t.send('\x1b', .4)
-t.send('view-relative\r'); t.wait('Notification received: <notification>view: rel.png', 'zel view takes a path relative to the folder of the call', 25)
+t.send('view-relative\r'); t.wait('Notification received: view: rel.png attached', 'zel view takes a path relative to the folder of the call', 25)
 has_image = any(p.get('type') == 'input_image' for i in requests[-1].get('input', []) if isinstance(i.get('content'), list) for p in i['content'])
 check(has_image, 'the image of a relative path reached the model', requests[-1].get('input', [])[-2:])
 check(t.close() == 0, 'clean quit after hooks')
