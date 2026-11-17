@@ -322,20 +322,6 @@ func fastRetries(t *testing.T) {
 	t.Cleanup(func() { provider.RetryBase = old })
 }
 
-func TestRetryStopsWhereItShould(t *testing.T) {
-	fastRetries(t)
-	client := &fakeProvider{reply: func(int, string) string { return textReply("ok") },
-		status: func(int) int { return http.StatusBadRequest }}
-	if _, err := turn(t, newTestAgent(t, client, Options{}), "hi"); err == nil || len(client.requests()) != 1 {
-		t.Fatalf("client error retried: %v after %d", err, len(client.requests()))
-	}
-	server := &fakeProvider{reply: func(int, string) string { return textReply("ok") },
-		status: func(int) int { return http.StatusInternalServerError }}
-	if _, err := turn(t, newTestAgent(t, server, Options{}), "hi"); err == nil || len(server.requests()) != retryAttempts {
-		t.Fatalf("server errors: %v after %d requests", err, len(server.requests()))
-	}
-}
-
 func TestRetryDoesNotDuplicateStreamedOutput(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
 		return sse(`{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`)

@@ -227,8 +227,6 @@ func (e *editor) key(k *tcell.EventKey, width int, multiline bool) bool {
 	case tcell.KeyCtrlU:
 		e.text = e.text[e.pos:]
 		e.pos = 0
-	case tcell.KeyCtrlK:
-		e.text = e.text[:e.pos]
 	case tcell.KeyCtrlW:
 		end := e.pos
 		for e.pos > 0 && unicode.IsSpace(runeBefore(e.text, e.pos)) {

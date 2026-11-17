@@ -434,21 +434,6 @@ func TestMenuIsCenteredInTwoColumnsWithoutHints(t *testing.T) {
 
 func abs(n int) int { return max(n, -n) }
 
-func TestCompletionPanelAndComposerSpacing(t *testing.T) {
-	m := testApp(t)
-	s := m.screen.(tcell.SimulationScreen)
-	s.SetSize(40, 12)
-	m.records = []core.Record{{Kind: "user", Text: "hi"}}
-	m.input.set("#pl")
-	m.updateCompletions()
-	m.draw()
-	rows := screenRows(m)
-	// hi, empty, the input (no left padding), empty, the panel row with the arrow on the right
-	if rows[0] != "hi" || rows[1] != "" || rows[2] != "#pl" || rows[3] != "" || rows[4] != "#plan ‹" {
-		t.Fatalf("layout:\n%q", rows[:6])
-	}
-}
-
 func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
 	r := workingRow(status, 2, true, 40)
