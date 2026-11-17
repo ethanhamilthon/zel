@@ -1,0 +1,12 @@
+?   	zel	[no test files]
+ok  	zel/docs	2.003s
+ok  	zel/internal/cli	4.163s
+ok  	zel/internal/config	2.116s
+ok  	zel/internal/core	11.443s
+ok  	zel/internal/edit	1.830s
+?   	zel/internal/entities	[no test files]
+ok  	zel/internal/ipc	2.060s
+ok  	zel/internal/provider	3.123s
+ok  	zel/internal/shell	16.440s
+ok  	zel/internal/store	1.668s
+ok  	zel/internal/tui	2.283s

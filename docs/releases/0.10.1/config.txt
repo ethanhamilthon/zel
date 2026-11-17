@@ -1,0 +1,44 @@
+Config: /var/folders/rl/lh1xp1cn6_gbxbs72ddyhfb40000gn/T/zel-010-home-lmxymfn1/settings.yaml
+Settings:
+  model                      = "fixture/fixture"
+  effort                     = "medium"
+  settings.compaction        = 400000
+  settings.show_bash         = true
+  settings.trace_hooks       = true
+  settings.bash_timeout      = 30
+  settings.bash_output       = 8000
+  settings.editor            = "nvim"
+Keys:
+  editor                     = "ctrl+e"
+  info                       = "alt+i"
+  menu                       = "alt+k"
+  models                     = "alt+m"
+  new_session                = "ctrl+n"
+  quit                       = "ctrl+q"
+  redraw                     = "ctrl+l"
+  sessions                   = "ctrl+r"
+  stop                       = "ctrl+d"
+  trace                      = "ctrl+t"
+Colors:
+  colors.bg                  = ""
+  colors.accent              = "#d97757"
+  colors.agent               = "#d6d6d6"
+  colors.user                = "#606060"
+  colors.user_highlight      = "#8c8c8c"
+  colors.gray                = "#929292"
+  colors.dark_gray           = "#606060"
+  colors.error               = "#e27878"
+  colors.trace.system        = "#606060"
+  colors.trace.user          = "#d97757"
+  colors.trace.agent         = "#ffffff"
+  colors.trace.bash          = "#a0a0a0"
+  colors.trace.notice        = "#808080"
+  colors.trace.output        = "#404040"
+  colors.trace.error         = "#e27878"
+Providers:
+  fixture: base_url=http://127.0.0.1:56329/v1 api=responses api_key=set
+Systems:
+  rules: DIRECTORY-RULE expanded [main, headless]
+Hooks:
+  check (bash_after): cat >/dev/null; echo DIRECTORY-HOOK
+Completions: #plan

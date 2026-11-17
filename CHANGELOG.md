@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.1
+
+- Configs now use YAML (`~/.config/zel/settings.yaml`), with `systems/*.md`,
+  `prompts/*.md` (optional `---\nmodes: [...]\n---` frontmatter and `${{ }}`
+  expansion) and `hooks/*.yaml` (top-level `events`, `run`, `async`, etc.).
+- Sessions and runtime sockets moved to `~/.zel/sessions/`; `~/.config/zel/`
+  holds only configuration files.
+- Info now lists finished subagents alongside running ones, with their model,
+  effort, context, duration and spend.
+- Tracing uses `Ctrl+H` to toggle hooks (leaving `h` for search), renders turn
+  headers in dark gray, and aligns entry rows flush left without extra padding.
+
 ## 0.10.0
 
 Breaking release. No migration or rollback of the old config or sessions.
