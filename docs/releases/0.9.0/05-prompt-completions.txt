@@ -1,0 +1,29 @@
+stream-check
+
+* 0s · 0 steps
+Hello from the fake provider.
+
+A bold answer and code.
+
+slow-run
+
+* 3s · 1 step
+stopped by user
+
+#
+
+#plan ‹
+
+
+
+
+
+
+
+
+
+
+
+
+
+
