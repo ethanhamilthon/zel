@@ -47,14 +47,17 @@ func rowWidth(r row) (w int) {
 	return w
 }
 
-// Every page is a box of one size, centered on the screen: the title, then a
-// list (with its search line), a text or a form. The title and the search line
-// stay; only the list or the text below them scrolls. There are no key hints.
-const menuWidth, menuHeight = 76, 24
+// Every page is a box of half the screen, centered on it, and its content
+// starts at the box's top left: the title, then a list (with its search line),
+// a text or a form. On a small screen the box keeps a minimum size. The title
+// and the search line stay; only the list or the text below them scrolls.
+// There are no key hints.
+const menuMinWidth, menuMinHeight = 60, 16
 
 func (m *app) drawMenu(width, height int) {
 	mu := m.menu
-	w, h := min(menuWidth, max(1, width-4)), min(menuHeight, max(1, height-2))
+	w := min(max(menuMinWidth, width/2), max(1, width-4))
+	h := min(max(menuMinHeight, height/2), max(1, height-2))
 	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
 	mu.width = w
 	note := firstLine(mu.body) // a failure of the models request, or Loading…
