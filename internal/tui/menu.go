@@ -77,6 +77,7 @@ type modelResult struct {
 
 const keyboardHelp = `Ctrl+K: menu · Ctrl+M: models · Ctrl+R: sessions
 Ctrl+N: new session · Ctrl+I: info · Ctrl+T: tracing
+Ctrl+E: edit the input in your editor ([settings] editor, default nvim)
 Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline
 Ctrl+D: cancel · Ctrl+Q: save and quit · Ctrl+L: redraw
 Up on empty input: recall a queued message
@@ -122,8 +123,9 @@ func (m *app) modelItems() {
 		return
 	}
 	s := m.ctl.Settings()
-	choices := slices.Clone(m.models)
-	if s.Model != "" && !slices.ContainsFunc(choices, func(c core.ModelChoice) bool { return c.Provider == s.Provider && c.Model == s.Model }) {
+	// The current model comes first, so the menu opens on it.
+	choices := slices.DeleteFunc(slices.Clone(m.models), func(c core.ModelChoice) bool { return c.Provider == s.Provider && c.Model == s.Model })
+	if s.Model != "" {
 		choices = append([]core.ModelChoice{{Provider: s.Provider, Model: s.Model}}, choices...)
 	}
 	items := make([]item, 0, len(choices)+1)

@@ -17,7 +17,7 @@ import (
 
 func (m *app) draw() {
 	width, height := m.screen.Size()
-	if width < 1 || height < 1 {
+	if width < 1 || height < 1 || m.editing {
 		return
 	}
 	m.dirty = false
@@ -38,9 +38,12 @@ func (m *app) draw() {
 	status := m.ctl.Status()
 	var indicators []row
 	for _, task := range m.tasks {
-		indicators = append(indicators, plainRows("● "+cmp.Or(task.Name, task.ID)+" · "+formatDuration(time.Since(task.Started)), width, grayColor)...)
+		indicators = append(indicators, taskRow(task, width))
 	}
 	if status.Busy {
+		if len(indicators) > 0 {
+			indicators = append(indicators, row{}) // one line between the tasks and the working line
+		}
 		_, showBash := m.ctl.Appearance()
 		indicators = append(indicators, workingRow(status, m.turnSteps(), showBash, width))
 	}
@@ -292,6 +295,21 @@ func workingRow(status core.Status, steps int, showBash bool, width int) row {
 			activity = ansi.Truncate(" · "+cleanInput(activity), room+3, "...")
 			r = append(r, span{activity, textWidth(activity), style(darkGray)})
 		}
+	}
+	return r
+}
+
+// taskRow is the indicator of a running background task, drawn like the
+// working line with its own sprite: the time in the accent color, then the
+// task's name in dark gray.
+func taskRow(task core.ActiveTask, width int) row {
+	frames := []string{"◐", "◓", "◑", "◒"}
+	since := time.Since(task.Started)
+	head := ansi.Truncate(frames[int(since/(120*time.Millisecond))%len(frames)]+" "+formatDuration(since), width, "...")
+	r := row{{head, textWidth(head), style(accentColor)}}
+	if room := width - textWidth(head) - 3; room > 0 {
+		name := ansi.Truncate(" · "+cleanInput(cmp.Or(task.Name, task.ID)), room+3, "...")
+		r = append(r, span{name, textWidth(name), style(darkGray)})
 	}
 	return r
 }

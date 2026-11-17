@@ -21,7 +21,7 @@ func testApp(t *testing.T) *app {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	if err := os.WriteFile(config.File(home), []byte("[completion]\nplan=\"expanded\"\n"), 0600); err != nil {
+	if err := os.WriteFile(config.File(home), []byte("[settings]\neditor = \"perl -pi -e s/draft/EDITED/\"\n[completion]\nplan=\"expanded\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})
@@ -386,34 +386,43 @@ func screenRows(m *app) []string {
 	return rows
 }
 
-func TestMenuIsCenteredInTwoColumnsWithoutHints(t *testing.T) {
+func TestMenuPagesShareOneBoxAndScrollUnderTheTitle(t *testing.T) {
 	m := testApp(t)
 	s := m.screen.(tcell.SimulationScreen)
-	s.SetSize(80, 24)
+	s.SetSize(80, 12)
+	// titleAt is where the title of the open page is drawn.
+	titleAt := func(title string) (int, int) {
+		for y, row := range screenRows(m) {
+			if x := strings.Index(row, title); x >= 0 {
+				return x, y
+			}
+		}
+		t.Fatalf("no %q:\n%s", title, strings.Join(screenRows(m), "\n"))
+		return 0, 0
+	}
+	m.openMenu("help")
+	m.draw()
+	hx, hy := titleAt("Help")
+	for i := 0; i < 40; i++ {
+		m.menuKey(tcell.NewEventKey(tcell.KeyDown, 0, 0))
+	}
+	m.draw()
+	if x, y := titleAt("Help"); x != hx || y != hy || strings.Contains(strings.Join(screenRows(m), "\n"), "Ctrl+K: menu") {
+		t.Fatalf("the title must stay while the text scrolls:\n%s", strings.Join(screenRows(m), "\n"))
+	}
 	m.openMenu("main")
 	m.draw()
 	rows := screenRows(m)
-	first, last := -1, -1
-	left, right := 80, 0
-	for y, row := range rows {
-		if strings.TrimSpace(row) == "" {
-			continue
-		}
-		if first < 0 {
-			first = y
-		}
-		last = y
-		left = min(left, len(row)-len(strings.TrimLeft(row, " ")))
-		right = max(right, len([]rune(row)))
+	if x, y := titleAt("Zel "); x != hx || y != hy {
+		t.Fatalf("main at %d,%d, help at %d,%d", x, y, hx, hy)
+	}
+	s.SetSize(80, 24)
+	m.draw()
+	rows = screenRows(m)
+	for _, row := range rows {
 		if strings.Contains(row, "select") || strings.Contains(row, "Esc") || strings.Contains(row, "Enter") || strings.Contains(row, "·") {
 			t.Fatalf("a hint or a separator is left: %q", row)
 		}
-	}
-	if top, bottom := first, 24-1-last; abs(top-bottom) > 1 {
-		t.Fatalf("not centered vertically: %d above, %d below\n%s", top, bottom, strings.Join(rows, "\n"))
-	}
-	if l, r := left, 80-right; abs(l-r) > 3 {
-		t.Fatalf("not centered horizontally: %d left, %d right", l, r)
 	}
 	var resume, quit string
 	for _, row := range rows {
@@ -456,4 +465,23 @@ func rowText(r row) string {
 		b.WriteString(c.text)
 	}
 	return b.String()
+}
+
+func TestCtrlEEditsTheInputInTheEditor(t *testing.T) {
+	m := testApp(t)
+	m.input.set("my draft")
+	m.key(tcell.NewEventKey(tcell.KeyCtrlE, 0, 0))
+	if !m.editing {
+		t.Fatal("the editor did not start")
+	}
+	m.draw() // drawing waits while the editor owns the terminal
+	select {
+	case r := <-m.results:
+		m.accept(r)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the editor did not finish")
+	}
+	if m.editing || m.input.text != "my EDITED" {
+		t.Fatalf("editing %v, input %q", m.editing, m.input.text)
+	}
 }

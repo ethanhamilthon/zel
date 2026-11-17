@@ -78,6 +78,9 @@ func (m *app) key(k *tcell.EventKey) {
 	case tcell.KeyCtrlT:
 		m.openMenu("trace")
 		return
+	case tcell.KeyCtrlE:
+		m.openEditor()
+		return
 	case tcell.KeyPgUp:
 		m.scroll += max(1, m.chatHeight-2)
 		return
@@ -287,6 +290,10 @@ func (m *app) accept(r result) {
 	}
 	if r.kind == "tasks" {
 		m.tasks = m.ctl.ActiveTasks()
+		return
+	}
+	if r.kind == "editor" {
+		m.editorDone(r)
 		return
 	}
 	if r.generation != m.generation && r.kind != "operation" {

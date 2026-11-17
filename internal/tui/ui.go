@@ -75,6 +75,7 @@ type app struct {
 	fileAt                         time.Time
 	fileLoading                    bool
 	tasks                          []core.ActiveTask
+	editing                        bool // Ctrl+E: an editor owns the terminal
 }
 
 // Run owns the screen, not the runtime. Only this goroutine touches UI state.

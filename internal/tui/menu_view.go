@@ -8,18 +8,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// listWidth is the width of the widest row of a list: label, gap, detail.
-func listWidth(items []item) int {
-	label, detail := 0, 0
-	for _, it := range items {
-		label, detail = max(label, textWidth(it.label)), max(detail, textWidth(it.detail))
-	}
-	if detail > 0 {
-		return label + 2 + detail
-	}
-	return label
-}
-
 // drawList draws items as two columns: the labels, then the details aligned in
 // a second column. The selected row is in the accent color and ends with ‹.
 // The arrow stands right after the widest row, so it never hangs at the screen edge.
@@ -59,44 +47,23 @@ func rowWidth(r row) (w int) {
 	return w
 }
 
-// drawMenu centers the page on the screen, both ways: the title, then a list,
-// a text or a form. There are no key hints.
+// Every page is a box of one size, centered on the screen: the title, then a
+// list (with its search line), a text or a form. The title and the search line
+// stay; only the list or the text below them scrolls. There are no key hints.
+const menuWidth, menuHeight = 76, 24
+
 func (m *app) drawMenu(width, height int) {
 	mu := m.menu
-	maxW := max(1, width-4)
-	var w, h int // the size of the block
-	var rows []row
-	var shown int
+	w, h := min(menuWidth, max(1, width-4)), min(menuHeight, max(1, height-2))
+	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
+	mu.width = w
 	note := firstLine(mu.body) // a failure of the models request, or Loading…
 	if mu.loading || m.modelsLoading && mu.page == "models" {
 		note = "Loading…"
 	}
-	switch {
-	case mu.form != nil:
-		w, h = min(64, maxW), 2+2+3+1
-	case len(mu.list.items) > 0:
-		w = max(max(textWidth(mu.title), listWidth(mu.list.items)+2), 20)
-		w = min(w, min(64, maxW))
-		shown = min(len(mu.list.items), max(1, height-7))
-		h = 4 + shown
-		if note != "" {
-			h++
-		}
-	default:
-		rows = m.bodyRows(min(76, maxW))
-		shown = min(len(rows), max(1, height-4))
-		w = textWidth(mu.title)
-		for _, r := range rows {
-			w = max(w, rowWidth(r))
-		}
-		w = min(w, maxW)
-		h = 2 + shown
-	}
-	h = min(h, height)
-	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
-	mu.width = w
 	m.at(x, y, mu.title, w, accentColor)
 	y += 2
+	room := max(1, h-2) // rows under the title
 	switch {
 	case mu.form != nil:
 		f := mu.form
@@ -105,14 +72,16 @@ func (m *app) drawMenu(width, height int) {
 		m.at(x, y+4, f.err, w, errorColor)
 	case len(mu.list.items) > 0:
 		m.drawEditor(&mu.search, x, y, w, 1, false)
+		shown := max(1, room-3) // the search line, a gap and the note line
 		items := mu.list.visible()
 		mu.list.clamp()
 		first := max(0, min(mu.list.selected-shown+1, len(items)-shown))
 		m.drawList(x, y+2, w, items[first:min(len(items), first+shown)], mu.list.selected-first)
 		m.at(x, y+2+shown, note, w, grayColor)
 	default:
-		mu.offset = max(0, min(mu.offset, max(0, len(rows)-shown)))
-		for i, r := range rows[mu.offset:min(len(rows), mu.offset+shown)] {
+		rows := m.bodyRows(w)
+		mu.offset = max(0, min(mu.offset, max(0, len(rows)-room)))
+		for i, r := range rows[mu.offset:min(len(rows), mu.offset+room)] {
 			m.atRow(x, y+i, r, w)
 		}
 		m.screen.HideCursor()
