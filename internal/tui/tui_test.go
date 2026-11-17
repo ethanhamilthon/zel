@@ -447,7 +447,7 @@ func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
 	r := workingRow(status, 2, true, 40)
 	text := rowText(r)
-	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 steps") {
+	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 bashs") {
 		t.Fatalf("%d wide: %q", w, text)
 	}
 	fg := func(c span) tcell.Color { f, _, _ := c.style.Decompose(); return f }

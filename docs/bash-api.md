@@ -40,7 +40,7 @@ instructions, hooks and prompt completions.
   Behind it, a 1 MiB in-memory safety cap keeps head and tail.
 - `settings.show_bash` (default `true`) shows the running command in the working
   line. With `false` the line keeps only time, steps and queued input
-  (`12s · 3 steps`), with no command and no `thinking...`, also after a call
+  (`12s · 3 bashs`), with no command and no `thinking...`, also after a call
   ends. Tracing and task rows are unchanged. The command is cut to one line
   with `...` at its end, in the dark gray color.
 - A running background task has a line of its own above the working line, in
