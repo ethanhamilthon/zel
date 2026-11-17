@@ -173,8 +173,11 @@ t.send('\x1b', .4); t.send('\x15'); t.send('#'); t.pump(.5); t.shot('05-prompt-c
 t.send('\x0b'); t.pump(.4); rows = t.rows(); body = '\n'.join(rows)
 check('Providers' not in body and 'Settings' not in body and 'Esc' not in body and 'select' not in body, 'menu: no Providers, Settings or hints', body)
 items = [(y, r) for y, r in enumerate(rows) if any(k in r for k in ('Resume', 'Quit', 'Models', 'Info'))]
-cols = {r.index(k) for y, r in items for k in ('Ctrl+R', 'Ctrl+Q', 'Ctrl+M', 'Ctrl+I') if k in r}
-check(len(cols) == 1, 'hotkeys are one aligned column', cols)
+descs = ('Open a past session', 'Save and exit', 'Switch model and effort', 'Model, context and spend')
+ends = {r.index(k) + len(k) for y, r in items for k in descs if k in r}
+box_x, box_w = rows[items[0][0]].index('Resume'), max(60, COLS // 2)
+check(ends == {box_x + box_w - 2}, 'main menu: descriptions instead of hotkeys, flush with the right edge of the box', (ends, box_x, [r for y, r in items]))
+check('Ctrl+' not in body and rows[items[0][0]].endswith('session \u2039') and len(rows[items[0][0]]) == box_x + box_w, 'the arrow is in the last column of the box', rows[items[0][0]])
 def title_at(title):
     return next(((y, r.index(title)) for y, r in enumerate(t.rows()) if title in r), None)
 main_at = title_at('Zel '); t.shot('06-menu')

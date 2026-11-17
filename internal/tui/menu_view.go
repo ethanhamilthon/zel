@@ -8,10 +8,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// drawList draws items as two columns: the labels, then the details aligned in
-// a second column. The selected row is in the accent color and ends with ‹.
-// The arrow stands right after the widest row, so it never hangs at the screen edge.
-func (m *app) drawList(x, y, width int, items []item, selected int) {
+// drawList draws items as two columns: the labels from the left edge, then the
+// details. The selected row is in the accent color and ends with ‹.
+// With spread (menu pages), the details are flush with the right edge of the
+// box and the arrow takes the last column. Otherwise the details follow the
+// widest label and the arrow stands right after the widest row, so it never
+// hangs at the screen edge.
+func (m *app) drawList(x, y, width int, items []item, selected int, spread bool) {
 	labelW, detailW := 0, 0
 	for _, it := range items {
 		labelW, detailW = max(labelW, textWidth(it.label)), max(detailW, textWidth(it.detail))
@@ -27,6 +30,9 @@ func (m *app) drawList(x, y, width int, items []item, selected int) {
 	if detailW > 0 {
 		rowW += 2 + detailW
 	}
+	if spread && detailW > 0 {
+		rowW = room // the details end at the box edge, the arrow is right of them
+	}
 	for i, it := range items {
 		label, detail := grayColor, darkGray
 		if i == selected {
@@ -35,7 +41,12 @@ func (m *app) drawList(x, y, width int, items []item, selected int) {
 		}
 		m.at(x, y+i, ansi.Truncate(it.label, labelW, "…"), labelW, label)
 		if detailW > 0 {
-			m.at(x+labelW+2, y+i, ansi.Truncate(it.detail, detailW, "…"), detailW, detail)
+			text := ansi.Truncate(it.detail, detailW, "…")
+			at := x + labelW + 2
+			if spread {
+				at = x + rowW - textWidth(text)
+			}
+			m.at(at, y+i, text, detailW, detail)
 		}
 	}
 }
@@ -79,7 +90,7 @@ func (m *app) drawMenu(width, height int) {
 		items := mu.list.visible()
 		mu.list.clamp()
 		first := max(0, min(mu.list.selected-shown+1, len(items)-shown))
-		m.drawList(x, y+2, w, items[first:min(len(items), first+shown)], mu.list.selected-first)
+		m.drawList(x, y+2, w, items[first:min(len(items), first+shown)], mu.list.selected-first, true)
 		m.at(x, y+2+shown, note, w, grayColor)
 	default:
 		rows := m.bodyRows(w)

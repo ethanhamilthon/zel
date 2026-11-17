@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.4
+
+- Menu lists fill the whole box: the details (session dates, providers,
+  trace times) are flush with its right edge, the arrow of the selected row in
+  its last column.
+- The main menu says what each item does instead of its hotkey; Help still
+  lists the hotkeys.
+
 ## 0.9.3
 
 - The input grows with its text up to the whole screen, not a third of it.

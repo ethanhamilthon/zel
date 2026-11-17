@@ -25,13 +25,17 @@ func (l *list) visible() []item {
 	if l.query == "" {
 		return l.items
 	}
-	var out []item
+	// Items whose label matches come first, then those that match only with
+	// the detail, so a typed name is not shadowed by another item's text.
+	var out, byDetail []item
 	for _, it := range l.items {
-		if fuzzyMatches(it.label+" "+it.detail, l.query) {
+		if fuzzyMatches(it.label, l.query) {
 			out = append(out, it)
+		} else if fuzzyMatches(it.label+" "+it.detail, l.query) {
+			byDetail = append(byDetail, it)
 		}
 	}
-	return out
+	return append(out, byDetail...)
 }
 func (l *list) clamp() { l.selected = max(0, min(l.selected, len(l.visible())-1)) }
 func (l *list) move(delta int) {
@@ -100,7 +104,16 @@ func (m *app) openMenu(page string) {
 	switch page {
 	case "main":
 		mu.title = "Zel " + Version
-		mu.list.items = []item{{"Resume", "Ctrl+R", "sessions"}, {"New session", "Ctrl+N", "new"}, {"Models", "Ctrl+M", "models"}, {"Tracing", "Ctrl+T", "trace"}, {"Rename", "", "rename"}, {"Info", "Ctrl+I", "info"}, {"Help", "", "help"}, {"Quit", "Ctrl+Q", "quit"}}
+		mu.list.items = []item{
+			{"Resume", "Open a past session", "sessions"},
+			{"New session", "Start a clean session", "new"},
+			{"Models", "Switch model and effort", "models"},
+			{"Tracing", "Inspect every session step", "trace"},
+			{"Rename", "Rename this session", "rename"},
+			{"Info", "Model, context and spend", "info"},
+			{"Help", "Keys and tips", "help"},
+			{"Quit", "Save and exit", "quit"},
+		}
 	case "models":
 		m.modelItems()
 		m.fetchModels()

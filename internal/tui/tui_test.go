@@ -303,6 +303,10 @@ func TestSearchKeepsActionIdentity(t *testing.T) {
 	if _, ok := l.current(); ok {
 		t.Fatal("empty search selected an action")
 	}
+	l = list{items: []item{{"Models", "Switch model and effort", "models"}, {"Info", "Model, context and spend", "info"}}, query: "info"}
+	if it, _ := l.current(); it.id != "info" {
+		t.Fatalf("a label match must come before a detail match: %+v", l.visible())
+	}
 }
 func TestFileTokensAndPaths(t *testing.T) {
 	text := "Read @\"my file.go\" please"
@@ -433,11 +437,15 @@ func TestMenuPagesShareOneBoxAndScrollUnderTheTitle(t *testing.T) {
 			quit = row
 		}
 	}
-	if strings.Index(resume, "Ctrl+R") != strings.Index(quit, "Ctrl+Q") || strings.Index(resume, "Ctrl+R") < strings.Index(resume, "Resume")+len("New session") {
-		t.Fatalf("hotkeys are not one column:\n%q\n%q", resume, quit)
+	// The box is 60 wide at x=10: the descriptions end at its right edge minus
+	// the arrow column, and the arrow is in the last column of the box.
+	boxX, boxW := strings.Index(resume, "Resume"), 60
+	end := func(row, detail string) int { return strings.Index(row, detail) + len(detail) }
+	if boxX != 10 || end(resume, "Open a past session") != boxX+boxW-2 || end(quit, "Save and exit") != boxX+boxW-2 {
+		t.Fatalf("the descriptions are not flush with the right edge of the box:\n%q\n%q", resume, quit)
 	}
-	if !strings.HasSuffix(resume, "Ctrl+R ‹") || strings.Contains(quit, "‹") || strings.Contains(resume, "›") {
-		t.Fatalf("the arrow is on the right of the selected row only: %q %q", resume, quit)
+	if !strings.HasSuffix(resume, "Open a past session ‹") || len([]rune(resume)) != boxX+boxW || strings.Contains(quit, "‹") || strings.Contains(resume, "Ctrl+") {
+		t.Fatalf("the arrow is in the last column of the selected row only, no hotkeys: %q %q", resume, quit)
 	}
 }
 

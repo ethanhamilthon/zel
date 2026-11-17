@@ -107,7 +107,7 @@ func (m *app) draw() {
 			for i, o := range options {
 				items[i].label = o
 			}
-			m.drawList(0, y, width, items[first:min(len(options), first+shown)], m.choiceIndex-first)
+			m.drawList(0, y, width, items[first:min(len(options), first+shown)], m.choiceIndex-first, false)
 			y += min(len(options), first+shown) - first
 		}
 	}
@@ -121,7 +121,7 @@ func (m *app) draw() {
 	if completionRows > 0 {
 		first := max(0, m.completions.selected-completionRows+1)
 		last := min(len(m.completions.items), first+completionRows)
-		m.drawList(0, y+panelGap, width, m.completions.items[first:last], m.completions.selected-first)
+		m.drawList(0, y+panelGap, width, m.completions.items[first:last], m.completions.selected-first, false)
 	}
 	m.screen.Show()
 }
