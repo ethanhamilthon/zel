@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,20 +43,81 @@ func TestStreamBudgets(t *testing.T) {
 	}
 }
 
-func TestRetryDelayIsBounded(t *testing.T) {
-	if got := Delay(0, nil); got != time.Second {
-		t.Fatalf("first pause %s", got)
+func TestRetryDelay(t *testing.T) {
+	jitter = func(d time.Duration) time.Duration { return d }
+	defer func() { jitter = defaultJitter }()
+	for attempt, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, RetryMax, RetryMax} {
+		if got, ok := RetryDelay(attempt, nil); !ok || got != want {
+			t.Fatalf("pause %d = %s, want %s", attempt, got, want)
+		}
 	}
-	if got := Delay(10, nil); got != RetryMax {
-		t.Fatalf("capped pause %s", got)
+	if got, ok := RetryDelay(0, &APIError{Status: 429, RetryAfter: "7"}); !ok || got != 7*time.Second {
+		t.Fatalf("Retry-After 7: %s %v", got, ok)
 	}
-	long := &APIError{Status: 429, RetryAfter: "3600"}
-	if got := Delay(0, long); got != RetryMax {
-		t.Fatalf("Retry-After above the cap: %s", got)
+	if got, ok := RetryDelay(3, &APIError{Status: 429, RetryAfter: "2"}); !ok || got != 8*time.Second {
+		t.Fatalf("a short Retry-After does not shorten the backoff: %s", got)
 	}
-	short := &APIError{Status: 429, RetryAfter: "3"}
-	if got := Delay(0, short); got != 3*time.Second {
-		t.Fatalf("Retry-After 3: %s", got)
+	date := time.Now().Add(45 * time.Second).UTC().Format(http.TimeFormat)
+	if got, ok := RetryDelay(0, &APIError{Status: 503, RetryAfter: date}); !ok || got < 40*time.Second || got > 46*time.Second {
+		t.Fatalf("Retry-After as a date: %s %v", got, ok)
+	}
+	if _, ok := RetryDelay(0, &APIError{Status: 429, RetryAfter: "3600"}); ok {
+		t.Fatal("a server that asks for an hour is not waited for")
+	}
+	for range 100 {
+		if got, _ := RetryDelay(2, nil); got < 3200*time.Millisecond || got > 4800*time.Millisecond {
+			t.Fatalf("jitter out of bounds: %s", got)
+		}
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{&APIError{Status: 429}, true},
+		{&APIError{Status: 529}, true},
+		{&APIError{Status: 503}, true},
+		{&APIError{Status: 429, NoQuota: true}, false},
+		{&APIError{Status: 501}, false},
+		{&APIError{Status: 400}, false},
+		{&APIError{Status: 401}, false},
+		{errors.New("http2: server sent GOAWAY and closed the connection"), true},
+		{io.ErrUnexpectedEOF, true},
+		{context.Canceled, false},
+		{errors.New("invalid request"), false},
+	} {
+		if got := Retryable(tc.err); got != tc.want {
+			t.Errorf("Retryable(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
+
+// A failure after the start of the response, before any content, is retried; one after content is not.
+func TestRetryAfterTheStartOfAResponseOnly(t *testing.T) {
+	jitter = func(time.Duration) time.Duration { return time.Millisecond }
+	defer func() { jitter = defaultJitter }()
+	for _, content := range []bool{false, true} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"type\":\"response.created\"}\n\n")
+			if content {
+				fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+			}
+			if calls == 1 {
+				fmt.Fprint(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"boom\"}}}\n\n")
+				return
+			}
+			fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+		}))
+		err := New(server.URL, "", APIResponses).Stream(context.Background(), Request{}, func(StreamEvent) error { return nil })
+		server.Close()
+		if content && (err == nil || calls != 1) || !content && (err != nil || calls != 2) {
+			t.Fatalf("content %v: %d calls, err %v", content, calls, err)
+		}
 	}
 }
 

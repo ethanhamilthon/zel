@@ -27,7 +27,8 @@ func New(baseURL, key, api string) *Client {
 type APIError struct {
 	Status     int
 	Message    string
-	RetryAfter string
+	RetryAfter string // the Retry-After header: seconds or an HTTP date
+	NoQuota    bool   // the account is out of quota or credit: waiting does not help
 }
 
 func (e *APIError) Error() string {
@@ -70,7 +71,9 @@ func (c *Client) send(ctx context.Context, method, path string, body any) (*http
 		if json.Unmarshal(e.Error, &message) != nil {
 			_ = json.Unmarshal(e.Error, &message.Message) // some providers send a plain string
 		}
-		return nil, &APIError{Status: resp.StatusCode, Message: message.Message, RetryAfter: resp.Header.Get("Retry-After")}
+		lower := strings.ToLower(string(data))
+		return nil, &APIError{Status: resp.StatusCode, Message: message.Message, RetryAfter: resp.Header.Get("Retry-After"),
+			NoQuota: strings.Contains(lower, "insufficient_quota") || strings.Contains(lower, "billing_hard_limit")}
 	}
 	return resp, nil
 }
@@ -230,14 +233,14 @@ const (
 	APIChat      = "chat"
 )
 
-// Stream normalizes API failures and retries only before exposing response events.
+// Stream normalizes API failures and retries a failed request while the caller has seen nothing of the response.
 func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEvent) error) (err error) {
 	defer func() { err = c.safeError(err) }()
 	custom := c.FreeformTools()
 	freeform := freeformFields(request.Tools)
 	body := request.payload(custom)
 	for attempt := 0; ; attempt++ {
-		delivered, completed := false, false
+		delivered, completed := false, false // delivered: the caller has seen the response itself
 		inputs := map[int64]bool{}
 		err := c.streamOnce(ctx, body, func(event StreamEvent) error {
 			if custom {
@@ -259,7 +262,10 @@ func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEven
 			case "response.completed":
 				completed = true
 			}
-			delivered = true
+			// The start of a response carries nothing yet: a failure after it can still be retried.
+			if event.Type != "response.created" && event.Type != "response.in_progress" {
+				delivered = true
+			}
 			return fn(event)
 		})
 		if err == nil && !completed {
@@ -268,8 +274,11 @@ func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEven
 		if err == nil || delivered || attempt >= retryAttempts-1 || !Retryable(err) {
 			return err
 		}
+		pause, ok := RetryDelay(attempt, err)
+		if !ok {
+			return err
+		}
 		err = c.safeError(err)
-		pause := Delay(attempt, err)
 		if e := fn(StreamEvent{Type: "retry", Message: fmt.Sprintf("Retrying in %s (attempt %d/%d): %s", pause.Round(time.Second), attempt+2, retryAttempts, err)}); e != nil {
 			return e
 		}

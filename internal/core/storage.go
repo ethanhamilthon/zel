@@ -105,7 +105,7 @@ func (s *session) readItems(items []store.Item) {
 	s.projections, s.firstLine = nil, ""
 	s.cacheMu.Unlock()
 	for _, item := range items {
-		s.History = append(s.History, item.Data)
+		s.History = append(s.History, withoutImages(item.Data)) // chats of older versions may still hold images
 		if prompt, ok := instructionSnapshot(item.Data); ok {
 			s.prompt, s.promptFrozen = prompt, true
 		}

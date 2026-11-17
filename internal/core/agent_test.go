@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 	"zel/internal/config"
+	"zel/internal/provider"
 	"zel/internal/shell"
 )
 
@@ -48,7 +49,7 @@ func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 
 func TestStreamFailureSurfacesAsError(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
-		return sse(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
+		return sse(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"boom"}}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "hi"); err == nil || !strings.Contains(err.Error(), "boom") {
@@ -62,7 +63,7 @@ func TestFailedTurnClosesWithItsError(t *testing.T) {
 		case 1:
 			return bashReply("c1", `echo hi`)
 		case 2:
-			return sse(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
+			return sse(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"boom"}}}`)
 		}
 		return textReply("ok")
 	}}
@@ -147,7 +148,7 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 			`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`,
 			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"bash","call_id":"c1","arguments":""}}`,
 			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"command\":\"echo 1\"}"}`,
-			`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`)
+			`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"boom"}}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	events, err := turn(t, a, "go")
@@ -231,7 +232,7 @@ func TestModelsStopOnRepeatedPage(t *testing.T) {
 
 func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
-		return sse(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"bad key sk-secret-123"}}}`)
+		return sse(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"bad key sk-secret-123"}}}`)
 	}}
 	server := httptest.NewServer(fp)
 	t.Cleanup(server.Close)
@@ -282,7 +283,7 @@ func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 func TestFailedResponseLeavesNoPartialItem(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
 		return sse(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"partial answer"}]}}`,
-			`{"type":"response.failed","response":{"error":{"code":"server_error","message":"cut off"}}}`)
+			`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"cut off"}}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	if _, err := turn(t, a, "hi"); err == nil {
@@ -295,6 +296,7 @@ func TestFailedResponseLeavesNoPartialItem(t *testing.T) {
 }
 
 func TestRetrySucceedsAfterTransientFailure(t *testing.T) {
+	fastRetries(t)
 	fp := &fakeProvider{
 		reply:  func(int, string) string { return textReply("ok") },
 		status: func(n int) int { return map[bool]int{true: http.StatusInternalServerError}[n == 1] },
@@ -313,7 +315,14 @@ func TestRetrySucceedsAfterTransientFailure(t *testing.T) {
 	}
 }
 
+func fastRetries(t *testing.T) {
+	old := provider.RetryBase
+	provider.RetryBase = time.Millisecond
+	t.Cleanup(func() { provider.RetryBase = old })
+}
+
 func TestRetryStopsWhereItShould(t *testing.T) {
+	fastRetries(t)
 	client := &fakeProvider{reply: func(int, string) string { return textReply("ok") },
 		status: func(int) int { return http.StatusBadRequest }}
 	if _, err := turn(t, newTestAgent(t, client, Options{}), "hi"); err == nil || len(client.requests()) != 1 {
@@ -794,6 +803,11 @@ func TestImagesLiveInMemoryOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.sessionDir(), "attachments")); !os.IsNotExist(err) {
 		t.Fatalf("nothing may be stored in an attachments folder: %v", err)
 	}
+	// A chat of an older version holds the image in the file: it is shown as a placeholder too.
+	path := filepath.Join(s.sessionDir(), "session.jsonl")
+	if err := os.WriteFile(path, append(data, fmt.Appendf(nil, `{"t":"item","seq":%d,"data":{"role":"user","content":[{"type":"input_image","image_url":"zel-image:v1:preview-v1-x.png"}]}}`+"\n", len(s.History))...), 0600); err != nil {
+		t.Fatal(err)
+	}
 	id := s.id
 	a.Close()
 	resumed, err := New(s.dir, Options{Resume: id})
@@ -802,6 +816,13 @@ func TestImagesLiveInMemoryOnly(t *testing.T) {
 	}
 	defer resumed.Close()
 	rs := resumed.session()
+	all := new(strings.Builder)
+	for _, item := range rs.History {
+		all.Write(item)
+	}
+	if strings.Contains(all.String(), "zel-image") || strings.Contains(all.String(), "input_image") || strings.Count(all.String(), imagePlaceholder) != 2 {
+		t.Fatalf("both images must be placeholders after a resume: %s", all)
+	}
 	if got := string(rs.requestInput()[0]); strings.Contains(got, "input_image") || !strings.Contains(got, imagePlaceholder) {
 		t.Fatalf("a resumed session has the placeholder: %s", got)
 	}
@@ -1022,8 +1043,11 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	}
 	close(h.model.gate)
 	turns(2)
-	if got := h.ctl.Settings().CompactionThreshold; got != 4242 {
-		t.Fatalf("deferred reload not applied: %d", got)
+	// The reload runs in the background once the turn has ended.
+	for deadline := time.Now().Add(3 * time.Second); h.ctl.Settings().CompactionThreshold != 4242; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("deferred reload not applied: %d", h.ctl.Settings().CompactionThreshold)
+		}
 	}
 	h.send("c")
 	turns(3)
@@ -1267,7 +1291,7 @@ func TestResumeMissingSessionKeepsCurrentSession(t *testing.T) {
 	}
 }
 
-const retryAttempts = 3
+const retryAttempts = 6
 
 func TestCompactionZones(t *testing.T) {
 	big := func(id string) json.RawMessage {
