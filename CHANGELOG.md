@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.2
+
+**The config format changed**; a 0.9.1 file is refused with a message that
+names the replacement of each old key.
+
+- Providers, instructions, hooks and completions are named maps:
+  `[provider.NAME]`, `[instruction.NAME]`, `[hook.NAME]` (with `event`, which
+  may be a list, and `run`), `[completion.NAME]`. An instruction or completion
+  may be just a string.
+- `model = "PROVIDER/MODEL"` replaces the top-level `provider` and `model`
+  (TOML cannot have `provider` as a string and a table).
+- Modes: every entry has `modes = [...]`. A session runs in `main` or
+  `headless`, and `--mode NAME` (TUI and `zel -p`) adds a custom mode, so
+  `modes = ["plan"]` entries apply only to `--mode plan` sessions. Defaults:
+  `["main"]` for instructions, hooks and completions, every mode for providers.
+  `ZEL_CUSTOM_MODE` holds the custom mode.
+- The models menu (Ctrl+M) shows the current model first.
+- Every menu page is one box of the same size; the title (and the search line)
+  stays while the list or the text scrolls.
+- Ctrl+E opens the composer text in your editor (`[settings] editor`, default
+  `nvim`); the session keeps working meanwhile and the saved text comes back.
+- A running task has its own line like the working line (`◐ 6s · name`),
+  one empty line above the working line.
+- Info lists the running subagents with their model, effort, context and spend
+  (input, output, cache).
+
 ## 0.9.1
 
 Cleanup release. 0.9.0 is the baseline: there is no migration from older

@@ -42,6 +42,9 @@ class Provider(BaseHTTPRequestHandler):
         elif last == 'attach-image' and 'image' not in calls: output = [command(f'{BIN} view {OUT}/fixture.png', 'image')]
         elif last == 'view-relative' and 'rel' not in calls: output = [command(f'mkdir -p {OUT}/relsub && cp {OUT}/fixture.png {OUT}/relsub/rel.png && cd {OUT}/relsub && {BIN} view rel.png', 'rel')]
         elif last == 'hook-check' and 'hook' not in calls: output = [command('echo hooked', 'hook')]
+        elif last == 'task-run' and 'task' not in calls: output = [command(f'{BIN} task run --name bg-check -- sleep 90', 'task')]
+        elif last == 'spawn-sub' and 'spawn' not in calls: output = [command(f'{BIN} -p sub-work', 'spawn')]
+        elif last == 'sub-work' and 'subsleep' not in calls: output = [command('sleep 7', 'subsleep')]
         elif last == 'stream-check': output = [answer('Hello from the fake provider.\n\nA **bold** answer and `code`.')]
         elif last.startswith('<notification>'): output = [answer('Notification received: ' + last)]
         else: output = [answer('Ready for the next check.')]
@@ -64,15 +67,18 @@ server = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 Image.new('RGB', (48, 32), (20, 80, 200)).save(OUT / 'fixture.png')
 base_env = {k: v for k, v in os.environ.items() if not k.startswith(('ZEL_', 'REX_'))}
-CONFIG = f'''provider = "fixture"
-model = "fixture"
+CONFIG = f'''model = "fixture/fixture"
 
-[providers.fixture]
+[provider.fixture]
 base_url = "http://127.0.0.1:{server.server_port}/v1"
 api_key = "local-test"
 
-[completions]
+[completion]
 plan = "Expanded test plan."
+
+[instruction.plan]
+text = "PLAN-MODE-RULE"
+modes = ["plan"]
 
 [colors]
 bg = "#0A0A0A"
@@ -169,18 +175,18 @@ check('Providers' not in body and 'Settings' not in body and 'Esc' not in body a
 items = [(y, r) for y, r in enumerate(rows) if any(k in r for k in ('Resume', 'Quit', 'Models', 'Info'))]
 cols = {r.index(k) for y, r in items for k in ('Ctrl+R', 'Ctrl+Q', 'Ctrl+M', 'Ctrl+I') if k in r}
 check(len(cols) == 1, 'hotkeys are one aligned column', cols)
-used = [y for y, r in enumerate(rows) if r.strip()]
-check(abs(min(used) - (ROWS - 1 - max(used))) <= 1, 'menu is centered vertically', (min(used), max(used)))
-left = min(len(r) - len(r.lstrip()) for r in rows if r.strip()); right = max(len(r) for r in rows)
-check(abs(left - (COLS - right)) <= 3, 'menu is centered horizontally', (left, COLS - right)); t.shot('06-menu')
+def title_at(title):
+    return next(((y, r.index(title)) for y, r in enumerate(t.rows()) if title in r), None)
+main_at = title_at('Zel '); t.shot('06-menu')
 t.send('info'); t.send('\r'); t.pump(.6); t.shot('07-info')
-check('config.toml' in t.view(), 'Info shows config.toml', t.view()); t.send('\x1b', .5)
+check('config.toml' in t.view(), 'Info shows config.toml', t.view())
+check(title_at('Info') == main_at, 'the menu and Info are one box: the title stays in place', (main_at, title_at('Info'))); t.send('\x1b', .5)
 t.send('models'); t.send('\r'); t.pump(1.2); t.shot('08-models')
 before = (home / 'config.toml').read_text()
 t.send('second'); t.send('\r'); t.pump(.5); t.shot('09-effort'); t.send('\r'); t.pump(1.0)
 after = (home / 'config.toml').read_text()
 changed = [l for l in after.splitlines() if l not in before.splitlines()]
-check(changed == ['model = "second-model"'], 'choosing a model writes only the model line', changed)
+check(changed == ['model = "fixture/second-model"'], 'choosing a model writes only the model line', changed)
 check('zel.toml' not in os.listdir(home), 'only config.toml is used')
 # the file is watched: an outside edit is applied
 (home / 'config.toml').write_text(after.replace('#FF3B30', '#30D158')); t.pump(1.8)
@@ -219,7 +225,7 @@ check(t.close() == 0, 'clean quit again')
 
 # --config uses another file instead of the home config; ./zel.toml is ignored
 other = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-other-')) / 'another.toml'
-other.write_text(CONFIG.replace('model = "fixture"', 'model = "from-another"'))
+other.write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/from-another"'))
 def run(*args, env_extra=None):
     return subprocess.run([BIN, *args], cwd=cwd, env=dict(base_env, ZEL_HOME=str(home), **(env_extra or {})), capture_output=True, text=True, timeout=30)
 r = run('config', '--config', str(other)); check('from-another' in r.stdout and str(other) in r.stdout, 'zel config --config reads that file only', r.stdout)
@@ -241,12 +247,12 @@ old.write_text(CONFIG + '\n[settings]\nslash_menu = true\n')
 r = run('config', '--config', str(old)); check('unknown key "settings.slash_menu"' in r.stdout, 'settings.slash_menu is gone', r.stdout)
 old.write_text(CONFIG + '\n[settings]\nreasoning_summary = true\n')
 r = run('config', '--config', str(old)); check('unknown key "settings.reasoning_summary"' in r.stdout, 'settings.reasoning_summary is gone', r.stdout)
-old.write_text(CONFIG + '\n[hooks]\nidle = [{ run = "true", match = "x" }]\n')
+old.write_text(CONFIG + '\n[hook.x]\nevent = "idle"\nrun = "true"\nmatch = "x"\n')
 r = run('config', '--config', str(old)); check('only message, notification' in r.stdout, 'match on an event with nothing to match is an error', r.stdout)
 
 # "/" always opens the menu; a bash_after hook with match fires and is in Tracing
 home3 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-hook-'))
-(home3 / 'config.toml').write_text(CONFIG + '\n[hooks]\nbash_after = [{ match = "^echo hooked", run = "cat >/dev/null; echo HOOK-SAW-IT" }]\n')
+(home3 / 'config.toml').write_text(CONFIG + '\n[hook.saw]\nevent = "bash_after"\nmatch = "^echo hooked"\nrun = "cat >/dev/null; echo HOOK-SAW-IT"\n')
 t = Term(home3, cwd); t.pump(1.2)
 t.send('/', .6); t.shot('13-slash-menu')
 check('Resume' in t.view() and 'Models' in t.view(), '"/" opens the menu', t.view())
@@ -261,5 +267,63 @@ t.send('view-relative\r'); t.wait('Notification received: view: rel.png attached
 has_image = any(p.get('type') == 'input_image' for i in requests[-1].get('input', []) if isinstance(i.get('content'), list) for p in i['content'])
 check(has_image, 'the image of a relative path reached the model', requests[-1].get('input', [])[-2:])
 check(t.close() == 0, 'clean quit after hooks')
+
+# 0.9.2 checks ------------------------------------------------------------
+# the old config format names its replacement
+old.write_text('provider = "x"\n')
+r = run('config', '--config', str(old)); check('model = "PROVIDER/MODEL"' in r.stdout, 'the old provider key is an error that names model = PROVIDER/MODEL', r.stdout)
+old.write_text('[providers.x]\nbase_url = "http://x"\n')
+r = run('config', '--config', str(old)); check('[provider.NAME]' in r.stdout, 'the old [providers.x] is an error that names [provider.NAME]', r.stdout)
+(OUT / '20-config.txt').write_text(run('config').stdout)
+
+# modes: --mode plan adds the plan instruction, headless alone does not
+r = run('-p', 'stream-check', '--mode', 'plan'); plan_prompt = json.dumps(requests[-1].get('instructions', '')) + json.dumps(requests[-1].get('input', [])[:1])
+check(r.returncode == 0 and 'PLAN-MODE-RULE' in plan_prompt, 'zel -p --mode plan gets the plan instruction', (r.stderr, plan_prompt[:300]))
+r = run('-p', 'stream-check'); plain_prompt = json.dumps(requests[-1].get('instructions', '')) + json.dumps(requests[-1].get('input', [])[:1])
+check('PLAN-MODE-RULE' not in plain_prompt, 'zel -p without --mode has no plan instruction', plain_prompt[:300])
+r = run('-p', 'x', '--mode', 'main'); check(r.returncode != 0 and 'not a custom mode' in r.stderr, '--mode main is refused', r.stderr)
+
+home4 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-092-'))
+(home4 / 'config.toml').write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/second-model"') + '\n[settings]\neditor = "sleep 2; perl -pi -e s/draft/EDITED/"\n')
+t = Term(home4, cwd, ('--mode', 'plan')); t.pump(1.5)
+# the current model is the first row of the models menu
+t.send('\x0b'); t.send('models'); t.send('\r'); t.pump(1.5)
+rows = t.rows(); first = next((r for r in rows if 'second-model' in r or 'fixture  ' in r), '')
+check('second-model' in first and '‹' in first, 'the current model is first and selected in the models menu', t.view()); t.shot('21-models-current-first')
+t.send('\x1b', .4); t.send('\x1b', .4)
+# Ctrl+E: the editor gets the input; zel keeps running; the edited text comes back
+t.send('my draft text'); t.send('\x05', .5)
+t.pump(1.0); check('my draft text' not in t.view(), 'while the editor runs zel does not draw', t.view())
+t.pump(1.8)
+check('my EDITED text' in t.view(), 'Ctrl+E: the editor changed the input and zel shows it', t.view()); t.shot('22-ctrl-e-result')
+t.send('\x15')
+# a real nvim: type into it, save and quit
+(home4 / 'config.toml').write_text((home4 / 'config.toml').read_text().replace('editor = "sleep 2; perl -pi -e s/draft/EDITED/"', 'editor = "nvim -u NONE -i NONE"')); t.pump(1.8)
+t.send('from zel'); t.send('\x05', 1.5); t.shot('23-nvim-open')
+check('from zel' in t.view() and '~' in t.view(), 'Ctrl+E opens nvim with the input', t.view())
+t.send('A and nvim\x1b', .4); t.send(':wq\r', 1.2)
+check('from zel and nvim' in t.view(), 'the text saved in nvim is the input now', t.view()); t.shot('24-after-nvim')
+t.send('\x15')
+# the task indicator: its own sprite, one empty line, then the working line
+t.send('task-run\r'); t.wait('Ready for the next check', 'a background task started', 20)
+t.send('slow-run\r'); t.pump(2.5)
+rows = t.rows()
+task_y = next((y for y, r in enumerate(rows) if r and r[0] in '◐◓◑◒' and 'bg-check' in r), None)
+work_y = next((y for y, r in enumerate(rows) if r and r[0] in STARS), None)
+check(task_y is not None and work_y == task_y + 2 and rows[task_y + 1] == '', 'task line, one empty line, working line', t.view())
+check(t.fg(2, task_y) == 'ff3b30' and t.fg(rows[task_y].index('bg-check'), task_y) == '606060', 'the task line is styled like the working line', (t.fg(2, task_y),))
+t.shot('25-task-and-working')
+t.send('\x04', .8)
+# Info lists a running subagent with its model, effort, context and spend
+t.send('spawn-sub\r'); t.pump(3.5)
+t.send('\x0b'); t.send('info'); t.send('\r'); t.pump(1.5)
+v = t.view()
+check('Subagents (1)' in v and 'fixture · second-model · medium' in v and '200 in' in v and 'sub-work' in v, 'Info shows the subagent: model, effort, context, spend', v)
+t.shot('26-info-subagent')
+t.send('\x1b', .4); t.send('\x1b', .4)
+end = time.monotonic() + 30
+while t.view().count('Ready for the next check') < 2 and time.monotonic() < end: t.pump(.2)
+check(t.view().count('Ready for the next check') >= 2, 'the subagent finished and the agent answered', t.view())
+check(t.close() == 0, 'clean quit after the 0.9.2 checks')
 
 (OUT / 'terminal-checks.log').write_text('\n'.join(log) + '\n'); print('ALL PASS')
