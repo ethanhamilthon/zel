@@ -72,6 +72,14 @@ func (s *session) configFile() string {
 // ConfigFile is the config file of the session.
 func (a *Runtime) ConfigFile() string { return a.session().path }
 
+// ConfigErrors are the reasons the config file was skipped; the defaults are in use then.
+func (a *Runtime) ConfigErrors() []string {
+	if cfg := a.session().conf.get(); cfg != nil {
+		return cfg.Errors
+	}
+	return nil
+}
+
 // expander runs a ${{ }} expression: bash in the session folder with the
 // session environment and env on top.
 func (s *session) expander(env map[string]string) config.Expander {

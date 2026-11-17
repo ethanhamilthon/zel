@@ -158,11 +158,17 @@ plan = { text = "plan", modes = ["plan"] }
 	}
 	// A file that cannot be read or is invalid gives the defaults and one error.
 	missing := filepath.Join(dir, "missing.toml")
-	for path, prefix := range map[string]string{bad: bad + ": ", syntax: syntax + ":3: ", missing: missing + ": "} {
+	for path, prefix := range map[string]string{bad: bad + ": ", syntax: syntax + ":3:9: ", missing: missing + ": "} {
 		c := Load(context.Background(), path, nil)
 		if len(c.Errors) != 1 || !strings.HasPrefix(c.Errors[0], prefix) || !reflect.DeepEqual(c.Settings, DefaultSettings()) {
 			t.Errorf("%s: %+v", path, c)
 		}
+	}
+	// A syntax error shows its line with a caret under the error.
+	writeFile(t, bad, "[instruction.main]\ntext = \"x\"\n[instruction.main]\n")
+	dup := bad + ":3:2: Key 'instruction.main' has already been defined\n 3 | [instruction.main]\n   |  ^"
+	if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 || !strings.HasPrefix(c.Errors[0], dup) {
+		t.Errorf("duplicate table: errors %q", c.Errors)
 	}
 	for _, content := range []string{
 		"[hook.x]\nevent = \"nope\"\nrun = \"x\"", "[hook.x]\nevent = \"idle\"\nrun = \"x\"\nmatch = \"(\"", "[settings]\ncompaction = -1",

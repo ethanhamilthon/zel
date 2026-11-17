@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"maps"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -131,7 +132,7 @@ func readFile(path string) (*Config, []named[string], error) {
 		case errors.Is(err, fs.ErrNotExist):
 			return nil, nil, fmt.Errorf("%s: file not found", path)
 		case errors.As(err, &pe):
-			return nil, nil, fmt.Errorf("%s:%d: %s", path, pe.Position.Line, pe.Message)
+			return nil, nil, errors.New(parseError(path, pe))
 		}
 		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
@@ -140,6 +141,24 @@ func readFile(path string) (*Config, []named[string], error) {
 		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
 	return p.cfg, p.env, nil
+}
+
+// parseError is "PATH:LINE:COL: message" with the line and a caret under the
+// error, so a broken file shows where it is broken.
+func parseError(path string, pe toml.ParseError) string {
+	pos := pe.Position
+	msg := fmt.Sprintf("%s:%d:%d: %s", path, pos.Line, max(pos.Col, 1), strings.TrimSuffix(pe.Message, "."))
+	data, err := os.ReadFile(path)
+	lines := strings.Split(string(data), "\n")
+	if err != nil || pos.Line < 1 || pos.Line > len(lines) {
+		return msg
+	}
+	line := strings.ReplaceAll(strings.TrimRight(lines[pos.Line-1], "\r"), "\t", " ")
+	col := min(max(pos.Col, 1), len(line)+1)
+	width := min(max(pos.Len, 1), max(len(line)-col+1, 1))
+	num := fmt.Sprint(pos.Line)
+	pad := strings.Repeat(" ", len(num))
+	return fmt.Sprintf("%s\n %s | %s\n %s | %s%s", msg, num, line, pad, strings.Repeat(" ", col-1), strings.Repeat("^", width))
 }
 
 type parser struct {

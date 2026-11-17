@@ -77,7 +77,8 @@ func (m *app) drawMenu(width, height int) {
 	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
 	mu.width = w
 	note := firstLine(mu.body) // a failure of the models request, or Loading…
-	if mu.loading || m.modelsLoading && mu.page == "models" {
+	// The trace refreshes every second; a Loading… note there only flickers.
+	if mu.loading && mu.page != "trace" || m.modelsLoading && mu.page == "models" {
 		note = "Loading…"
 	}
 	m.at(x, y, mu.title, w, accentColor)

@@ -254,6 +254,9 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		return &ExitError{Code: exitFor(err), Err: err}
 	}
 	defer a.Close()
+	if errs := a.ConfigErrors(); !headless && len(errs) > 0 {
+		return fmt.Errorf("config not loaded:\n%s", strings.Join(errs, "\n"))
+	}
 	if !headless && len(a.Settings().Providers) == 0 {
 		return fmt.Errorf("no provider configured: add one to %s (zel docs config)", core.DisplayPath(a.ConfigFile()))
 	}
