@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.3
+
+- The input grows with its text up to the whole screen, not a third of it.
+- New, shorter description of the bash tool and the zel commands, for main and
+  headless sessions; it adds `zel docs [TOPIC]`.
+- The turn summary and the working line count `bashs` instead of `steps`.
+- Menu pages are a box of half the screen (at least 60×16), centered, with the
+  content at its top left.
+- Docs: group hooks as one `[hook.NAME]` with a list of events, told apart by
+  `$ZEL_HOOK`; the example config does so for the progress bar.
+
 ## 0.9.2
 
 **The config format changed**; a 0.9.1 file is refused with a message that

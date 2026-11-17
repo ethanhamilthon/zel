@@ -44,7 +44,7 @@ class Provider(BaseHTTPRequestHandler):
         elif last == 'hook-check' and 'hook' not in calls: output = [command('echo hooked', 'hook')]
         elif last == 'task-run' and 'task' not in calls: output = [command(f'{BIN} task run --name bg-check -- sleep 90', 'task')]
         elif last == 'spawn-sub' and 'spawn' not in calls: output = [command(f'{BIN} -p sub-work', 'spawn')]
-        elif last == 'sub-work' and 'subsleep' not in calls: output = [command('sleep 7', 'subsleep')]
+        elif last == 'sub-work' and 'subsleep' not in calls: output = [command('sleep 12', 'subsleep')]
         elif last == 'stream-check': output = [answer('Hello from the fake provider.\n\nA **bold** answer and `code`.')]
         elif last.startswith('<notification>'): output = [answer('Notification received: ' + last)]
         else: output = [answer('Ready for the next check.')]
@@ -219,7 +219,7 @@ for _ in range(3): t.send('\x1b', .4)
 # retry: two 503 with Retry-After, then the answer
 t.send('retry-check\r'); t.wait('Ready for the next check', 'answer after two retries', 30)
 check(failures['retry'] == 2, 'the provider failed twice, then answered', failures)
-t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8); t.shot('12-retry-tracing')
+t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8); t.send('Retrying', .6); t.shot('12-retry-tracing')
 check('Retrying in' in t.view(), 'retries are shown in Tracing', t.view()); t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit again')
 
@@ -233,13 +233,13 @@ r = run('config'); check('from-local-file' not in r.stdout and 'second-model' in
 r = run('-p', 'stream-check', '--config', str(other)); check('Hello from the fake provider.' in r.stdout and requests[-1]['model'] == 'from-another', 'zel -p --config uses the model of that file', (r.stdout, r.stderr))
 # the bash tool description: one text per mode, nothing the agent can guess, no old wording
 main_tool = requests[0]['tools'][0]['description']
-check('zel choice "Question"' in main_tool and 'Ask the user before launching subagents' in main_tool, 'the main description has zel choice and the subagent rule', main_tool)
-check('cut to 8000 bytes' in main_tool and 'never truncated' not in main_tool and not re.search(r'\brg\b', main_tool), 'the output limit is stated, no tool hints', main_tool)
+check('zel choice "Question"' in main_tool and 'Run a bash script in current dir.' in main_tool, 'the main description is the 0.9.3 text with zel choice', main_tool)
+check('[nest]' not in main_tool and not re.search(r'\brg\b', main_tool), 'no [nest] marker, no tool hints', main_tool)
 check('{timeout}' not in main_tool and '{output}' not in main_tool, 'no template placeholder is left', main_tool)
 check(requests[0]['reasoning'].get('summary') == 'auto', 'the reasoning summary is always requested', requests[0].get('reasoning'))
 r = run('-p', 'stream-check', '--config', str(other))
 head_tool = requests[-1]['tools'][0]['description']
-check('no user to ask' in head_tool and 'zel choice' not in head_tool and 'Ask the user before' not in head_tool, 'the headless description has no user and no zel choice', head_tool)
+check('no user to ask' in head_tool and 'zel choice' not in head_tool, 'the headless description has no user and no zel choice', head_tool)
 
 # removed settings are config errors now
 old = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-old-')) / 'old.toml'
@@ -317,6 +317,7 @@ t.send('\x04', .8)
 # Info lists a running subagent with its model, effort, context and spend
 t.send('spawn-sub\r'); t.pump(3.5)
 t.send('\x0b'); t.send('info'); t.send('\r'); t.pump(1.5)
+t.send('\x1b[6~', .6)  # the box is half the screen: PgDn to the subagent
 v = t.view()
 check('Subagents (1)' in v and 'fixture · second-model · medium' in v and '200 in' in v and 'sub-work' in v, 'Info shows the subagent: model, effort, context, spend', v)
 t.shot('26-info-subagent')
@@ -325,5 +326,26 @@ end = time.monotonic() + 30
 while t.view().count('Ready for the next check') < 2 and time.monotonic() < end: t.pump(.2)
 check(t.view().count('Ready for the next check') >= 2, 'the subagent finished and the agent answered', t.view())
 check(t.close() == 0, 'clean quit after the 0.9.2 checks')
+
+# 0.9.3: the tool description, the input height, "bashs", the menu box
+r = run('-p', 'stream-check'); desc = json.dumps(requests[-1].get('tools', []))
+check('Run a bash script in current dir.' in desc and 'zel docs [TOPIC]' in desc and 'zel choice' not in desc and 'no user to ask' in desc, 'headless: the new bash description, no zel choice', desc[:400])
+home5 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-093-'))
+(home5 / 'config.toml').write_text(CONFIG)
+t = Term(home5, cwd); t.pump(1.5)
+t.send('hook-check\r'); t.wait('Ready for the next check', 'a turn with one bash call', 20)
+desc = json.dumps(requests[-1].get('tools', []))
+check('Run a bash script in current dir.' in desc and 'zel choice \\"Question\\"' in desc and 'zel docs [TOPIC]' in desc, 'main: the new bash description with zel choice', desc[:400])
+check('1 bash' in t.view() and 'step' not in t.view(), 'the turn summary says "1 bash", not steps', t.view()); t.shot('27-one-bash')
+t.send('\x1b[200~' + '\n'.join(f'line{i}' for i in range(1, 26)) + '\x1b[201~', .3)
+t.pump(.8); rows = t.rows()
+shown = [r for r in rows if r.startswith('line')]
+check(len(shown) == 25, 'a 25-line input shows all 25 lines (a third of the screen was 10)', t.view()); t.shot('28-tall-input')
+t.send('\x15', .4)
+t.send('\x0b'); t.send('info'); t.send('\r'); t.pump(1.2)
+rows = t.rows(); y = next((y for y, r in enumerate(rows) if r.strip() == 'Info'), None)
+check(y == (ROWS - 16) // 2 and rows[y].index('Info') == (COLS - 60) // 2, 'Info: a centered half-screen box, title at its top left', (y, rows[y] if y is not None else t.view())); t.shot('29-info-box')
+t.send('\x1b', .4); t.send('\x1b', .4)
+check(t.close() == 0, 'clean quit after the 0.9.3 checks')
 
 (OUT / 'terminal-checks.log').write_text('\n'.join(log) + '\n'); print('ALL PASS')
