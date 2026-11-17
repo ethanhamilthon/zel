@@ -25,7 +25,7 @@ instructions, hooks and prompt completions.
   …first 4000 bytes…
 
   ======== [output cut: 5000 of 13000 bytes omitted]
-  ======== full output: /Users/…/sessions/…/outputs/b12.txt
+  ======== full output: /Users/…/.sessions/…/outputs/b12.txt
   ======== read it with sed -n '100,200p', rg, head or tail
 
   …last 4000 bytes…
@@ -120,8 +120,8 @@ finished</notification>` (or `failed`, `stopped`, `timed out`).
 `zel choice` does not wait. The UI shows the options instead of the input
 (several questions queue up); the user picks one, chooses **Write your own
 answer…**, or presses Esc. The custom answer edits like the composer: it grows
-with its lines (Alt+Enter, Shift+Enter or Ctrl+J insert a newline), a click
-moves the cursor, and up to 4096 characters fit; Enter sends a non-empty answer,
+with its lines (Alt+Enter, Shift+Enter or Ctrl+J insert a newline), and up to
+4096 characters fit; Enter sends a non-empty answer,
 and Esc returns to the options
 without losing the custom text. The normal composer draft is preserved. Each
 answer stays in the chat as `question: answer` (saved in the session's
@@ -207,7 +207,9 @@ plan = "${{ cat PLAN.md }}"
   only your `instructions`: Zel adds nothing of its own to it. It is rebuilt
   only when the instructions changed. Everything Zel itself tells the model
   (how the bash tool and the zel commands work) is the description of the bash
-  tool, built fresh for every request. Files read by `${{ }}` are not watched.
+  tool, built fresh for every request; the main session and `zel -p` get
+  different texts (a `zel -p` agent has no user to ask and no `zel choice`).
+  Files read by `${{ }}` are not watched.
 - Picking a model changes this session and the `provider`/`model`/`effort`
   lines of the file. Other open sessions keep their model; so does an open
   session when you edit `model` by hand.
@@ -220,17 +222,18 @@ paths, or install them on your normal `PATH`; Zel does not manage script folders
 
 `[hooks]` maps an event to a list of commands. An entry is a string (the
 command) or a table `{run, match, timeout, async, main, headless}`:
-`match` is a regexp on the command (bash_*) or the text (message,
-notification); `timeout` is in seconds (default 60); `async = true` starts the
+`match` is a regexp on the command (`bash_before`, `bash_after`) or the text
+(`message`, `notification`, `turn_start`); the other events have nothing to match,
+so `match` there is a config error; `timeout` is in seconds (default 60); `async = true` starts the
 hook and does not wait; hooks run in the main session only unless
 `headless = true` (`main = false` leaves the main session out).
 
 A hook is `bash -c` with the session environment and `ZEL_HOOK`; the event
 data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
 blockable event, with stderr as the reason. Any other exit is recorded in
-session diagnostics and the hook is skipped. Hook execution records are hidden
-from the Tracing view. Hooks run one by one, in file order;
-rewriting hooks chain.
+session diagnostics and the hook is skipped. Every hook run (event, command, exit
+code, time) is a `hook` entry in Tracing, not a row in the chat. Hooks run one
+by one, in file order; rewriting hooks chain.
 
 | event | when | stdin | stdout (exit 0) | exit 2 |
 |---|---|---|---|---|
@@ -311,7 +314,7 @@ the session's tasks were stopped. Asynchronous hooks are cancelled and joined
 before session resources are released; they do not outlive the session.
 
 zel writes no window title or progress to the terminal. A hook can, by writing
-to `/dev/tty`; the global example shows the terminal progress bar (OSC 9;4)
+to `/dev/tty`; the example config shows the terminal progress bar (OSC 9;4)
 on `turn_start`, `turn_end`, `error` and `session_closed`.
 
 ## Prompt completions

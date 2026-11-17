@@ -7,8 +7,9 @@ system to learn before you can get started.
 Zel is an agent that simply writes bash. Through that one tool, it can run
 background tasks and subagents, view images, work with files, and more.
 
-One file, `~/.zel/config.toml`, lets you tailor Zel to yourself and your project,
-including the look of the terminal interface. The TUI is as minimal as it
+One file, `~/.zel/config.toml`, lets you tailor Zel to yourself, including the
+look of the terminal interface. A project's own rules come in through your
+instructions, for example `"${{ cat AGENTS.md }}"`. The TUI is as minimal as it
 gets: just you and your agent.
 
 ## Install
@@ -18,7 +19,8 @@ curl -fsSL https://raw.githubusercontent.com/ethanhamilthon/zel/main/scripts/ins
 ```
 
 macOS and Linux, arm64 and amd64. Add `~/.local/bin` to `PATH`.
-Run `zel update` to get the latest release.
+Run `zel update` to replace the binary with the latest release; it touches
+nothing else.
 
 ## Get started
 
@@ -60,10 +62,7 @@ See [configuration examples](docs/examples/) for a starting point.
   Also available in the terminal with `zel docs`.
 - [Examples](docs/examples/): complete configurations and a script tool.
 - [Architecture](docs/ARCHITECTURE.md): project structure and ownership.
-- [0.9.0 release](docs/RELEASE-0.9.0.md): one config file, no image storage, a cleaner TUI.
-- [0.8.0 release](docs/RELEASE-0.8.0.md): a smaller tcell frontend with a shared editor and direct terminal rendering.
-- [0.7.6 release](docs/RELEASE-0.7.6.md): choice answers in the chat, composer-grade custom answers, steadier updates, completed tokens.
-- [0.7.5 release](docs/RELEASE-0.7.5.md): improvements, compatibility and verification evidence.
+- [Changelog](CHANGELOG.md): what changed in each release.
 
 For non-interactive use: `zel -p "Review this project"`.
 Add `--json` for structured output or `--resume SESSION` to continue a session.
