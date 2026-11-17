@@ -3,7 +3,6 @@ package shell
 import (
 	"bytes"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -25,7 +24,9 @@ const (
 
 type Image = entities.Image
 
-func CaptureImageCopy(path, directory string) (Image, error) {
+// CaptureImage reads a PNG or JPEG file and returns its absolute path and a
+// preview data URL that fits the request limits. Nothing is stored on disk.
+func CaptureImage(path string) (Image, error) {
 	// Check the file type before os.Open, which blocks on a FIFO until a writer
 	// appears. Nonblocking open also handles a replacement between stat and open.
 	if info, err := os.Stat(path); err != nil {
@@ -49,13 +50,6 @@ func CaptureImageCopy(path, directory string) (Image, error) {
 	if err != nil {
 		return Image{}, err
 	}
-	if path, err = filepath.Abs(path); err != nil {
-		return Image{}, err
-	}
-	return CaptureImageData(data, path, directory)
-}
-
-func CaptureImageData(data []byte, path, directory string) (Image, error) {
 	if len(data) > MaxImageInputBytes {
 		return Image{}, fmt.Errorf("view image exceeds %d MiB", MaxImageInputBytes>>20)
 	}
@@ -70,24 +64,8 @@ func CaptureImageData(data []byte, path, directory string) (Image, error) {
 	if err != nil {
 		return Image{}, err
 	}
-	if directory != "" {
-		if err = os.MkdirAll(directory, 0700); err != nil {
-			return Image{}, err
-		}
-		original, err := os.CreateTemp(directory, "original-*."+format)
-		if err != nil {
-			return Image{}, err
-		}
-		_, writeErr := original.Write(data)
-		closeErr := original.Close()
-		if writeErr != nil || closeErr != nil {
-			os.Remove(original.Name())
-			return Image{}, fmt.Errorf("save original: %w", errors.Join(writeErr, closeErr))
-		}
-		path, err = filepath.Abs(original.Name())
-		if err != nil {
-			return Image{}, err
-		}
+	if path, err = filepath.Abs(path); err != nil {
+		return Image{}, err
 	}
 	return Image{Path: path, URL: "data:image/" + mime + ";base64," + base64.StdEncoding.EncodeToString(preview)}, nil
 }

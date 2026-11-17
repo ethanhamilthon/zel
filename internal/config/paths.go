@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,4 +60,42 @@ func ZelHome(cwd string) (string, error) {
 		dir = filepath.Join(cwd, dir)
 	}
 	return filepath.Abs(dir)
+}
+
+// File is the config file of a Zel home.
+func File(home string) string { return filepath.Join(home, "config.toml") }
+
+const defaultConfig = `# Zel config. Edits apply by themselves. Reference: zel docs config
+#
+# provider = "openai"
+# model    = "gpt-5"
+#
+# [providers.openai]
+# base_url = "https://api.openai.com/v1"
+# api_key  = "${{ echo $OPENAI_API_KEY }}"
+`
+
+// EnsureHome creates the Zel home with the default config.toml and a
+// .gitignore that keeps secrets and sessions out of git. Existing files stay.
+func EnsureHome(home string) error {
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return err
+	}
+	for name, text := range map[string]string{"config.toml": defaultConfig, ".gitignore": ".env\n.sessions/\n"} {
+		f, err := os.OpenFile(filepath.Join(home, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, err = f.WriteString(text)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

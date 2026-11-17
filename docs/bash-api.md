@@ -1,8 +1,8 @@
-# zel 0.7 reference
+# zel 0.9 reference
 
 Zel gives the model one tool, `bash`: its input is a bash script. Background
 tasks, questions to the user, images and edits are `zel` commands the script
-runs. You configure Zel with `zel.toml` files: settings, providers,
+runs. You configure Zel with one file, `~/.zel/config.toml`: settings, providers,
 instructions, hooks and prompt completions.
 
 ## The bash tool
@@ -41,14 +41,14 @@ instructions, hooks and prompt completions.
 - `settings.show_bash` (default `true`) shows the running command in the working
   line. With `false` the line keeps only time, steps and queued input
   (`12s · 3 steps`), with no command and no `thinking...`, also after a call
-  ends. Tracing and task rows are unchanged. The Settings menu has a "Show bash"
-  row for it.
+  ends. Tracing and task rows are unchanged. The command is cut to one line
+  with `...` at its end, in the dark gray color.
 - stdin is empty; pagers are off (`PAGER=cat`, `GIT_PAGER=cat`).
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
 - Environment of every call, task, hook and `${{ }}`: `ZEL_SESSION_ID`,
   `ZEL_MODE` (`main` or `headless`), `ZEL_DEPTH`, `ZEL_PARENT` (for a child),
-  `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG` (the config layers, `:`-separated),
+  `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG` (the config file),
   `ZEL_PROVIDER`, `ZEL_MODEL`, `ZEL_EFFORT`, `ZEL_TASK` inside a task,
   `ZEL_HOOK` inside a hook, the `[env]` of the config, and the inherited `PATH`
   with the running Zel binary's directory in front so `zel` finds itself.
@@ -77,7 +77,7 @@ Anywhere:
 
 ```sh
 zel edit FILE [--all] <<'EOF' ... EOF             # exact replacements, all or none; prints the count
-zel docs [topic] | zel models [--json] | zel config [--config FILE]...
+zel docs [topic] | zel models [--json] | zel config [--config FILE]
 zel -p "prompt" [--model M --effort E --provider P --cwd DIR --timeout S --json --config FILE]
 zel -p --resume ID "more"                         # continue a session
 ```
@@ -87,10 +87,10 @@ zel -p --resume ID "more"                         # continue a session
 repeat `cd DIR && ...`. DIR is relative to the caller's folder, `~` works; no
 argument goes back to the folder zel was started in. It prints the new absolute
 path; a missing folder is ENOENT, a file EINVAL, and nothing changes. Running
-tasks keep their folder. Zel itself stays where it started: the project, config
-layers (`./zel.toml`), session list, hooks and `${{ }}` are not touched. A
+tasks keep their folder. Zel itself stays where it started: the project, config,
+session list, hooks and `${{ }}` are not touched. A
 `zel -p` called from a bash call starts in that call's folder, so after
-`zel cd ~/some` a subagent works in `~/some` and loads `~/some/zel.toml`. The
+`zel cd ~/some` a subagent works in `~/some`. The
 folder is saved with the session: a resumed session's bash calls start in it
 (if it is gone, in the start folder, with a notice). `zel session` shows it as
 `bash_cwd` when it differs from `cwd`. Each session, subagents too, has its
@@ -129,29 +129,32 @@ answer stays in the chat as `question: answer` (saved in the session's
 `<notification>c1 Question: A</notification>` (or the custom text, or `cancelled`). It works
 in the main session, its tasks and hooks; `zel -p` has no user (EDENIED).
 
-New image previews are saved in the session's `attachments` folder; history
-stores versioned references and loads preview bytes only for requests that need
-them. Keep that folder with `session.jsonl` when copying a session. Old chats
-with embedded images still work and are not migrated. An old Zel binary cannot
-read the new references. Missing or corrupt preview files produce an explicit
-error rather than silently omitting the image. Original image copies remain
-available for crops. Tracing shows complete generated commands, not partial
-argument fragments.
+Images are only what `zel view IMG...` attaches: Zel stores nothing of them and
+has no image paste of its own. A preview (PNG or JPEG, shrunk to the request
+limits) stays in memory while the session runs and goes to the model with the
+next request. It is not saved: in `session.jsonl` an image becomes the text
+`[an image was here]`, which a resumed session shows instead. The original file
+is not copied, so the agent can still read it by its path. Tracing shows complete
+generated commands, not partial argument fragments.
 
 A subagent is `zel -p` run from the agent's bash. It becomes a child of the
-session: `ZEL_MODE=headless`, the parent's model and config layers unless
+session: `ZEL_MODE=headless`, the parent's model and config file unless
 given others. Child tracking participates in idle/lifecycle handling. Its answer goes
 to stdout, `zel: session ID` to stderr (`--json` prints `{ok, answer,
 session, error}`). `zel -p --resume ID` continues one of your own children
 only. Children nest at most 3 deep. In a bash call a child has the same time
 limit, so longer work runs as a task: `zel task run --name review -- zel -p "..."`.
 
-## zel.toml
+## config.toml
 
-Layers, in merge order: `~/.zel/zel.toml` (or `$ZEL_HOME/zel.toml`),
-`./zel.toml` of the working folder only, then each `--config FILE`. Settings
-and tables merge by key (a later layer wins); instructions and hooks add up in
-layer order; completions replace by name (with a warning in Tracing).
+One file: `~/.zel/config.toml` (or `$ZEL_HOME/config.toml`). `--config FILE`
+(one path) replaces it: Zel works by that file alone, with no inheritance or
+merging. There is no per-folder config. Zel creates `~/.zel` with a commented
+`config.toml` and a `.gitignore` (`.env`, `.sessions/`) when they are missing.
+Everything else Zel writes lives in `~/.zel/.sessions/`. Without a configured
+provider the TUI exits with an error. The app never edits this file, except
+that choosing a model writes `provider`, `model` and `effort`; Providers and
+Settings are not in the UI, you edit the file and Zel follows it.
 
 ```toml
 # top-level keys first: in TOML, keys after a [table] belong to that table
@@ -199,21 +202,18 @@ plan = "${{ cat PLAN.md }}"
   starts and whenever the config changes; completions when they are used.
 - `instructions` entries are strings (main session only) or tables
   `{text, main = true, headless = false}`; `[[instructions]]` tables work too.
-- Unknown keys and wrong types make the whole layer invalid: it is skipped
-  with a notice naming the file (and the line, for syntax errors).
-- Hot reload: Zel watches the layer files. A change is applied after the
+- Unknown keys and wrong types make the file invalid: it is skipped with a
+  notice naming the file (and the line, for syntax errors).
+- Hot reload: Zel watches the file. A change is applied after the
   current turn; a broken file keeps the previous config. The system prompt is
   only your `instructions`: Zel adds nothing of its own to it. It is rebuilt
   only when the instructions changed. Everything Zel itself tells the model
   (how the bash tool and the zel commands work) is the description of the bash
   tool, built fresh for every request. Files read by `${{ }}` are not watched.
-- The menus write back into the layer a value comes from: picking a model
-  changes this session and the `provider`/`model`/`effort` lines of the file
-  they come from (`~/.zel/zel.toml` when no file sets them). Other open
-  sessions keep their model; so does an open session when you edit `model` by hand.
-- `zel config` prints the merged config and where every key comes from.
-- `settings.accent` of 0.7.0 is read as `colors.accent`, with a notice;
-  picking an accent in Settings moves it there.
+- Picking a model changes this session and the `provider`/`model`/`effort`
+  lines of the file. Other open sessions keep their model; so does an open
+  session when you edit `model` by hand.
+- `zel config` prints the config and its problems.
 
 Tell the agent about your own tools in `instructions`. Invoke scripts by their
 paths, or install them on your normal `PATH`; Zel does not manage script folders.
@@ -231,7 +231,7 @@ A hook is `bash -c` with the session environment and `ZEL_HOOK`; the event
 data comes as JSON on stdin. Exit 0: stdout is used as below. Exit 2 blocks a
 blockable event, with stderr as the reason. Any other exit is recorded in
 session diagnostics and the hook is skipped. Hook execution records are hidden
-from the Tracing view. Hooks run one by one, in layer order;
+from the Tracing view. Hooks run one by one, in file order;
 rewriting hooks chain.
 
 | event | when | stdin | stdout (exit 0) | exit 2 |
@@ -239,7 +239,7 @@ rewriting hooks chain.
 | `session_created` | a new session | `{}` | | |
 | `session_resumed` | a session is resumed | `{}` | | |
 | `session_closed` | quit, new or resume | `{"reason"}` | | |
-| `config_changed` | after hot reload | `{"ok","error","files"}` | | |
+| `config_changed` | after hot reload | `{"ok","error","file"}` | | |
 | `message` | the user sent a message | `{"text"}` | new text | the message is dropped |
 | `notification` | before a notification reaches the agent | `{"text"}` (plain, no tags) | new text; zel wraps it in `<notification>` | it is dropped |
 | `turn_start` | the agent starts a turn | `{"text"}` | | |
@@ -344,7 +344,7 @@ Backspace (right after it) or Delete (right before it) removes it whole.
 ## Colors
 
 `[colors]` sets every color of the TUI. Values are `#rrggbb` hex; a missing
-key keeps the default. Layers merge by key, a change applies on reload, and a
+key keeps the default. A change applies on reload, and a
 bad value is a config error: the previous config stays and the error is shown.
 
 ```toml
@@ -369,22 +369,21 @@ error   = "#e27878"
 ```
 
 - `bg`: the background of the whole screen (chat, composer, menus, Tracing,
-  choice, onboarding).
+  choice).
 - `accent`: the composer rail, the `*` header over answers, completed `#name`
   and `@path` tokens in the composer, answered choice questions, choice and menu
-  markers, status icons, onboarding title, headings, inline code and links in
-  answers, keywords in highlighted bash. Settings → Accent color picks one from
-  a palette and writes `colors.accent` into the layer it comes from; a hex
-  outside the palette shows as "Custom".
+  markers, status icons, headings, inline code and links in
+  answers, keywords in highlighted bash.
 - `agent`: the text of answers, the main text of menus, Info values, the
   choice title and the rail text of forms.
 - `user`: your messages and choice answers in the chat and the composer text; `user_highlight`:
   the composer line under the cursor.
-- `gray`: hints, time and steps, the working line, inactive menu rows, Info
+- `gray`: time and steps, the working line, inactive menu rows, Info
   keys, the `+ N more` row, the composer placeholder, punctuation in bash.
-- `dark_gray`: the "context compacted" divider, Tracing row numbers, onboarding
-  subtitle and hints, bash comments, the pulse of a queued composer.
-- `error`: failed turns, prompt errors, onboarding form errors.
+- `dark_gray`: the "context compacted" divider, the command in the working
+  line, hotkeys in menus, Tracing row numbers, bash comments, the pulse of a
+  queued composer.
+- `error`: failed turns, prompt errors, form errors.
 - `trace.*`: the kind labels and bodies in Tracing, one per kind; `trace.bash`
   is also the plain text of highlighted bash.
 
@@ -392,5 +391,4 @@ Strings and numbers in highlighted bash keep fixed tones.
 
 ## Examples
 
-See the examples topic: a global zel.toml, a project zel.toml and a standalone
-web-search script.
+See the examples topic: a complete config.toml and a standalone web-search script.

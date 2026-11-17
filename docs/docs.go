@@ -19,16 +19,16 @@ type Topic struct{ Name, Summary string }
 var sections = map[string]Topic{
 	"The bash tool":      {"bash", "how a bash call runs: limits, output, environment"},
 	"Commands":           {"commands", "zel task, choice, view, cd, session, edit, -p (subagents), exit codes"},
-	"zel.toml":           {"config", "zel.toml layers, keys, ${{ }}, hot reload, menus writing back"},
+	"config.toml":        {"config", "config.toml keys, ${{ }}, hot reload"},
 	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},
 	"Colors":             {"colors", "[colors]: the TUI theme, key by key"},
 }
 
-var examples = Topic{"examples", "complete zel.toml files and a script tool"}
+var examples = Topic{"examples", "a complete config.toml and a script tool"}
 
 // order is the order of the topics in the index.
-var order = []string{"The bash tool", "Commands", "zel.toml", "Hooks", "Prompt completions", "Colors"}
+var order = []string{"The bash tool", "Commands", "config.toml", "Hooks", "Prompt completions", "Colors"}
 
 // parse splits bash-api.md into its "## " sections; the text before the first one
 // is the intro and has no topic.
@@ -107,7 +107,7 @@ func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")
 	b.WriteString(strings.TrimSpace(string(readme)))
-	for _, name := range []string{"global-zel.toml", "project-zel.toml", "web-search"} {
+	for _, name := range []string{"config.toml", "web-search"} {
 		data, _ := files.ReadFile("examples/" + name)
 		fmt.Fprintf(&b, "\n\n# --- %s\n%s", name, strings.TrimSpace(string(data)))
 	}

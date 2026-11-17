@@ -1,16 +1,16 @@
 zel - minimal AI coding agent
 
 USAGE
-  zel [--config FILE]...  open the TUI
+  zel [--config FILE]     open the TUI
   zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL] [--resume ID]
-         [--cwd DIR] [--timeout SECONDS] [--json] [--config FILE]...
+         [--cwd DIR] [--timeout SECONDS] [--json] [--config FILE]
                           run without the TUI: "zel: session ID" goes to stderr,
                           the final answer to stdout (exit 0, nonzero on error,
                           130 when cancelled). PROMPT may come on stdin. Run from
                           the agent's bash, zel -p is a subagent of that session.
-  zel config [--config FILE]...   the merged config and where each key comes from
+  zel config [--config FILE]     the config and its problems
   zel models [--json]     the models of the configured providers
-  zel docs [TOPIC]        the reference (bash tool, commands, zel.toml, hooks)
+  zel docs [TOPIC]        the reference (bash tool, commands, config.toml, hooks)
   zel edit FILE [--all]   exact text edits read from stdin (see zel docs commands)
   zel update              replace this binary with the latest release
   zel version | zel help
@@ -18,12 +18,12 @@ USAGE
 INSIDE A SESSION (the agent's bash, tasks, hooks)
   zel task run|list|get|tail|wait|stop   background tasks
   zel choice "Question" "A" "B"          ask the user; the answer comes as a notification
-  zel view IMG...                        attach images to the next model request
+  zel view IMG...                        show images to the model (kept in memory only)
   zel cd [DIR]                           the folder of the next bash calls (no DIR: the start folder)
   zel session [--json] | zel session rename NAME
 
 CONFIG
-  ~/.zel/zel.toml, then ./zel.toml, then each --config FILE. Changes apply by
+  ~/.zel/config.toml (or --config FILE instead of it). Changes apply by
   themselves (hot reload). Any string may contain ${{ bash }}.
 
     provider = "openai"
@@ -48,6 +48,6 @@ KEYS
   @ completes paths, # completes prompt completions
 
 ENVIRONMENT
-  ZEL_HOME   data directory (default ~/.zel)
+  ZEL_HOME   data directory (default ~/.zel): config.toml and .sessions/
 
 bash runs with your permissions and network access; there is no sandbox.

@@ -28,7 +28,6 @@ type span struct {
 	text  string
 	width int
 	style tcell.Style
-	link  string
 }
 type row []span
 
@@ -43,7 +42,7 @@ func styledRows(text string, width int, base tcell.Style) []row {
 	var run strings.Builder
 	flush := func() {
 		if run.Len() > 0 {
-			rows[len(rows)-1] = append(rows[len(rows)-1], span{run.String(), runWidth, s, link})
+			rows[len(rows)-1] = append(rows[len(rows)-1], span{run.String(), runWidth, s})
 			run.Reset()
 			runWidth = 0
 		}

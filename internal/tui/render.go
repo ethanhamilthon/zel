@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rivo/uniseg"
 	"zel/internal/core"
@@ -41,15 +42,13 @@ func (m *app) draw() {
 	}
 	if status.Busy {
 		_, ui := m.ctl.Appearance()
-		stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
-		icon := stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)]
-		indicators = append(indicators, plainRows(icon+" "+workingText(status, m.turnSteps(), ui.ShowBash), width, accentColor)...)
+		indicators = append(indicators, workingRow(status, m.turnSteps(), ui.ShowBash, width))
 	}
 	if m.promptCancel != nil {
 		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)
 	}
 	e := &m.input
-	inputRows := e.rows(max(1, width-2))
+	inputRows := e.rows(width)
 	inputHeight := min(len(inputRows), max(1, height/3))
 	completionRows := min(6, min(len(m.completions.items), max(0, height/3)))
 	choiceRows := 0
@@ -57,7 +56,7 @@ func (m *app) draw() {
 		completionRows = 0
 		if m.writing {
 			e = &m.answer
-			inputRows = e.rows(max(1, width-2))
+			inputRows = e.rows(width)
 			inputHeight = min(len(inputRows), max(1, height-5))
 			choiceRows = 1
 		} else {
@@ -66,18 +65,24 @@ func (m *app) draw() {
 		}
 	}
 	// The composer is the tail of the same scrollable timeline, not a footer.
+	// One empty line separates it from what is above; a chat record already ends with one.
 	tailStart := len(m.history) + len(indicators)
-	gap := 0
-	if tailStart > 0 {
-		gap = 1
+	gap := 1
+	switch {
+	case tailStart == 0:
+		gap = 0
+	case len(indicators) > 0:
+	case len(m.history) > 0 && len(m.history[len(m.history)-1]) == 0:
+		gap = 0
 	}
-	total := tailStart + gap + choiceRows + inputHeight + completionRows
+	panelGap := min(1, completionRows)
+	total := tailStart + gap + choiceRows + inputHeight + panelGap + completionRows
 	m.scroll = max(0, min(m.scroll, max(0, total-height)))
 	start := max(0, total-height-m.scroll)
 	end := min(len(m.history), start+height)
-	m.visibleStart = min(start, len(m.history))
-	m.chatHeight = max(0, end-m.visibleStart)
-	for i, r := range m.history[m.visibleStart:end] {
+	first := min(start, len(m.history))
+	m.chatHeight = max(0, end-first)
+	for i, r := range m.history[first:end] {
 		drawRow(m.screen, i, r, width)
 	}
 	y := len(m.history) - start
@@ -86,8 +91,6 @@ func (m *app) draw() {
 		y++
 	}
 	y += gap
-	m.inputY = y
-	m.inputHeight = inputHeight
 	if m.choice != nil {
 		m.line(y, m.choice.Title, width, accentColor)
 		y++
@@ -95,42 +98,26 @@ func (m *app) draw() {
 			options := append(slices.Clone(m.choice.Options), "Write your own answer…")
 			shown := max(0, choiceRows-1)
 			first := max(0, m.choiceIndex-shown+1)
-			m.choiceFirst, m.choiceVisible = first, shown
-			for i := first; i < min(len(options), first+shown); i++ {
-				prefix := "  "
-				color := grayColor
-				if i == m.choiceIndex {
-					prefix = "› "
-					color = accentColor
-				}
-				m.line(y, prefix+options[i], width, color)
-				y++
+			items := make([]item, len(options))
+			for i, o := range options {
+				items[i].label = o
 			}
+			m.drawList(0, y, width, items[first:min(len(options), first+shown)], m.choiceIndex-first)
+			y += min(len(options), first+shown) - first
 		}
 	}
 	if inputHeight > 0 {
 		if m.choice != nil && m.writing && e.text == "" {
-			m.at(1, y, "Your answer", max(1, width-2), darkGray)
+			m.at(0, y, "Your answer", width, darkGray)
 		}
-		m.inputY = y
-		m.drawEditor(e, 1, y, max(1, width-2), inputHeight, false)
+		m.drawEditor(e, 0, y, width, inputHeight, false)
 		y += inputHeight
 	}
 	if completionRows > 0 {
 		first := max(0, m.completions.selected-completionRows+1)
-		for i := first; i < min(len(m.completions.items), first+completionRows); i++ {
-			color := grayColor
-			prefix := "  "
-			if i == m.completions.selected {
-				color = accentColor
-				prefix = "› "
-			}
-			m.line(y, prefix+m.completions.items[i].label, width, color)
-			y++
-		}
+		last := min(len(m.completions.items), first+completionRows)
+		m.drawList(0, y+panelGap, width, m.completions.items[first:last], m.completions.selected-first)
 	}
-
-	m.drawSelection()
 	m.screen.Show()
 }
 func (m *app) line(y int, text string, width int, color lipgloss.Color) {
@@ -279,8 +266,13 @@ func (m *app) turnSteps() int {
 	}
 	return count
 }
-func workingText(status core.Status, steps int, showBash bool) string {
-	parts := []string{formatDuration(time.Since(status.Started))}
+
+// workingRow is the working indicator, one line: the star, the time, the steps
+// and the queue in the accent color, then what is running in dark gray, cut
+// with "..." to fit.
+func workingRow(status core.Status, steps int, showBash bool, width int) row {
+	stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
+	parts := []string{stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)] + " " + formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
 		parts = append(parts, "cancelling")
 	} else {
@@ -292,10 +284,16 @@ func workingText(status core.Status, steps int, showBash bool) string {
 	case queued > 1:
 		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
+	head := ansi.Truncate(strings.Join(parts, " · "), width, "...")
+	r := row{{head, textWidth(head), style(accentColor)}}
 	if !status.Cancelling && showBash {
-		parts = append(parts, cmp.Or(activityLine(status, time.Now()), "thinking..."))
+		activity := strings.ReplaceAll(cmp.Or(activityLine(status, time.Now()), "thinking..."), "\t", " ")
+		if room := width - textWidth(head) - 3; room > 0 {
+			activity = ansi.Truncate(" · "+cleanInput(activity), room+3, "...")
+			r = append(r, span{activity, textWidth(activity), style(darkGray)})
+		}
 	}
-	return strings.Join(parts, " · ")
+	return r
 }
 
 // activityStep is how long each line of a multi-line command stays in the indicator.

@@ -36,146 +36,125 @@ func fakeRun(env map[string]string) Expander {
 	}
 }
 
-func TestLayers(t *testing.T) {
-	root := t.TempDir()
-	home, cwd := filepath.Join(root, "home"), filepath.Join(root, "proj", "sub")
-	os.MkdirAll(home, 0700)
-	os.MkdirAll(cwd, 0700)
-	writeFile(t, filepath.Join(root, "proj", "zel.toml"), "") // parent dir: not used
-	got := Layers(home, cwd, []string{"extra.toml", filepath.Join(cwd, "extra.toml"), "/abs/x.toml"})
-	want := []Layer{{"global", filepath.Join(home, "zel.toml")}, {"config", filepath.Join(cwd, "extra.toml")}, {"config", "/abs/x.toml"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("layers = %v, want %v", got, want)
+func TestEnsureHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "zel")
+	if err := EnsureHome(home); err != nil {
+		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(cwd, "zel.toml"), "")
-	if got := Layers(home, cwd, nil); len(got) != 2 || got[1] != (Layer{"local", filepath.Join(cwd, "zel.toml")}) {
-		t.Fatalf("local layer: %v", got)
+	if cfg := Load(context.Background(), File(home), nil); len(cfg.Errors) != 0 || cfg.Settings.Provider != "" {
+		t.Fatalf("the default config must load and set nothing: %+v", cfg)
 	}
-	writeFile(t, filepath.Join(home, "zel.toml"), "")
-	if got := Layers(home, home, nil); len(got) != 1 {
-		t.Fatalf("cwd = home must give the global file once: %v", got)
+	ignore, _ := os.ReadFile(filepath.Join(home, ".gitignore"))
+	if string(ignore) != ".env\n.sessions/\n" {
+		t.Fatalf(".gitignore = %q", ignore)
+	}
+	writeFile(t, File(home), "model = \"mine\"\n")
+	if err := EnsureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(File(home)); string(data) != "model = \"mine\"\n" {
+		t.Fatalf("an existing config must stay: %q", data)
 	}
 }
 
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
-	global, local, bad, syntax := filepath.Join(dir, "g.toml"), filepath.Join(dir, "l.toml"), filepath.Join(dir, "bad.toml"), filepath.Join(dir, "syn.toml")
-	writeFile(t, global, `
+	path, bad, syntax := filepath.Join(dir, "c.toml"), filepath.Join(dir, "bad.toml"), filepath.Join(dir, "syn.toml")
+	writeFile(t, path, `
 provider = "openai"
 model = "m1"
 instructions = ["global ${{ hi }}", { text = "headless only", main = false, headless = true }, ""]
 [settings]
 compaction = 1000
+bash_timeout = 5
+bash_output = 2000
+slash_menu = false
 [colors]
 accent = "${{ fail }}#123456"
 user = "#111111"
+[colors.trace]
+bash = "#010203"
 [providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "${{ env KEY }}"
 [env]
 KEY = "k-${{ one }}"
+OTHER = "${{ env KEY }}"
 [hooks]
 bash_before = ["echo a", { run = "echo b", match = "^git", timeout = 1.5, async = true, headless = true }]
 idle = "echo idle"
 [completions]
 fix = "Fix ${{ x }}"
 `)
-	writeFile(t, local, `
-model = "m2"
-instructions = [{ text = "local" }]
-[settings]
-bash_timeout = 5
-bash_output = 2000
-slash_menu = false
-[colors]
-user = "#222222"
-[colors.trace]
-bash = "#010203"
-[providers.openai]
-base_url = "http://localhost:1234"
-[env]
-OTHER = "${{ env KEY }}"
-[[hooks.bash_before]]
-run = "echo c"
-[completions]
-fix = "local fix"
-`)
 	writeFile(t, bad, "[settings]\ncompaction = 1\nunknown = 2\n")
 	writeFile(t, syntax, "model = \"x\"\n\nmodel = = 3\n")
-	layers := []Layer{{"global", global}, {"local", local}, {"config", bad}, {"config", syntax}, {"config", filepath.Join(dir, "missing.toml")}}
-	cfg := Load(context.Background(), layers, fakeRun)
+	cfg := Load(context.Background(), path, fakeRun)
 
-	if len(cfg.Layers) != 2 || len(cfg.Errors) != 3 {
-		t.Fatalf("layers %v, errors %q", cfg.Layers, cfg.Errors)
-	}
-	if !strings.HasPrefix(cfg.Errors[0], bad+": ") || !strings.Contains(cfg.Errors[0], "unknown") ||
-		!strings.HasPrefix(cfg.Errors[1], syntax+":3: ") || !strings.HasPrefix(cfg.Errors[2], filepath.Join(dir, "missing.toml")+": ") {
-		t.Fatalf("errors: %q", cfg.Errors)
+	if cfg.Path != path || len(cfg.Errors) != 0 {
+		t.Fatalf("path %q, errors %q", cfg.Path, cfg.Errors)
 	}
 	s := cfg.Settings
-	if s.Provider != "openai" || s.Model != "m2" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 ||
+	if s.Provider != "openai" || s.Model != "m1" || s.Effort != "medium" || s.CompactionThreshold != 1000 || s.BashTimeout != 5 || s.BashOutput != 2000 ||
 		s.UI.SlashMenu || !s.ReasoningSummary {
 		t.Fatalf("settings: %+v", s)
 	}
 	wantColors := DefaultColors()
 	wantColors.Set("accent", "#123456")
-	wantColors.Set("user", "#222222")
+	wantColors.Set("user", "#111111")
 	wantColors.Set("trace.bash", "#010203")
 	if s.Colors != wantColors {
 		t.Fatalf("colors: %v", s.Colors)
 	}
-	if p := s.Providers["openai"]; p.BaseURL != "http://localhost:1234" || p.APIKey != "" {
-		t.Fatalf("a later layer replaces the whole provider: %+v", p)
+	if p := s.Providers["openai"]; p.BaseURL != "https://api.openai.com/v1" || p.APIKey != "k-X:one" {
+		t.Fatalf("provider: %+v", p)
 	}
 	if s.Env["KEY"] != "k-X:one" || s.Env["OTHER"] != "k-X:one" {
 		t.Fatalf("env: %v", s.Env)
 	}
-	wantSrc := map[string]string{"provider": global, "model": local, "settings.compaction": global, "colors.accent": global,
-		"colors.user": local, "colors.trace.bash": local, "settings.bash_timeout": local, "settings.bash_output": local, "settings.slash_menu": local, "providers.openai": local, "env.KEY": global, "env.OTHER": local}
-	if !reflect.DeepEqual(cfg.Sources, wantSrc) {
-		t.Fatalf("sources = %v", cfg.Sources)
-	}
-	want := []Instruction{{"global X:hi", true, false, global}, {"headless only", false, true, global}, {"local", true, false, local}}
+	want := []Instruction{{"global X:hi", true, false}, {"headless only", false, true}}
 	if !reflect.DeepEqual(cfg.Instructions, want) {
 		t.Fatalf("instructions = %+v", cfg.Instructions)
 	}
 	hooks := cfg.Hooks["bash_before"]
-	if len(hooks) != 3 || hooks[0] != (Hook{Event: "bash_before", Run: "echo a", Main: true, Layer: global}) ||
-		hooks[1] != (Hook{Event: "bash_before", Run: "echo b", Match: "^git", Timeout: 1500 * time.Millisecond, Async: true, Main: true, Headless: true, Layer: global}) ||
-		hooks[2].Run != "echo c" || hooks[2].Layer != local || len(cfg.Hooks["idle"]) != 1 {
+	if len(hooks) != 2 || hooks[0] != (Hook{Event: "bash_before", Run: "echo a", Main: true}) ||
+		hooks[1] != (Hook{Event: "bash_before", Run: "echo b", Match: "^git", Timeout: 1500 * time.Millisecond, Async: true, Main: true, Headless: true}) ||
+		len(cfg.Hooks["idle"]) != 1 {
 		t.Fatalf("hooks = %+v", cfg.Hooks)
 	}
-	if cfg.Completions["fix"] != "local fix" {
+	if cfg.Completions["fix"] != "Fix ${{ x }}" {
 		t.Fatalf("completions = %v", cfg.Completions)
 	}
-	if len(cfg.Warnings) != 2 || !strings.Contains(cfg.Warnings[0], "completion #fix of "+local) ||
-		!strings.HasPrefix(cfg.Warnings[1], global+": colors.accent: ${{ fail }}: boom") {
+	if len(cfg.Warnings) != 1 || !strings.HasPrefix(cfg.Warnings[0], "colors.accent: ${{ fail }}: boom") {
 		t.Fatalf("warnings = %q", cfg.Warnings)
 	}
 	desc := cfg.Describe()
-	for _, part := range []string{"model", "m2", "api_key=empty", "Env: KEY, OTHER", "#fix", "bash_before: echo b [main, headless]",
-		`colors.trace.bash          = "#010203"       ` + DisplayPath(local), `colors.bg                  = ""`} {
+	for _, part := range []string{"model", "m1", "api_key=set", "Env: KEY, OTHER", "#fix", "bash_before: echo b [main, headless]",
+		`colors.trace.bash          = "#010203"`, `colors.bg                  = ""`} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("Describe lacks %q:\n%s", part, desc)
 		}
 	}
 
 	// Without an expander, the raw text stays; completions are always raw.
-	raw := Load(context.Background(), layers[:1], nil)
+	raw := Load(context.Background(), path, nil)
 	if raw.Instructions[0].Text != "global ${{ hi }}" || raw.Completions["fix"] != "Fix ${{ x }}" || len(raw.Warnings) != 0 {
 		t.Fatalf("raw: %+v", raw)
 	}
-	// A missing global file is fine; defaults apply.
-	def := Load(context.Background(), []Layer{{"global", filepath.Join(dir, "none.toml")}}, nil)
-	if len(def.Errors) != 0 || len(def.Layers) != 0 || !reflect.DeepEqual(def.Settings, DefaultSettings()) {
-		t.Fatalf("defaults: %+v", def)
+	// A file that cannot be read or is invalid gives the defaults and one error.
+	missing := filepath.Join(dir, "missing.toml")
+	for path, prefix := range map[string]string{bad: bad + ": ", syntax: syntax + ":3: ", missing: missing + ": "} {
+		c := Load(context.Background(), path, nil)
+		if len(c.Errors) != 1 || !strings.HasPrefix(c.Errors[0], prefix) || !reflect.DeepEqual(c.Settings, DefaultSettings()) {
+			t.Errorf("%s: %+v", path, c)
+		}
 	}
 	for _, content := range []string{
 		"[hooks]\nnope = \"x\"", "[hooks]\nidle = [{ run = \"x\", match = \"(\" }]", "[settings]\ncompaction = -1",
 		"[providers.x]\nbase_url = \"ftp://x\"", "instructions = [{ main = true }]", "[completions]\n\"a b\" = \"x\"",
+		"[settings]\naccent = \"#123456\"",
 	} {
 		writeFile(t, bad, content)
-		if c := Load(context.Background(), []Layer{{"config", bad}}, nil); len(c.Errors) != 1 || len(c.Layers) != 0 {
+		if c := Load(context.Background(), bad, nil); len(c.Errors) != 1 {
 			t.Errorf("%q: errors %q", content, c.Errors)
 		}
 	}
@@ -240,26 +219,17 @@ list = [
 base_url = "https://api.openai.com"
 `)
 	steps := []struct {
-		set   bool
 		key   string
 		value any
 	}{
-		{true, "settings.accent", "gr\"een\n"},
-		{true, "settings.slash_menu", false},
-		{true, "model", "m"},
-		{true, "env.FOO", "bar"},
-		{true, "providers.openai.api", "chat"},
-		{false, "providers.local", nil},
-		{false, "settings.compaction", nil},
+		{"settings.accent", "gr\"een\n"},
+		{"settings.slash_menu", false},
+		{"model", "m"},
+		{"env.FOO", "bar"},
+		{"providers.openai.api", "chat"},
 	}
 	for _, s := range steps {
-		var err error
-		if s.set {
-			err = SetKey(path, s.key, s.value)
-		} else {
-			err = DeleteKey(path, s.key)
-		}
-		if err != nil {
+		if err := SetKey(path, s.key, s.value); err != nil {
 			t.Fatalf("%s: %v", s.key, err)
 		}
 	}
@@ -269,10 +239,18 @@ model = "m"
 
 [settings] # ui
 accent = "gr\"een\n" # favourite
+compaction = 5
 note = """
 model = "fake"
 """
 slash_menu = false
+
+# local models
+[providers.local]
+base_url = "http://localhost"
+list = [
+  "x = 1",
+]
 
 # keep me
 [providers.openai]
@@ -292,9 +270,6 @@ FOO = "bar"
 	if err := SetKey(path, "settings.accent", "y"); err == nil || !strings.Contains(err.Error(), "edit it by hand") {
 		t.Fatalf("inline table: %v", err)
 	}
-	if err := DeleteKey(filepath.Join(t.TempDir(), "none.toml"), "model"); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestWatch(t *testing.T) {
@@ -302,13 +277,13 @@ func TestWatch(t *testing.T) {
 	watchInterval, watchSettle = 5*time.Millisecond, 20*time.Millisecond
 	defer func() { watchInterval, watchSettle = oldI, oldS }()
 	dir := t.TempDir()
-	a, b := filepath.Join(dir, "a.toml"), filepath.Join(dir, "b.toml")
+	a := filepath.Join(dir, "a.toml")
 	writeFile(t, a, "x = 1\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var calls atomic.Int32
 	done := make(chan struct{})
-	go func() { Watch(ctx, []string{a, b}, func() { calls.Add(1) }); close(done) }()
+	go func() { Watch(ctx, a, func() { calls.Add(1) }); close(done) }()
 	wait := func(n int32) {
 		t.Helper()
 		for deadline := time.Now().Add(2 * time.Second); calls.Load() < n; time.Sleep(5 * time.Millisecond) {
@@ -326,7 +301,7 @@ func TestWatch(t *testing.T) {
 	}
 	writeFile(t, a, "x = 2\n")
 	wait(1)
-	writeFile(t, b, "new") // appears
+	os.Remove(a) // disappears
 	wait(2)
 	time.Sleep(60 * time.Millisecond)
 	if calls.Load() != 2 {
@@ -380,31 +355,21 @@ func TestPortableHomePaths(t *testing.T) {
 
 // The documented examples must load without errors.
 func TestDocExamplesLoad(t *testing.T) {
-	for _, name := range []string{"global-zel.toml", "project-zel.toml"} {
-		path := filepath.Join("..", "..", "docs", "examples", name)
-		cfg := Load(context.Background(), []Layer{{Name: "config", Path: path}}, nil)
-		if len(cfg.Errors) > 0 || len(cfg.Layers) != 1 {
-			t.Errorf("%s: %v", name, cfg.Errors)
-		}
+	path := filepath.Join("..", "..", "docs", "examples", "config.toml")
+	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) > 0 {
+		t.Errorf("%s: %v", path, cfg.Errors)
 	}
 }
 
-// A bad color is a layer error; settings.accent still works as colors.accent, with a warning.
+// A bad color makes the file invalid.
 func TestColors(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{`[colors]` + "\naccent = \"red\"\n", "[colors]\nbg = \"#12345\"\n", "[colors]\nnope = \"#123456\"\n",
 		"[colors.trace]\nuser = 1\n", "[colors.trace]\nbg = \"#123456\"\n", "[colors]\naccent = \"\"\n"} {
 		path := filepath.Join(dir, "bad.toml")
 		writeFile(t, path, bad)
-		if cfg := Load(context.Background(), []Layer{{"config", path}}, nil); len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], "colors") {
+		if cfg := Load(context.Background(), path, nil); len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], "colors") {
 			t.Errorf("%q: errors %q", bad, cfg.Errors)
 		}
-	}
-	path := filepath.Join(dir, "old.toml")
-	writeFile(t, path, "[settings]\naccent = \"#80b3ad\"\n[colors]\nbg = \"\"\n")
-	cfg := Load(context.Background(), []Layer{{"config", path}}, nil)
-	if cfg.Settings.Colors.Get("accent") != "#80b3ad" || cfg.Sources["colors.accent"] != path || cfg.Sources["settings.accent"] != path ||
-		len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "colors.accent") || Validate(cfg.Settings) != nil {
-		t.Fatalf("settings.accent: %v %v %q", cfg.Settings.Colors, cfg.Sources, cfg.Warnings)
 	}
 }

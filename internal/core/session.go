@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"zel/internal/config"
@@ -22,7 +20,9 @@ func (s *session) sessionDir() string { return s.db.Dir(s.project, s.id) }
 
 func (s *session) lockPath() string { return filepath.Join(s.sessionDir(), "lock") }
 
-func (s *session) socketPath() string { return ipc.Path(filepath.Join(s.home, "run"), s.id) }
+func (s *session) socketPath() string {
+	return ipc.Path(filepath.Join(s.home, ".sessions", "run"), s.id)
+}
 
 // acquire takes the session lock, opens the session socket and starts the tasks.
 func (s *session) acquire() error {
@@ -160,20 +160,15 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
-// OnConfigChanged registers fn to run when a config file of the session changed
+// OnConfigChanged registers fn to run when the config file of the session changed
 // (hot reload); without it the session reloads at once. fn must not block.
 func (a *Runtime) OnConfigChanged(fn func()) { a.reloads.set(fn) }
 
-// startWatch follows the config files of the session for hot reload.
+// startWatch follows the config file of the session for hot reload.
 func (s *session) startWatch() {
-	files := []string{filepath.Join(s.home, "zel.toml"), filepath.Join(s.dir, "zel.toml")}
-	for _, l := range s.layers {
-		files = append(files, l.Path)
-	}
-	files = slices.Compact(slices.Sorted(slices.Values(files)))
 	ctx, cancel := context.WithCancel(context.Background())
 	s.stopWatch = cancel
-	go config.Watch(ctx, files, func() {
+	go config.Watch(ctx, s.path, func() {
 		if s.ended.Load() {
 			return
 		}
@@ -194,7 +189,7 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_DEPTH":      strconv.Itoa(s.depth),
 		"ZEL_SOCKET":     s.socketPath(),
 		"ZEL_TOKEN":      s.token,
-		"ZEL_CONFIG":     strings.Join(s.configPaths(), string(os.PathListSeparator)),
+		"ZEL_CONFIG":     s.path,
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session

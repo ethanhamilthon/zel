@@ -3,10 +3,8 @@ package tui
 import (
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -128,23 +126,6 @@ func markCodeTargets(text string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-// openLink hands a clicked link to the system opener.
-func openLink(target string) error {
-	opener := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		opener = "open"
-	}
-	if u, err := url.Parse(target); err == nil && u.Scheme == "file" {
-		target = u.Path
-	}
-	cmd := exec.Command(opener, target)
-	err := cmd.Start()
-	if err == nil {
-		go func() { _ = cmd.Wait() }()
-	}
-	return err
 }
 
 var (

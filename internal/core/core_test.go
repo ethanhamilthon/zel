@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,8 +19,6 @@ import (
 	"zel/internal/ipc"
 )
 
-// withLocal writes ./zel.toml of the session folder before the runtime starts.
-// Generated fixtures keep performance checks independent of private sessions.
 func TestContextProjectionInvalidation(t *testing.T) {
 	s := &session{History: []json.RawMessage{raw(map[string]any{"role": "user", "content": "first"})}}
 	initial := s.ContextTokens()
@@ -91,9 +90,11 @@ func BenchmarkImageContext(b *testing.B) {
 	}
 }
 
+// withLocal writes text as the config before the runtime starts; the test
+// provider is added to it.
 func withLocal(text string) func(home, dir string) {
 	return func(home, dir string) {
-		if err := os.WriteFile(filepath.Join(dir, "zel.toml"), []byte(text), 0600); err != nil {
+		if err := os.WriteFile(config.File(home), []byte(text), 0600); err != nil {
 			panic(err)
 		}
 	}
@@ -639,21 +640,22 @@ func TestSocketSessionAndView(t *testing.T) {
 func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	fp := okProvider()
 	a := newTestAgentWith(t, fp, Options{}, withLocal("instructions = [\"RULE-ONE\"]\n"))
-	local := filepath.Join(a.session().dir, "zel.toml")
+	local := a.ConfigFile()
 	if _, err := turn(t, a, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, local, "instructions = [\"RULE-ONE\"]\n[colors]\naccent = \"#aa00aa\"\n")
+	provider := "provider = \"p\"\nmodel = \"m\"\n[providers.p]\nbase_url = \"" + a.Settings().Providers["p"].BaseURL + "\"\n"
+	writeFile(t, local, "instructions = [\"RULE-ONE\"]\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || a.Settings().Colors.Get("accent") != "#aa00aa" || instructionItems(a) != 1 {
 		t.Fatalf("reload: %v accent %q, %d prompts", err, a.Settings().Colors.Get("accent"), instructionItems(a))
 	}
-	writeFile(t, local, "instructions = [\"RULE-TWO\"]\n[colors]\naccent = \"#aa00aa\"\n")
+	writeFile(t, local, "instructions = [\"RULE-TWO\"]\n"+provider+"[colors]\naccent = \"#aa00aa\"\n")
 	if err := a.Reload(); err != nil || instructionItems(a) != 2 {
 		t.Fatalf("reload: %v, %d prompts", err, instructionItems(a))
 	}
 	writeFile(t, local, "modle = \"typo\"\n")
 	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "modle") {
-		t.Fatalf("broken layer: %v", err)
+		t.Fatalf("broken file: %v", err)
 	}
 	writeFile(t, local, "[colors]\naccent = \"purple\"\n")
 	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") || !strings.Contains(err.Error(), "colors.accent") {
@@ -671,53 +673,22 @@ func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
 	}
 }
 
-func TestSettingsAreWrittenToTheLayerTheyComeFrom(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("model = \"local-model\"\n[settings]\nbash_timeout = 5\n"))
-	global, local := filepath.Join(a.Home(), "zel.toml"), filepath.Join(a.session().dir, "zel.toml")
-	read := func(path string) string {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(data)
-	}
-	if st := a.Settings(); st.Model != "local-model" || st.BashTimeout != 5 {
-		t.Fatalf("settings: %+v", st)
-	}
+func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("# mine\n[settings]\nbash_timeout = 5\n"))
 	if err := a.SelectSession(context.Background(), "p", "picked", "high"); err != nil {
 		t.Fatal(err)
 	}
-	g, l := read(global), read(local)
-	if !strings.Contains(l, `model = "picked"`) || strings.Contains(l, "effort") || strings.Contains(l, "provider") ||
-		!strings.Contains(g, `model = "m"`) || !strings.Contains(g, `effort = "high"`) {
-		t.Fatalf("model change:\nglobal:\n%s\nlocal:\n%s", g, l)
-	}
-	next := a.Settings()
-	if next.Model != "picked" || next.Effort != "high" {
-		t.Fatalf("selection: %+v", next)
-	}
-	// the old settings.accent gives way to colors.accent in its file
-	if err := config.SetKey(global, "settings.accent", "#111111"); err != nil || a.Reload() != nil || a.Settings().Colors.Get("accent") != "#111111" {
-		t.Fatalf("settings.accent: %v %q", err, a.Settings().Colors.Get("accent"))
-	}
-	next = a.Settings()
-	next.Colors.Set("accent", "#aa00aa")
-	next.BashTimeout = 9
-	if err := a.UpdateSettings(next); err != nil {
+	data, err := os.ReadFile(config.File(a.Home()))
+	if err != nil {
 		t.Fatal(err)
 	}
-	g, l = read(global), read(local)
-	if !strings.Contains(g, "[colors]\naccent = \"#aa00aa\"") || strings.Contains(g, "#111111") || strings.Contains(l, "accent") ||
-		!strings.Contains(l, "bash_timeout = 9") || strings.Contains(g, "bash_timeout") {
-		t.Fatalf("settings change:\nglobal:\n%s\nlocal:\n%s", g, l)
+	got := string(data)
+	if !strings.Contains(got, `model = "picked"`) || !strings.Contains(got, `effort = "high"`) || !strings.Contains(got, "# mine\n") ||
+		!strings.Contains(got, "bash_timeout = 5") {
+		t.Fatalf("config:\n%s", got)
 	}
-	if st := a.Settings(); st.Colors.Get("accent") != "#aa00aa" || st.BashTimeout != 9 || st.Model != "picked" {
-		t.Fatalf("after update: %+v", st)
-	}
-	bad := a.Settings()
-	bad.BashTimeout = 0
-	if err := a.UpdateSettings(bad); err == nil {
-		t.Fatal("invalid settings accepted")
+	if st := a.Settings(); st.Model != "picked" || st.Effort != "high" || st.BashTimeout != 5 {
+		t.Fatalf("selection: %+v", st)
 	}
 }
 
@@ -806,7 +777,7 @@ func TestSessionRoundTripThroughResume(t *testing.T) {
 		return out
 	}
 	before, id := texts(), a.SessionID()
-	file := filepath.Join(a.Home(), "sessions", strings.ReplaceAll(filepath.Clean(a.Project()), string(filepath.Separator), "-"), id, "session.jsonl")
+	file := filepath.Join(a.Home(), ".sessions", strings.ReplaceAll(filepath.Clean(a.Project()), string(filepath.Separator), "-"), id, "session.jsonl")
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +856,7 @@ func TestLifecycleHooks(t *testing.T) {
 		"turn_end {\"answer\":\"ok\",\"running\":[]}\n",
 		"error {\"kind\":\"turn\",\"message\":",
 		"model_changed {\"effort\":\"low\",\"model\":\"other\",\"provider\":\"p\"}\n",
-		"config_changed {\"error\":\"\",\"files\":[",
+		"config_changed {\"error\":\"\",\"file\":\"",
 		"session_closed {\"reason\":\"new\"}\n",
 		"session_closed {\"reason\":\"resume\"}\n",
 		"session_resumed {}\n",
@@ -902,16 +873,26 @@ func TestLifecycleHooks(t *testing.T) {
 	}
 }
 
-func TestChildUsesTheLayersAndModelOfItsParent(t *testing.T) {
-	extra := filepath.Join(t.TempDir(), "extra.toml")
-	writeFile(t, extra, "[env]\nFROM_EXTRA = \"yes\"\n")
-	parent := newTestAgent(t, okProvider(), Options{Configs: []string{extra}})
+func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
+	server := httptest.NewServer(okProvider())
+	t.Cleanup(server.Close)
+	home := t.TempDir()
+	isolate(t, home)
+	extra := filepath.Join(t.TempDir(), "other.toml")
+	writeFile(t, extra, "provider = \"p\"\nmodel = \"m\"\n[env]\nFROM_EXTRA = \"yes\"\n[providers.p]\nbase_url = \""+server.URL+"\"\n")
+	parent, err := New(t.TempDir(), Options{Config: extra})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
 	if err := parent.ConfigureSession(context.Background(), "p", "parent-model", "low"); err != nil {
 		t.Fatal(err)
 	}
-	files := parent.ConfigFiles()
-	if len(files) != 2 || files[1] != extra {
-		t.Fatalf("parent layers: %v", files)
+	if parent.ConfigFile() != extra {
+		t.Fatalf("parent config: %v", parent.ConfigFile())
+	}
+	if _, err := os.Stat(config.File(home)); err == nil {
+		t.Fatal("--config must not create the default config")
 	}
 	for k, v := range parent.session().baseEnv() {
 		if k != "PATH" {
@@ -924,33 +905,22 @@ func TestChildUsesTheLayersAndModelOfItsParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := child.Settings()
-	if !slices.Equal(child.ConfigFiles(), files) || st.Env["FROM_EXTRA"] != "yes" || st.Model != "parent-model" || st.Effort != "low" {
-		t.Fatalf("child: layers %v, settings %+v", child.ConfigFiles(), st)
+	if child.ConfigFile() != extra || st.Env["FROM_EXTRA"] != "yes" || st.Model != "parent-model" || st.Effort != "low" {
+		t.Fatalf("child: config %v, settings %+v", child.ConfigFile(), st)
 	}
 	if _, err := turn(t, child, "work"); err != nil {
 		t.Fatal(err)
 	}
-	id := child.SessionID()
 	child.Close()
-	// Resume takes the layers from the session file.
-	t.Setenv("ZEL_CONFIG", "")
-	again, err := New(elsewhere, Options{Mode: "headless", Resume: id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer again.Close()
-	if st := again.Settings(); !slices.Equal(again.ConfigFiles(), files) || st.Env["FROM_EXTRA"] != "yes" || st.Model != "parent-model" {
-		t.Fatalf("resumed child: layers %v, settings %+v", again.ConfigFiles(), st)
-	}
 }
 
-func TestConfigWatchAndBrokenLayerAtStart(t *testing.T) {
+func TestConfigWatchAndBrokenFileAtStart(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("model = 1\n"))
-	if st := a.Settings(); st.Model != "m" {
-		t.Fatalf("broken local layer applied: %+v", st)
+	if st := a.Settings(); st.Model != "" {
+		t.Fatalf("a broken config was applied: %+v", st)
 	}
-	if data, _ := os.ReadFile(a.session().eventsLog()); !strings.Contains(string(data), "zel.toml skipped") || !strings.Contains(string(data), "model: must be a string") {
-		t.Fatalf("no notice for the broken layer: %s", data)
+	if data, _ := os.ReadFile(a.session().eventsLog()); !strings.Contains(string(data), "config skipped") || !strings.Contains(string(data), "model: must be a string") {
+		t.Fatalf("no notice for the broken file: %s", data)
 	}
 	changed := make(chan struct{}, 1)
 	a.OnConfigChanged(func() {
@@ -962,9 +932,7 @@ func TestConfigWatchAndBrokenLayerAtStart(t *testing.T) {
 	// The watcher takes its first look in the background, so a change made at
 	// once may be part of it: change the file again until it is noticed.
 	for i := 0; ; i++ {
-		if err := config.SetKey(filepath.Join(a.Home(), "zel.toml"), "env.WATCH", fmt.Sprint("value", i)); err != nil {
-			t.Fatal(err)
-		}
+		writeFile(t, a.ConfigFile(), fmt.Sprintf("[env]\nWATCH = \"value%d\"\n", i))
 		select {
 		case <-changed:
 			return
@@ -1084,26 +1052,6 @@ func TestZelCdSetsTheFolderOfBashAndTasksAndSurvivesResume(t *testing.T) {
 	s = a.session()
 	if pwd() != real(start) {
 		t.Fatalf("gone folder pwd = %s", pwd())
-	}
-}
-
-func TestChildInAnotherFolderLoadsItsProjectLayer(t *testing.T) {
-	parent := newTestAgent(t, okProvider(), Options{})
-	for k, v := range parent.session().baseEnv() {
-		if k != "PATH" {
-			t.Setenv(k, v)
-		}
-	}
-	elsewhere := t.TempDir()
-	writeFile(t, filepath.Join(elsewhere, "zel.toml"), "[env]\nFROM_FOLDER = \"yes\"\n")
-	child, err := New(elsewhere, Options{Mode: "headless"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer child.Close()
-	files := child.ConfigFiles()
-	if child.Settings().Env["FROM_FOLDER"] != "yes" || files[len(files)-1] != filepath.Join(elsewhere, "zel.toml") {
-		t.Fatalf("layers %v, env %v", files, child.Settings().Env)
 	}
 }
 

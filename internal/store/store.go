@@ -1,5 +1,5 @@
 // Package store keeps sessions as files: one folder per session under
-// ~/.zel/sessions/<project key>/<id>/ with an append-only session.jsonl, a
+// ~/.zel/.sessions/<project key>/<id>/ with an append-only session.jsonl, a
 // meta.json cache for the session list, tasks.jsonl and the task logs.
 package store
 
@@ -20,14 +20,14 @@ var ErrNotFound = errors.New("session not found")
 // Store is the sessions folder of one zel home. It is safe for concurrent use;
 // one session is written by one process at a time (the caller holds its lock).
 type Store struct {
-	Root string // ~/.zel/sessions
+	Root string // ~/.zel/.sessions
 
 	mu   sync.Mutex
 	last map[string]Session // what the session file says now, by session dir
 }
 
 func Open(home string) (*Store, error) {
-	root := filepath.Join(home, "sessions")
+	root := filepath.Join(home, ".sessions")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
@@ -52,7 +52,6 @@ type Session struct {
 	Provider, Model, Effort   string
 	Parent, Mode              string
 	Depth                     int
-	Config                    []string
 	BashCwd                   string // zel cd; empty = the session folder
 	Created, Updated          time.Time
 }
@@ -73,7 +72,6 @@ type line struct {
 	Depth    int             `json:"depth,omitempty"`
 	Mode     string          `json:"mode,omitempty"`
 	Created  *time.Time      `json:"created,omitempty"`
-	Config   []string        `json:"config,omitempty"`
 	Provider string          `json:"provider,omitempty"`
 	Model    string          `json:"model,omitempty"`
 	Effort   string          `json:"effort,omitempty"`
@@ -123,7 +121,7 @@ func (s *Store) Load(project, id string) (Session, []Item, error) {
 			if json.Unmarshal(raw, &l) == nil {
 				switch l.T {
 				case "session":
-					v = Session{ID: l.ID, Project: l.Cwd, Parent: l.Parent, Depth: l.Depth, Mode: l.Mode, Config: l.Config,
+					v = Session{ID: l.ID, Project: l.Cwd, Parent: l.Parent, Depth: l.Depth, Mode: l.Mode,
 						Provider: l.Provider, Model: l.Model, Effort: l.Effort}
 					if l.Created != nil {
 						v.Created = *l.Created
@@ -202,7 +200,7 @@ func (s *Store) Append(v Session, items []Item, saved, total int) error {
 			created = time.Now().UTC()
 		}
 		_ = enc.Encode(line{T: "session", V: 1, ID: v.ID, Cwd: v.Project, Parent: v.Parent, Depth: v.Depth, Mode: v.Mode,
-			Created: &created, Config: v.Config, Provider: v.Provider, Model: v.Model, Effort: v.Effort})
+			Created: &created, Provider: v.Provider, Model: v.Model, Effort: v.Effort})
 		prev = Session{Provider: v.Provider, Model: v.Model, Effort: v.Effort}
 	}
 	if v.Title != prev.Title {

@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"zel/internal/config"
 	"zel/internal/entities"
 
 	"github.com/gdamore/tcell/v2"
@@ -20,7 +20,7 @@ func testApp(t *testing.T) *app {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	if err := os.WriteFile(filepath.Join(home, "zel.toml"), []byte("[completions]\nplan=\"expanded\"\n"), 0600); err != nil {
+	if err := os.WriteFile(config.File(home), []byte("[completions]\nplan=\"expanded\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})
@@ -115,29 +115,20 @@ func TestCompletionAndStaleAsyncResults(t *testing.T) {
 		t.Fatal("cancelled turn is invisible")
 	}
 }
-func TestMouseCopyAndChoiceClick(t *testing.T) {
+func TestChoiceAnsweredWithTheKeyboard(t *testing.T) {
 	m := testApp(t)
-	m.records = []core.Record{{Kind: "user", Text: "copy these words"}}
-	m.draw()
-	m.mouse(tcell.NewEventMouse(0, 0, tcell.Button1, 0))
-	m.mouse(tcell.NewEventMouse(3, 0, tcell.Button1, 0))
-	m.mouse(tcell.NewEventMouse(3, 0, tcell.ButtonNone, 0))
-	if text := string(m.screen.(tcell.SimulationScreen).GetClipboardData()); text != "copy" {
-		t.Fatalf("copied %q", text)
-	}
-	m.selected = nil
-	_, err := m.runtime.Ask("Pick", []string{"A", "B"})
-	if err != nil {
+	if _, err := m.runtime.Ask("Pick", []string{"A", "B"}); err != nil {
 		t.Fatal(err)
 	}
 	m.syncChoice()
 	m.draw()
-	m.mouse(tcell.NewEventMouse(3, m.inputY+2, tcell.Button1, 0))
+	m.key(tcell.NewEventKey(tcell.KeyDown, 0, 0))
+	m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0))
 	if m.choice != nil {
-		t.Fatal("mouse did not answer")
+		t.Fatal("the choice stays open")
 	}
 	if r := m.records[len(m.records)-1]; r.Text != "Pick"+entities.ChoiceSeparator+"B" {
-		t.Fatalf("mouse answered %+v", r)
+		t.Fatalf("answered %+v", r)
 	}
 }
 
@@ -162,8 +153,8 @@ func TestInputFollowsChat(t *testing.T) {
 		inputY  int
 	}{
 		{name: "empty"},
-		{name: "user", records: []core.Record{{Kind: "user", Text: "hello"}}, inputY: 3},
-		{name: "assistant", records: []core.Record{{Kind: "assistant", Text: "hello"}}, inputY: 4},
+		{name: "user", records: []core.Record{{Kind: "user", Text: "hello"}}, inputY: 2},
+		{name: "assistant", records: []core.Record{{Kind: "assistant", Text: "hello"}}, inputY: 3},
 		{name: "pending", pending: "hello", inputY: 2},
 		{name: "working", tasks: []core.ActiveTask{{Name: "Running task", Started: time.Now()}}, inputY: 2},
 	} {
@@ -175,13 +166,11 @@ func TestInputFollowsChat(t *testing.T) {
 			for _, height := range []int{20, 40} {
 				s.SetSize(60, height)
 				m.draw()
-				if m.inputY != tc.inputY {
-					t.Fatalf("height %d: input at %d, want %d", height, m.inputY, tc.inputY)
+				x, y, visible := s.GetCursor() // the cursor is on the first line of the input
+				if !visible || x != 5 || y != tc.inputY {
+					t.Fatalf("height %d: cursor at %d,%d (visible %v), want 5,%d", height, x, y, visible, tc.inputY)
 				}
-				if x, y, visible := s.GetCursor(); !visible || x != 6 || y != m.inputY {
-					t.Fatalf("cursor at %d,%d, visible %v", x, y, visible)
-				}
-				for y := m.inputY + m.inputHeight; y < height; y++ {
+				for y := y + 1; y < height; y++ {
 					for x := range 60 {
 						if text, _, _ := s.Get(x, y); strings.TrimSpace(text) != "" {
 							t.Fatalf("unexpected footer at %d,%d: %q", x, y, text)
@@ -208,9 +197,6 @@ func TestComposerScrollsWithHistory(t *testing.T) {
 	if _, _, visible := screen.GetCursor(); visible {
 		t.Fatal("composer should scroll out with the timeline")
 	}
-	if m.inputY < 20 {
-		t.Fatalf("composer pinned at %d", m.inputY)
-	}
 	m.editKey(tcell.NewEventKey(tcell.KeyRune, 'X', 0))
 	m.draw()
 	if _, _, visible := screen.GetCursor(); !visible {
@@ -236,8 +222,16 @@ func TestTinyScreenAndChoiceEditor(t *testing.T) {
 		s.SetSize(size[0], size[1])
 		m.draw()
 	}
-	m.menu = &menu{page: "form", title: "Edit", form: &form{kind: "provider", fields: []string{"Key"}, values: []string{""}}}
-	m.draw()
+	m.menu = &menu{page: "form", title: "Edit", form: &form{kind: "rename", fields: []string{"Title"}, values: []string{""}}}
+	for _, size := range [][2]int{{1, 1}, {2, 3}, {12, 8}, {60, 20}} {
+		s.SetSize(size[0], size[1])
+		m.draw()
+	}
+	m.openMenu("main")
+	for _, size := range [][2]int{{1, 1}, {2, 3}, {12, 8}, {60, 20}} {
+		s.SetSize(size[0], size[1])
+		m.draw()
+	}
 }
 
 func TestStyledRows(t *testing.T) {
@@ -252,9 +246,6 @@ func TestStyledRows(t *testing.T) {
 	fg, bg, _ := rows[0][1].style.Decompose()
 	if fg != tcell.NewRGBColor(255, 0, 0) || bg != tcell.ColorBlack {
 		t.Fatalf("colors: %v %v", fg, bg)
-	}
-	if rows[1][0].link != "https://example.com" || rows[2][0].link != "" {
-		t.Fatal("hyperlink boundary")
 	}
 	rows = styledRows("a\x1b[2Jb\x1b]52;c;malicious\a", 4, base)
 	if rowText(rows[0]) != "ab" {
@@ -312,13 +303,6 @@ func TestSearchKeepsActionIdentity(t *testing.T) {
 		t.Fatal("empty search selected an action")
 	}
 }
-func TestSelectionWideTextAndReverseDrag(t *testing.T) {
-	rows := plainRows("a界b\nnext", 20, agentColor)
-	s := selection{rows: rows, start: point{2, 1}, end: point{1, 0}}
-	if got := s.text(); got != "界b\nnex" {
-		t.Fatalf("selection: %q", got)
-	}
-}
 func TestFileTokensAndPaths(t *testing.T) {
 	text := "Read @\"my file.go\" please"
 	token, ok := findFileToken(text, len([]rune("Read @\"my")))
@@ -370,17 +354,10 @@ func TestEventQueueOrderingAndOverflow(t *testing.T) {
 	}
 }
 func TestFormattingAndValidation(t *testing.T) {
-	for _, f := range []*form{{kind: "provider", values: []string{"wrong", "https://example.com", "key", "name"}}, {kind: "provider", values: []string{"responses", "file:///tmp", "key", "name"}}, {kind: "model", fields: []string{"Provider"}, values: []string{""}}} {
-		bad := false
-		for i := range f.values {
-			if validateField(f, i) != nil {
-				bad = true
-				break
-			}
-		}
-		if !bad {
-			t.Fatal("accepted an invalid form")
-		}
+	m := testApp(t)
+	if m.checkField(&form{kind: "model", fields: []string{"Provider"}, values: []string{""}}, 0) == "" ||
+		m.checkField(&form{kind: "model", fields: []string{"Provider"}, values: []string{"nope"}}, 0) == "" {
+		t.Fatal("accepted an invalid model form")
 	}
 	text, ok := renderMarkdown("# Heading\n\n**bold** and `code`\n\n- item", 30, false)
 	if !ok || !strings.Contains(text, "Heading") || !strings.Contains(text, "item") {
@@ -394,5 +371,100 @@ func TestFormattingAndValidation(t *testing.T) {
 		if w > 30 {
 			t.Fatal("markdown overflow")
 		}
+	}
+}
+
+// text is what the screen shows, row by row.
+func screenRows(m *app) []string {
+	w, h := m.screen.Size()
+	var rows []string
+	for y := range h {
+		var b strings.Builder
+		for x := 0; x < w; x++ {
+			c, _, width := m.screen.Get(x, y)
+			b.WriteString(c)
+			x += max(0, width-1)
+		}
+		rows = append(rows, strings.TrimRight(b.String(), " "))
+	}
+	return rows
+}
+
+func TestMenuIsCenteredInTwoColumnsWithoutHints(t *testing.T) {
+	m := testApp(t)
+	s := m.screen.(tcell.SimulationScreen)
+	s.SetSize(80, 24)
+	m.openMenu("main")
+	m.draw()
+	rows := screenRows(m)
+	first, last := -1, -1
+	left, right := 80, 0
+	for y, row := range rows {
+		if strings.TrimSpace(row) == "" {
+			continue
+		}
+		if first < 0 {
+			first = y
+		}
+		last = y
+		left = min(left, len(row)-len(strings.TrimLeft(row, " ")))
+		right = max(right, len([]rune(row)))
+		if strings.Contains(row, "select") || strings.Contains(row, "Esc") || strings.Contains(row, "Enter") || strings.Contains(row, "·") {
+			t.Fatalf("a hint or a separator is left: %q", row)
+		}
+	}
+	if top, bottom := first, 24-1-last; abs(top-bottom) > 1 {
+		t.Fatalf("not centered vertically: %d above, %d below\n%s", top, bottom, strings.Join(rows, "\n"))
+	}
+	if l, r := left, 80-right; abs(l-r) > 3 {
+		t.Fatalf("not centered horizontally: %d left, %d right", l, r)
+	}
+	var resume, quit string
+	for _, row := range rows {
+		if strings.Contains(row, "Resume") {
+			resume = row
+		}
+		if strings.Contains(row, "Quit") {
+			quit = row
+		}
+	}
+	if strings.Index(resume, "Ctrl+R") != strings.Index(quit, "Ctrl+Q") || strings.Index(resume, "Ctrl+R") < strings.Index(resume, "Resume")+len("New session") {
+		t.Fatalf("hotkeys are not one column:\n%q\n%q", resume, quit)
+	}
+	if !strings.HasSuffix(resume, "Ctrl+R ‹") || strings.Contains(quit, "‹") || strings.Contains(resume, "›") {
+		t.Fatalf("the arrow is on the right of the selected row only: %q %q", resume, quit)
+	}
+}
+
+func abs(n int) int { return max(n, -n) }
+
+func TestCompletionPanelAndComposerSpacing(t *testing.T) {
+	m := testApp(t)
+	s := m.screen.(tcell.SimulationScreen)
+	s.SetSize(40, 12)
+	m.records = []core.Record{{Kind: "user", Text: "hi"}}
+	m.input.set("#pl")
+	m.updateCompletions()
+	m.draw()
+	rows := screenRows(m)
+	// hi, empty, the input (no left padding), empty, the panel row with the arrow on the right
+	if rows[0] != "hi" || rows[1] != "" || rows[2] != "#pl" || rows[3] != "" || rows[4] != "#plan ‹" {
+		t.Fatalf("layout:\n%q", rows[:6])
+	}
+}
+
+func TestWorkingRowColorsAndSingleLine(t *testing.T) {
+	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
+	r := workingRow(status, 2, true, 40)
+	text := rowText(r)
+	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 steps") {
+		t.Fatalf("%d wide: %q", w, text)
+	}
+	fg := func(c span) tcell.Color { f, _, _ := c.style.Decompose(); return f }
+	if len(r) != 2 || fg(r[0]) != tcell.GetColor(string(accentColor)) || fg(r[1]) != tcell.GetColor(string(darkGray)) {
+		t.Fatalf("the star and the time are accent, what runs is dark gray: %+v", r)
+	}
+	if hidden := rowText(workingRow(status, 2, false, 40)); strings.Contains(hidden, "go test") {
+		t.Fatalf("show_bash = false must hide the command: %q", hidden)
 	}
 }

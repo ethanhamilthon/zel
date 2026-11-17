@@ -69,7 +69,7 @@ func CheckColor(key, value string) error {
 }
 
 // colors reads [colors] and its [colors.trace] table.
-func (p parser) colors(lc *layerConf, v any) error {
+func (p *parser) colors(v any) error {
 	m, err := asTable(v, "colors")
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func (p parser) colors(lc *layerConf, v any) error {
 					return err
 				}
 			}
-			lc.settings = append(lc.settings, setting{"colors." + key, func(st *Settings) { st.Colors.Set(key, s) }})
+			p.cfg.Settings.Colors.Set(key, s)
 		}
 		return nil
 	}

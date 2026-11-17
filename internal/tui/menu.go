@@ -48,7 +48,6 @@ func (l *list) current() (item, bool) {
 	return v[l.selected], true
 }
 
-type menuRow struct{ label, detail string }
 type menu struct {
 	page, title               string
 	list                      list
@@ -79,28 +78,27 @@ const keyboardHelp = `Ctrl+K: menu · Ctrl+M: models · Ctrl+R: sessions
 Ctrl+N: new session · Ctrl+I: info · Ctrl+T: tracing
 Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline
 Ctrl+D: cancel · Ctrl+Q: save and quit · Ctrl+L: redraw
-Ctrl+V: paste text or an image
 Up on empty input: recall a queued message
 Editing a queued message withdraws it
 @files and #prompts: arrows select, Tab or Enter completes
-PgUp/PgDn or mouse wheel: scroll
-Drag chat text to select; Ctrl+C copies
-Shift+drag: native terminal selection
-Ctrl+click: open a link
+PgUp/PgDn: scroll the chat; Up/Down scroll it when the input is one line
 Esc: go back or dismiss
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.
-Configuration reloads automatically. Commands run with your user permissions.`
+The config file (~/.zel/config.toml) reloads automatically.
+Commands run with your user permissions.`
+
+var pageTitles = map[string]string{"sessions": "Sessions", "models": "Models", "effort": "Effort", "trace": "Tracing", "info": "Info", "help": "Help"}
 
 func (m *app) openMenu(page string) {
 	m.resetCompletions()
-	m.menu = &menu{page: page, title: "Menu / " + page}
+	m.menu = &menu{page: page, title: pageTitles[page]}
 	mu := m.menu
 	s := m.ctl.Settings()
 	switch page {
 	case "main":
 		mu.title = "Zel " + Version
-		mu.list.items = []item{{"Resume", "Ctrl+R", "sessions"}, {"New session", "Ctrl+N", "new"}, {"Models", "Ctrl+M", "models"}, {"Tracing", "Ctrl+T", "trace"}, {"Rename", "", "rename"}, {"Info", "Ctrl+I", "info"}, {"Help", "", "help"}, {"Providers", "Add, edit, remove", "providers"}, {"Settings", "", "settings"}, {"Quit", "Ctrl+Q", "quit"}}
+		mu.list.items = []item{{"Resume", "Ctrl+R", "sessions"}, {"New session", "Ctrl+N", "new"}, {"Models", "Ctrl+M", "models"}, {"Tracing", "Ctrl+T", "trace"}, {"Rename", "", "rename"}, {"Info", "Ctrl+I", "info"}, {"Help", "", "help"}, {"Quit", "Ctrl+Q", "quit"}}
 	case "models":
 		m.modelItems()
 		m.fetchModels()
@@ -111,13 +109,6 @@ func (m *app) openMenu(page string) {
 				mu.list.selected = len(mu.list.items) - 1
 			}
 		}
-	case "providers":
-		for _, name := range slices.Sorted(maps.Keys(s.Providers)) {
-			mu.list.items = append(mu.list.items, item{name, s.Providers[name].BaseURL, name})
-		}
-		mu.list.items = append(mu.list.items, item{label: "Add provider…", id: "add"})
-	case "settings":
-		m.settingItems()
 	case "help":
 		mu.body = keyboardHelp
 	case "sessions", "trace", "info":
@@ -186,9 +177,7 @@ func (m *app) loadPage() {
 			if err != nil {
 				return out, err
 			}
-			for _, r := range infoRows(info) {
-				out.body += r.label + " " + r.detail + "\n"
-			}
+			out.body = infoText(info)
 		case "trace":
 			out.trace = m.ctl.Trace()
 			for i, t := range out.trace {
@@ -278,10 +267,6 @@ func (m *app) menuKey(k *tcell.EventKey) {
 			switch mu.page {
 			case "entry":
 				parent = "trace"
-			case "provider", "confirm":
-				parent = "providers"
-			case "accent":
-				parent = "settings"
 			case "effort":
 				parent = "models"
 			}

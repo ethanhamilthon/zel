@@ -23,7 +23,7 @@ type Options struct {
 	Mode                    string               // tui or headless; see session.mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
-	Configs                 []string             // --config files, layered over ~/.zel/zel.toml and ./zel.toml
+	Config                  string               // absolute path of --config, used instead of ~/.zel/config.toml
 	Prompt                  string               // headless: the prompt, shown in the parent's row of a child
 	SessionReady            func(*Runtime) error // May persist and announce the session.
 }
@@ -51,66 +51,65 @@ type Runtime struct {
 // session is the owned state of one Zel session. It is never overwritten in
 // place when switching sessions.
 type session struct {
-	opts          Options
-	home          string
-	dir           string
-	db            *store.Store // shared handle; never cleared so late callers see closed DB cleanly
-	project       string
-	id            string
-	created       time.Time
-	cfg           *settingsState
-	conf          *confHolder
-	layers        []config.Layer
-	token         string      // key of the session socket
-	sock          *ipc.Server // nil until the session is acquired
-	stopWatch     func()
-	changes       *notifier
-	reloads       *notifier
-	parent        *parentLink // set when this is a zel -p started from another session
-	childMu       sync.Mutex
-	children      map[string]SubagentRun // zel -p children that run now, by session ID
-	childPIDs     map[string]int
-	hookWG        sync.WaitGroup // async hooks
-	hookMu        sync.Mutex
-	hookCtx       context.Context
-	stopHooks     context.CancelFunc
-	outputMu      sync.Mutex // numbers the files of cut bash outputs
-	bashMu        sync.Mutex
-	bashDir       string // zel cd: where bash calls and tasks start; empty = dir
-	turning       atomic.Bool
-	idleSent      atomic.Bool
-	histMu        sync.RWMutex
-	saveMu        sync.Mutex
-	logMu         sync.Mutex
-	traceMu       sync.Mutex
-	traceSize     int64
-	traceMod      time.Time
-	traceCache    []TraceEntry
-	History       []json.RawMessage
-	cacheMu       sync.Mutex
-	projections   []historyProjection
-	firstLine     string
-	metaVersion   uint64
-	itemMeta      map[int]*Metadata
-	saved         int
-	stored        bool
-	owner         *os.File
-	prompt        string
-	promptFrozen  bool
-	title         string
-	lastRequest   Metadata
-	requestedLen  int        // History length when lastRequest was sent
-	compacted     compaction // latest automatic compaction boundaries
-	imageWarnings []Record
-	choices       []store.Choice // answered questions shown in the chat, by history position
-	ask           *chooser       // the questions of zel choice the UI shows
-	depth         int            // zel -p nesting depth: 0 for a session you started
-	acts          *activities    // foreground host operations in progress
-	queue         *Steering
-	slots         *imageSlots
-	tasks         *tasks
-	liveSteps     map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
-	ended         atomic.Bool
+	opts         Options
+	home         string
+	dir          string
+	db           *store.Store // shared handle; never cleared so late callers see closed DB cleanly
+	project      string
+	id           string
+	created      time.Time
+	cfg          *settingsState
+	conf         *confHolder
+	path         string      // the config file
+	token        string      // key of the session socket
+	sock         *ipc.Server // nil until the session is acquired
+	stopWatch    func()
+	changes      *notifier
+	reloads      *notifier
+	parent       *parentLink // set when this is a zel -p started from another session
+	childMu      sync.Mutex
+	children     map[string]SubagentRun // zel -p children that run now, by session ID
+	childPIDs    map[string]int
+	hookWG       sync.WaitGroup // async hooks
+	hookMu       sync.Mutex
+	hookCtx      context.Context
+	stopHooks    context.CancelFunc
+	outputMu     sync.Mutex // numbers the files of cut bash outputs
+	bashMu       sync.Mutex
+	bashDir      string // zel cd: where bash calls and tasks start; empty = dir
+	turning      atomic.Bool
+	idleSent     atomic.Bool
+	histMu       sync.RWMutex
+	saveMu       sync.Mutex
+	logMu        sync.Mutex
+	traceMu      sync.Mutex
+	traceSize    int64
+	traceMod     time.Time
+	traceCache   []TraceEntry
+	History      []json.RawMessage
+	cacheMu      sync.Mutex
+	projections  []historyProjection
+	firstLine    string
+	metaVersion  uint64
+	itemMeta     map[int]*Metadata
+	saved        int
+	stored       bool
+	owner        *os.File
+	prompt       string
+	promptFrozen bool
+	title        string
+	lastRequest  Metadata
+	requestedLen int            // History length when lastRequest was sent
+	compacted    compaction     // latest automatic compaction boundaries
+	choices      []store.Choice // answered questions shown in the chat, by history position
+	ask          *chooser       // the questions of zel choice the UI shows
+	depth        int            // zel -p nesting depth: 0 for a session you started
+	acts         *activities    // foreground host operations in progress
+	queue        *Steering
+	slots        *imageSlots
+	tasks        *tasks
+	liveSteps    map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
+	ended        atomic.Bool
 }
 
 func (a *Runtime) session() *session {
@@ -129,6 +128,11 @@ func New(dir string, opts Options) (*Runtime, error) {
 	}
 	if opts.Mode == "" {
 		opts.Mode = "tui"
+	}
+	if opts.Config == "" {
+		if err := config.EnsureHome(home); err != nil {
+			return nil, err
+		}
 	}
 	a := &Runtime{opts: opts, home: home, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
 	if opts.Mode == "headless" {
@@ -184,7 +188,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 
 func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) *session {
 	hookCtx, stopHooks := context.WithCancel(context.Background())
-	return &session{
+	s := &session{
 		hookCtx: hookCtx, stopHooks: stopHooks,
 		opts:    a.opts,
 		home:    a.home,
@@ -202,9 +206,9 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		conf:    &confHolder{notice: notice},
 		acts:    &activities{},
 	}
+	s.path = s.configFile()
+	return s
 }
-
-// ReloadConfig reads the zel.toml layers again; the session's model selection stays.
 
 func raw(v any) json.RawMessage { data, _ := json.Marshal(v); return data }
 
@@ -232,10 +236,6 @@ func (a *Runtime) RunInput(ctx context.Context, input Input, emit func(TurnEvent
 }
 
 func (s *session) RunInput(ctx context.Context, input Input, emit func(TurnEvent)) (err error) {
-	input, err = s.stageInput(input)
-	if err != nil {
-		return err
-	}
 	started, turnSeq := time.Now(), -1
 	s.turning.Store(true)
 	s.idleSent.Store(false)

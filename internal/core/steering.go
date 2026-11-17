@@ -2,12 +2,10 @@ package core
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"zel/internal/entities"
 	"zel/internal/shell"
 )
 
@@ -37,25 +35,13 @@ func (s *session) commitInput(input Input) {
 		s.message("user", text)
 		return
 	}
-	parts := []any{map[string]any{"type": "input_text", "text": text + imageOriginals(input.Images)}}
+	parts := []any{map[string]any{"type": "input_text", "text": text}}
 	for _, img := range input.Images {
 		parts = append(parts, map[string]any{"type": "input_image", "image_url": img.URL, "detail": "auto"})
 	}
 	s.histMu.Lock()
 	s.History = append(s.History, raw(map[string]any{"role": "user", "content": parts}))
 	s.histMu.Unlock()
-}
-
-const originalImage = entities.OriginalImage
-
-func imageOriginals(images []shell.Image) string {
-	var text strings.Builder
-	for _, img := range images {
-		if img.Path != "" {
-			text.WriteString(originalImage + strconv.Quote(img.Path))
-		}
-	}
-	return text.String()
 }
 
 func inputEvent(input Input) TurnEvent {

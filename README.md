@@ -7,7 +7,7 @@ system to learn before you can get started.
 Zel is an agent that simply writes bash. Through that one tool, it can run
 background tasks and subagents, view images, work with files, and more.
 
-One file, `zel.toml`, lets you tailor Zel to yourself and your project,
+One file, `~/.zel/config.toml`, lets you tailor Zel to yourself and your project,
 including the look of the terminal interface. The TUI is as minimal as it
 gets: just you and your agent.
 
@@ -22,18 +22,19 @@ Run `zel update` to get the latest release.
 
 ## Get started
 
-Run `zel` in your project folder. On the first launch, add your provider's
-API URL and key, then choose a model.
+Run `zel` once: it creates `~/.zel` with a commented `config.toml`. Add your
+provider there (`zel docs config`), run `zel` in your project folder, and choose
+a model with Ctrl+M. Without a provider Zel exits with an error.
 
-Ctrl+K opens the menu for models, sessions and settings. Type `@` for files
+Ctrl+K opens the menu for models, sessions and Info. Type `@` for files
 or `#` for prompt completions. Ctrl+D stops the current turn; Ctrl+Q saves
 and quits. Bash calls and other details live in Tracing, not the chat.
 
 The composer follows the conversation and working indicator, rather than being
 pinned to the bottom. Model and context details are in Info, not in the chat.
 
-The interface uses tcell. Drag text to select and copy it, or use Shift+drag
-for native terminal selection. Click in the input to place the cursor;
+The interface uses tcell and leaves the mouse to the terminal: select and copy
+text, and open links, the way your terminal does. PgUp/PgDn scroll the chat.
 Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Some shortcuts need an
 enhanced keyboard protocol; the Ctrl+K menu works in legacy terminals too.
 
@@ -42,14 +43,15 @@ Only use configuration files and tools you trust.
 
 ## Make it yours
 
-Zel reads `~/.zel/zel.toml`, then your project's `./zel.toml`, then any
-`--config FILE` layers. Later layers override earlier ones.
+Zel reads one file, `~/.zel/config.toml`. `--config FILE` uses another file
+instead (not on top of it). Everything else Zel writes is in `~/.zel/.sessions/`.
 
-Use these files to set instructions, providers, colors, hooks and prompt
+Use the file to set instructions, providers, colors, hooks and prompt
 completions. Describe your own tools in your instructions and invoke scripts
 by their paths, or install them on your normal `PATH`. No plugin framework needed.
 
-Configuration reloads automatically. `zel config` shows the merged result.
+The config reloads automatically; Zel only reads it, except that choosing a
+model writes `provider`, `model` and `effort`. `zel config` shows the result.
 See [configuration examples](docs/examples/) for a starting point.
 
 ## Documentation
@@ -58,6 +60,7 @@ See [configuration examples](docs/examples/) for a starting point.
   Also available in the terminal with `zel docs`.
 - [Examples](docs/examples/): complete configurations and a script tool.
 - [Architecture](docs/ARCHITECTURE.md): project structure and ownership.
+- [0.9.0 release](docs/RELEASE-0.9.0.md): one config file, no image storage, a cleaner TUI.
 - [0.8.0 release](docs/RELEASE-0.8.0.md): a smaller tcell frontend with a shared editor and direct terminal rendering.
 - [0.7.6 release](docs/RELEASE-0.7.6.md): choice answers in the chat, composer-grade custom answers, steadier updates, completed tokens.
 - [0.7.5 release](docs/RELEASE-0.7.5.md): improvements, compatibility and verification evidence.

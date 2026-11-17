@@ -149,9 +149,6 @@ func RecordsForItem(item json.RawMessage) []Record {
 			kind = "notice"
 		}
 		if text != "" {
-			if kind == "user" {
-				text, _, _ = strings.Cut(text, OriginalImage)
-			}
 			return []Record{{Kind: kind, Text: text}}
 		}
 	case v.Type == "reasoning":
@@ -211,8 +208,6 @@ func IsNotice(text string) bool {
 	return strings.HasPrefix(text, "<notification>") || strings.HasPrefix(text, "<task-result ") ||
 		strings.HasPrefix(text, "<agent-result ") || strings.HasPrefix(text, "<view>")
 }
-
-const OriginalImage = "\nOriginal image (for crops): "
 
 type ToolCall struct {
 	Type, Name, Arguments string

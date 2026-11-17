@@ -33,7 +33,7 @@ func (s *session) Records() []Record {
 		}
 	}
 	choicesBefore(len(s.History))
-	return append(records, s.imageWarnings...)
+	return records
 }
 
 // answerMetadata derives turn totals without counting a request once per item.

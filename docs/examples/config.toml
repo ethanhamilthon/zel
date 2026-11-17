@@ -1,4 +1,4 @@
-# ~/.zel/zel.toml
+# ~/.zel/config.toml
 provider = "openai"
 model    = "gpt-5"
 effort   = "medium"
@@ -13,6 +13,7 @@ instructions = [
   - web-search <query> [-n 5] [--answer]   web search via Tavily
   """,
   { text = "You are a subagent: answer short, do not ask questions.", main = false, headless = true },
+  # a project's own rules, read when the session starts: "${{ cat AGENTS.md }}"
 ]
 
 [settings]
@@ -48,6 +49,8 @@ turn_start     = ['printf "\033]9;4;3\a" > /dev/tty']
 turn_end       = ['printf "\033]9;4;0\a" > /dev/tty']
 error          = ['printf "\033]9;4;2;100\a" > /dev/tty']
 session_closed = ['printf "\033]9;4;0\a" > /dev/tty']
+# stop a forced push
+bash_before    = [{ match = 'git push (-f|--force)', run = "echo 'force push is not allowed here' >&2; exit 2" }]
 
 [completions]
 review = "Review the uncommitted changes:\n${{ git diff --stat }}"

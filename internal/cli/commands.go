@@ -258,25 +258,31 @@ func docsCommand(args []string, out io.Writer) error {
 	return err
 }
 
-// loadConfig reads the layers this command sees: the session's (ZEL_CONFIG)
-// inside a session, else ~/.zel/zel.toml, ./zel.toml and the --config files.
-func loadConfig(ctx context.Context, extra []string) (*config.Config, error) {
+// configPath is the config file a command uses: --config, else the session's
+// (ZEL_CONFIG), else ~/.zel/config.toml.
+func configPath(cwd, flag string) (string, error) {
+	if flag == "" {
+		flag = os.Getenv("ZEL_CONFIG")
+	}
+	if flag == "" {
+		home, err := core.ZelHome(cwd)
+		return config.File(home), err
+	}
+	flag, err := config.ResolvePath(flag)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(flag)
+}
+
+func loadConfig(ctx context.Context, flag string) (*config.Config, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	home, err := core.ZelHome(cwd)
+	path, err := configPath(cwd, flag)
 	if err != nil {
 		return nil, err
-	}
-	layers := config.Layers(home, cwd, extra)
-	if env := os.Getenv("ZEL_CONFIG"); env != "" && len(extra) == 0 {
-		layers = []config.Layer{{Name: "global", Path: filepath.Join(home, "zel.toml")}}
-		for _, p := range strings.Split(env, string(os.PathListSeparator)) {
-			if p != layers[0].Path {
-				layers = append(layers, config.Layer{Name: "config", Path: p})
-			}
-		}
 	}
 	run := func(env map[string]string) config.Expander {
 		return func(ctx context.Context, script string) (string, error) {
@@ -291,18 +297,17 @@ func loadConfig(ctx context.Context, extra []string) (*config.Config, error) {
 			return buf.String(), err
 		}
 	}
-	return config.Load(ctx, layers, run), nil
+	return config.Load(ctx, path, run), nil
 }
 
 func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("models", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
-	var configs multi
-	fs.Var(&configs, "config", "")
+	file := fs.String("config", "", "")
 	if rest, err := parseFlags(fs, args); err != nil || len(rest) > 0 {
-		return usageError("models", "models [--json] [--config FILE]...")
+		return usageError("models", "models [--json] [--config FILE]")
 	}
-	cfg, err := loadConfig(ctx, configs)
+	cfg, err := loadConfig(ctx, *file)
 	if err != nil {
 		return err
 	}
@@ -332,12 +337,11 @@ func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 
 func configCommand(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
-	var configs multi
-	fs.Var(&configs, "config", "")
+	file := fs.String("config", "", "")
 	if rest, err := parseFlags(fs, args); err != nil || len(rest) > 0 {
-		return usageError("config", "config [--config FILE]...")
+		return usageError("config", "config [--config FILE]")
 	}
-	cfg, err := loadConfig(ctx, configs)
+	cfg, err := loadConfig(ctx, *file)
 	if err != nil {
 		return err
 	}

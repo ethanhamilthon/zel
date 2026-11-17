@@ -29,7 +29,7 @@ func TestEditorGraphemes(t *testing.T) {
 		})
 	}
 }
-func TestEditorLayoutAndMouse(t *testing.T) {
+func TestEditorLayout(t *testing.T) {
 	e := editor{}
 	e.set("ab界c\nя\te\u0301")
 	rows := e.rows(4)

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/gdamore/tcell/v2"
 	"zel/internal/config"
 	"zel/internal/core"
@@ -52,33 +51,30 @@ type app struct {
 	pending     string
 	turnIndex   int
 
-	scroll                                        int
-	history, historyBase                          []row
-	visibleStart, chatHeight, inputY, inputHeight int
-	choiceFirst, choiceVisible                    int
-	dirty                                         bool
-	failure                                       error
-	busy, pasting, clipboardBusy, operation       bool
-	promptCancel                                  context.CancelFunc
-	promptSerial                                  int
-	paste                                         strings.Builder
-	pasteTarget                                   *editor
-	pasteGeneration                               int
-	models                                        []core.ModelChoice
-	modelProviders                                map[string]core.Provider
-	modelsAt                                      time.Time
-	modelsLoading                                 bool
-	completions                                   list
-	completionStart, completionEnd                int
-	completionKind                                byte
-	completionHidden                              string
-	fileRoot                                      string
-	fileIndex                                     []string
-	fileAt                                        time.Time
-	fileLoading                                   bool
-	tasks                                         []core.ActiveTask
-	selected                                      *selection
-	copyText                                      func(string) error
+	scroll                         int
+	history, historyBase           []row
+	chatHeight                     int
+	dirty                          bool
+	failure                        error
+	busy, pasting, operation       bool
+	promptCancel                   context.CancelFunc
+	promptSerial                   int
+	paste                          strings.Builder
+	pasteTarget                    *editor
+	pasteGeneration                int
+	models                         []core.ModelChoice
+	modelProviders                 map[string]core.Provider
+	modelsAt                       time.Time
+	modelsLoading                  bool
+	completions                    list
+	completionStart, completionEnd int
+	completionKind                 byte
+	completionHidden               string
+	fileRoot                       string
+	fileIndex                      []string
+	fileAt                         time.Time
+	fileLoading                    bool
+	tasks                          []core.ActiveTask
 }
 
 // Run owns the screen, not the runtime. Only this goroutine touches UI state.
@@ -92,7 +88,6 @@ func Run(ctx context.Context, a *core.Runtime, cwd string) error {
 	}
 	defer screen.Fini()
 	screen.EnablePaste()
-	screen.EnableMouse(tcell.MouseButtonEvents, tcell.MouseDragEvents)
 	screen.SetCursorStyle(tcell.CursorStyleSteadyBar)
 	return runScreen(ctx, a, cwd, screen)
 }
@@ -102,7 +97,6 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 	q := newEventQueue()
 	defer q.Close()
 	m := &app{screen: screen, runtime: a, ctx: ctx, cancel: cancel, cwd: cwd, results: make(chan result, 32), dirty: true}
-	m.copyText = clipboard.WriteAll
 	m.ctl = core.NewController(a, q.Push)
 	defer func() { cancel(); m.cancelPrompt(); m.ctl.Close() }()
 	if s, err := m.ctl.Session(); err == nil {
@@ -122,9 +116,6 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 	ticker := time.NewTicker(33 * time.Millisecond)
 	defer ticker.Stop()
 	m.fetchModels()
-	if len(m.ctl.Settings().Providers) == 0 {
-		m.providerForm("")
-	}
 	m.draw()
 	for {
 		select {
@@ -159,10 +150,7 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 			switch e := e.(type) {
 			case *tcell.EventKey:
 				m.key(e)
-			case *tcell.EventMouse:
-				m.mouse(e)
 			case *tcell.EventResize:
-				m.selected = nil
 				screen.Sync()
 				m.dirty = true
 			case *tcell.EventPaste:
@@ -277,9 +265,7 @@ func (m *app) control(e core.Event) {
 		m.fileRoot = ""
 		m.fileIndex = nil
 		m.fileLoading = false
-		m.clipboardBusy = false
 		m.resetCompletions()
-		m.selected = nil
 		clear(pathTargets)
 		mdStable.key = nil
 	case "done":

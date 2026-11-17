@@ -23,6 +23,7 @@ import (
 	"sync"
 	"testing"
 
+	"zel/internal/config"
 	"zel/internal/core"
 	"zel/internal/ipc"
 	"zel/internal/store"
@@ -254,40 +255,40 @@ func TestSessionCommandsOverSocket(t *testing.T) {
 	}
 }
 
-func TestConfigShowsLayers(t *testing.T) {
+func TestConfigShowsTheFile(t *testing.T) {
 	noSession(t)
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	t.Chdir(t.TempDir())
 	extra := filepath.Join(t.TempDir(), "extra.toml")
-	for file, text := range map[string]string{filepath.Join(home, "zel.toml"): "model = \"m1\"\n", extra: "model = \"m2\"\n"} {
+	for file, text := range map[string]string{filepath.Join(home, "config.toml"): "model = \"m1\"\n", extra: "model = \"m2\"\n"} {
 		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// model is the line of the model setting: its value and the file it comes from.
+	// model is the value of the model setting.
 	model := func(args ...string) string {
 		out, err := zel(t, "", append([]string{"config"}, args...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, line := range strings.Split(out, "\n") {
-			if f := strings.Fields(line); len(f) == 4 && f[0] == "model" {
-				return f[2] + " " + f[3]
+			if f := strings.Fields(line); len(f) == 3 && f[0] == "model" {
+				return f[2]
 			}
 		}
 		t.Fatalf("no model line:\n%s", out)
 		return ""
 	}
-	if got := model(); got != `"m1" `+filepath.Join(home, "zel.toml") {
+	if got := model(); got != `"m1"` {
 		t.Fatalf("config: %s", got)
 	}
-	if got := model("--config", extra); got != `"m2" `+extra {
+	if got := model("--config", extra); got != `"m2"` {
 		t.Fatalf("config --config: %s", got)
 	}
-	// Inside a session zel config sees the session's layers.
-	t.Setenv("ZEL_CONFIG", filepath.Join(home, "zel.toml")+string(os.PathListSeparator)+extra)
-	if got := model(); got != `"m2" `+extra {
+	// Inside a session zel config sees the session's file.
+	t.Setenv("ZEL_CONFIG", extra)
+	if got := model(); got != `"m2"` {
 		t.Fatalf("config in a session: %s", got)
 	}
 }
@@ -311,7 +312,7 @@ func TestHeadlessArguments(t *testing.T) {
 		{args: []string{"-p", "--resume", "ID", "text"}, want: call{cwd, core.Options{Prompt: "text", Resume: "ID"}}},
 		{args: []string{"-p", "hello", "--model", "m", "--effort", "high"}, want: call{cwd, core.Options{Prompt: "hello", Model: "m", Effort: "high"}}},
 		{args: []string{"--provider", "p", "-p", "two words"}, want: call{cwd, core.Options{Prompt: "two words", Provider: "p"}}},
-		{args: []string{"-p", "--config", "a.toml", "--config", "b.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Configs: []string{"a.toml", "b.toml"}}}},
+		{args: []string{"-p", "--config", "a.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Config: filepath.Join(cwd, "a.toml")}}},
 		{args: []string{"-p"}, stdin: "from stdin", want: call{cwd, core.Options{Prompt: "from stdin"}}},
 		{args: []string{"-p", "-", "--timeout", "5"}, stdin: "dash", want: call{cwd, core.Options{Prompt: "dash"}}},
 		{args: []string{"-p", "--json"}, stdin: " \n", err: "nonempty prompt"},
@@ -370,12 +371,31 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 	}
 }
 
-// writeLocalConfig makes a project directory with ./zel.toml and enters it.
+// writeConfig writes the provider of a test into the config of home.
+func writeConfig(home string, s core.Settings) error {
+	path := config.File(home)
+	for name, p := range s.Providers {
+		if err := config.SetKey(path, "providers."+name+".base_url", p.BaseURL); err != nil {
+			return err
+		}
+	}
+	for k, v := range map[string]string{"provider": s.Provider, "model": s.Model} {
+		if err := config.SetKey(path, k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeLocalConfig makes a project directory, enters it and puts the top-level
+// keys of toml first in the config of ZEL_HOME.
 func writeLocalConfig(t *testing.T, toml string) string {
 	t.Helper()
 	project := t.TempDir()
 	t.Chdir(project)
-	if err := os.WriteFile(filepath.Join(project, "zel.toml"), []byte(toml), 0o600); err != nil {
+	path := config.File(os.Getenv("ZEL_HOME"))
+	existing, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, []byte(toml+"\n"+string(existing)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	project, err := os.Getwd()
@@ -460,7 +480,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			settings := core.DefaultSettings()
 			settings.Provider, settings.Model = "p", "default"
 			settings.Providers["p"] = core.Provider{BaseURL: server.URL}
-			if err := core.WriteConfig(home, settings); err != nil {
+			if err := writeConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
 			project := writeLocalConfig(t, `instructions = ["main only", {text = "headless config", headless = true, main = false}]`)
@@ -495,7 +515,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Fatalf("stdout=%q exit=%d", out.String(), ExitCode(err))
 				}
 			}
-			if saved := core.LoadConfig(home, project); saved.Model != "default" || saved.Effort != "medium" {
+			if saved := config.Load(context.Background(), config.File(home), nil).Settings; saved.Model != "default" || saved.Effort != "medium" {
 				t.Fatalf("the flags changed the defaults: %+v", saved)
 			}
 		})
@@ -511,7 +531,7 @@ func TestHeadlessJSON(t *testing.T) {
 	settings := core.DefaultSettings()
 	settings.Provider, settings.Model = "p", "m"
 	settings.Providers["p"] = core.Provider{BaseURL: server.URL}
-	if err := core.WriteConfig(home, settings); err != nil {
+	if err := writeConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
@@ -646,7 +666,7 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	settings := core.DefaultSettings()
 	settings.Provider, settings.Model = "p", "m"
 	settings.Providers["p"] = core.Provider{BaseURL: server.URL}
-	if err := core.WriteConfig(home, settings); err != nil {
+	if err := writeConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
 	project := writeLocalConfig(t, `instructions = [{text = "Project rule: be brief", headless = true}]`)

@@ -76,7 +76,7 @@ func IsHelper(args []string) bool {
 
 // removed are the commands and flags 0.7 dropped, with what to do instead.
 var removed = map[string]string{
-	"init":   "put your settings in ~/.zel/zel.toml or ./zel.toml (see zel help)",
+	"init":   "put your settings in ~/.zel/config.toml (see zel help)",
 	"events": "notices and errors are in Tracing (Ctrl+T)",
 	"agent":  "a subagent is zel -p \"prompt\" run from the agent's bash",
 }
@@ -160,15 +160,9 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 	return sessionCommand(ctx, args, in, out, options)
 }
 
-// multi is a repeatable string flag.
-type multi []string
-
-func (m *multi) String() string     { return strings.Join(*m, ",") }
-func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
-
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	var prompt, provider, model, effort, resume, dir string
-	var configs multi
+	var configFile string
 	var asJSON bool
 	var timeout float64
 	fs := flag.NewFlagSet("zel", flag.ContinueOnError)
@@ -181,7 +175,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	fs.StringVar(&dir, "cwd", "", "working directory")
 	fs.Float64Var(&timeout, "timeout", 0, "seconds before the run is cancelled")
 	fs.BoolVar(&asJSON, "json", false, "print {ok, answer, session, error}")
-	fs.Var(&configs, "config", "extra zel.toml layer (repeatable)")
+	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.zel/config.toml")
 	// -p may come without its value when flags follow: zel -p --resume ID "text".
 	args = slices.Clone(args)
 	for i, a := range args {
@@ -230,7 +224,12 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			return err
 		}
 	}
-	opts := core.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort, Configs: configs, Resume: resume}
+	opts := core.Options{Mode: "tui", Provider: provider, Model: model, Effort: effort, Resume: resume}
+	if configFile != "" {
+		if opts.Config, err = configPath(cwd, configFile); err != nil {
+			return err
+		}
+	}
 	var session string
 	if headless {
 		opts.Mode, opts.Prompt = "headless", prompt
@@ -261,6 +260,9 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		return &ExitError{Code: exitFor(err), Err: err}
 	}
 	defer a.Close()
+	if !headless && len(a.Settings().Providers) == 0 {
+		return fmt.Errorf("no provider configured: add one to %s (zel docs config)", core.DisplayPath(a.ConfigFile()))
+	}
 	if headless {
 		if timeout > 0 {
 			var cancel context.CancelFunc

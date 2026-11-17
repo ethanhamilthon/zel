@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestImagePreviewsResizeAndPreserveOriginals(t *testing.T) {
+func TestImagePreviewsResize(t *testing.T) {
 	for _, tc := range []struct {
 		name, format                         string
 		width, height, wantWidth, wantHeight int
@@ -26,8 +26,7 @@ func TestImagePreviewsResizeAndPreserveOriginals(t *testing.T) {
 			src := image.NewNRGBA(image.Rect(0, 0, tc.width, tc.height))
 			src.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 100})
 			path, original := writeImage(t, src, tc.format)
-			directory := filepath.Join(t.TempDir(), "originals")
-			captured, err := CaptureImageCopy(path, directory)
+			captured, err := CaptureImage(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,22 +43,11 @@ func TestImagePreviewsResizeAndPreserveOriginals(t *testing.T) {
 			if tc.name == "small" && !bytes.Equal(data, original) {
 				t.Fatal("unnecessarily re-encoded small image")
 			}
-			for _, p := range []string{path, captured.Path} {
-				got, err := os.ReadFile(p)
-				if err != nil || !bytes.Equal(got, original) {
-					t.Fatal("original not preserved byte-for-byte", err)
-				}
+			if captured.Path != path {
+				t.Fatalf("path = %q, want the file itself, %q", captured.Path, path)
 			}
-			info, err := os.Stat(captured.Path)
-			if err != nil || info.Mode().Perm() != 0600 || filepath.Dir(captured.Path) != directory {
-				t.Fatal("original not stored privately", err)
-			}
-			if err = os.WriteFile(path, []byte("changed"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			got, _ := os.ReadFile(captured.Path)
-			if !bytes.Equal(got, original) {
-				t.Fatal("snapshot changed with source")
+			if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 1 {
+				t.Fatal("capturing must not write files")
 			}
 		})
 	}
@@ -77,21 +65,17 @@ func TestViewRejectsInvalidAndOversizedImages(t *testing.T) {
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CaptureImageCopy(path, ""); err == nil {
+		if _, err := CaptureImage(path); err == nil {
 			t.Fatal("accepted invalid/truncated/oversized image")
 		}
 	}
 	if err := os.Truncate(path, MaxImageInputBytes+1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CaptureImageCopy(path, ""); err == nil || !strings.Contains(err.Error(), "32 MiB") {
+	if _, err := CaptureImage(path); err == nil || !strings.Contains(err.Error(), "32 MiB") {
 		t.Fatal("accepted oversized input", err)
 	}
-	if _, err := CaptureImageCopy(dir, ""); err == nil {
+	if _, err := CaptureImage(dir); err == nil {
 		t.Fatal("accepted directory")
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
-		t.Fatal("invalid image left an original snapshot")
 	}
 }

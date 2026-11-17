@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"zel/internal/ipc"
+	"zel/internal/shell"
 )
 
 // Exit codes of the zel subcommands, by error code.
@@ -182,7 +183,7 @@ func (s *session) sessionInfo() ipc.Response {
 	}
 	s.histMu.RUnlock()
 	info := map[string]any{"id": s.id, "cwd": s.dir, "parent": parent, "depth": s.depth, "mode": s.mode(),
-		"provider": st.Provider, "model": st.Model, "effort": st.Effort, "title": title, "dir": s.sessionDir(), "config": s.configPaths()}
+		"provider": st.Provider, "model": st.Model, "effort": st.Effort, "title": title, "dir": s.sessionDir(), "config": s.path}
 	if bash := s.bashCwd(); bash != s.dir {
 		info["bash_cwd"] = bash
 	}
@@ -193,7 +194,7 @@ func (s *session) sessionInfo() ipc.Response {
 			fmt.Fprintf(&b, "%s: %v\n", k, v)
 		}
 	}
-	fmt.Fprintf(&b, "config: %s\n", strings.Join(s.configPaths(), ", "))
+	fmt.Fprintf(&b, "config: %s\n", s.path)
 	r := ok(b.String())
 	r.Data = data
 	return r
@@ -204,19 +205,14 @@ func (s *session) view(path string) error {
 	if s.ended.Load() {
 		return errors.New("session has ended")
 	}
-	image, err := CaptureImageCopy(path, filepath.Join(s.sessionDir(), "attachments"))
+	image, err := shell.CaptureImage(path)
 	if err != nil {
 		return err
 	}
 	if !s.slots.reserve(1) {
 		return fmt.Errorf("at most %d new images per model request", MaxPendingImages)
 	}
-	input, err := s.stageInput(withImages(notification("view: "+filepath.Base(path)+" attached"), image))
-	if err != nil {
-		s.slots.release(1)
-		return err
-	}
-	if !s.queue.Push(input) {
+	if !s.queue.Push(withImages(notification("view: "+filepath.Base(path)+" attached"), image)) {
 		s.slots.release(1)
 		return fmt.Errorf("input queue is full")
 	}

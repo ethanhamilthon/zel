@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"os"
-	"slices"
 	"time"
 )
 
@@ -39,15 +38,12 @@ func stamp(path string, prev fileStamp) fileStamp {
 	return st
 }
 
-// Watch polls files until ctx ends and calls fn once after their content
-// changed (or a file appeared or disappeared) and then stayed unchanged for
-// watchSettle. Touching a file without changing its content does not count.
-func Watch(ctx context.Context, files []string, fn func()) {
-	seen := make([]fileStamp, len(files))
-	for i, f := range files {
-		seen[i] = stamp(f, fileStamp{})
-	}
-	fired := slices.Clone(seen) // the state fn was last called for
+// Watch polls the file until ctx ends and calls fn once after its content
+// changed (or it appeared or disappeared) and then stayed unchanged for
+// watchSettle. Touching the file without changing its content does not count.
+func Watch(ctx context.Context, path string, fn func()) {
+	seen := stamp(path, fileStamp{})
+	fired := seen // the state fn was last called for
 	var changed time.Time
 	t := time.NewTicker(watchInterval)
 	defer t.Stop()
@@ -57,20 +53,14 @@ func Watch(ctx context.Context, files []string, fn func()) {
 			return
 		case <-t.C:
 		}
-		for i, f := range files {
-			if st := stamp(f, seen[i]); st != seen[i] {
-				seen[i], changed = st, time.Now()
-			}
+		if st := stamp(path, seen); st != seen {
+			seen, changed = st, time.Now()
 		}
 		if time.Since(changed) < watchSettle {
 			continue
 		}
-		differ := false
-		for i := range seen {
-			differ = differ || seen[i].exists != fired[i].exists || seen[i].sum != fired[i].sum
-		}
-		if differ {
-			copy(fired, seen)
+		if seen.exists != fired.exists || seen.sum != fired.sum {
+			fired = seen
 			fn()
 		}
 	}

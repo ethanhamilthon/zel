@@ -30,9 +30,9 @@ func formatContext(n int64) string {
 	return fmt.Sprintf("%dK", (n+500)/1000)
 }
 
-// infoRows are the rows of the Info page. The first row is the page title (the session
-// name); the rest are key/value pairs: id, dir, model, context and spend.
-func infoRows(info core.Info) []menuRow {
+// infoText is the Info page: the session name, then aligned key/value rows (id,
+// dir, config, model, context and spend).
+func infoText(info core.Info) string {
 	cache := "cache hit unavailable"
 	if info.Usage.Cached >= 0 {
 		percent := float64(0)
@@ -45,25 +45,17 @@ func infoRows(info core.Info) []menuRow {
 	if title == "" {
 		title = "Session"
 	}
-	return []menuRow{
-		{label: title},
-		{"ID:", info.Session},
-		{"Dir:", core.DisplayPath(info.Project)},
-		{"Config:", configLabel(info.Configs)},
-		{"Model:", info.Provider + " · " + info.Model + " · " + info.Effort},
-		{"Context:", formatContext(info.Context)},
-		{"Spend:", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
+	var b strings.Builder
+	b.WriteString(title + "\n\n")
+	for _, r := range [][2]string{
+		{"ID", info.Session},
+		{"Dir", core.DisplayPath(info.Project)},
+		{"Config", core.DisplayPath(info.Config)},
+		{"Model", info.Provider + " · " + info.Model + " · " + info.Effort},
+		{"Context", formatContext(info.Context)},
+		{"Spend", fmt.Sprintf("%s in · %s out · %s", formatTokens(info.Usage.Input), formatTokens(info.Usage.Output), cache)},
+	} {
+		fmt.Fprintf(&b, "%-8s%s\n", r[0], r[1])
 	}
-}
-
-// configLabel lists the zel.toml layers of the session, in merge order.
-func configLabel(files []string) string {
-	if len(files) == 0 {
-		return "none"
-	}
-	short := make([]string, len(files))
-	for i, f := range files {
-		short[i] = core.DisplayPath(f)
-	}
-	return strings.Join(short, " · ")
+	return b.String()
 }

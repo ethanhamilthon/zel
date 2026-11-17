@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"zel/internal/store"
@@ -62,7 +61,6 @@ func (s *session) openSession(id string) error {
 	s.title = v.Title
 	s.stored = true
 	s.histMu.Unlock()
-	s.layers = s.configLayers(v.Config)
 	if err := s.loadConfig(); err != nil {
 		return err
 	}
@@ -92,7 +90,6 @@ func (s *session) createSession() error {
 	s.histMu.Lock()
 	s.itemMeta = nil
 	s.histMu.Unlock()
-	s.layers = s.configLayers(nil)
 	if err := s.loadConfig(); err != nil {
 		return err
 	}
@@ -103,13 +100,12 @@ func (s *session) createSession() error {
 func (s *session) readItems(items []store.Item) {
 	s.histMu.Lock()
 	defer s.histMu.Unlock()
-	s.History, s.itemMeta, s.imageWarnings, s.compacted = nil, nil, nil, compaction{}
+	s.History, s.itemMeta, s.compacted = nil, nil, compaction{}
 	s.cacheMu.Lock()
 	s.projections, s.firstLine = nil, ""
 	s.cacheMu.Unlock()
 	for _, item := range items {
 		s.History = append(s.History, item.Data)
-		s.imageWarnings = append(s.imageWarnings, missingOriginalImages(item.Data)...)
 		if prompt, ok := instructionSnapshot(item.Data); ok {
 			s.prompt, s.promptFrozen = prompt, true
 		}
@@ -151,7 +147,7 @@ func (s *session) Save() error {
 	start := min(saved, total)
 	items := make([]store.Item, total-start)
 	for i := start; i < total; i++ {
-		items[i-start].Data = s.History[i]
+		items[i-start].Data = withoutImages(s.History[i])
 		if m := s.itemMeta[i]; m != nil {
 			items[i-start].Meta, _ = json.Marshal(m)
 		}
@@ -160,7 +156,7 @@ func (s *session) Save() error {
 	first := s.firstUserLine()
 	s.histMu.RUnlock()
 	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
-		Mode: s.mode(), Depth: s.depth, Config: s.configPaths(), Created: s.created, BashCwd: s.bashCwdSet()}
+		Mode: s.mode(), Depth: s.depth, Created: s.created, BashCwd: s.bashCwdSet()}
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}
@@ -267,23 +263,24 @@ func interruptedOutputs(history []json.RawMessage) []json.RawMessage {
 	return result
 }
 
-func missingOriginalImages(item json.RawMessage) []Record {
-	var v struct{ Content []struct{ Text string } }
-	if json.Unmarshal(item, &v) != nil {
-		return nil
+// imagePlaceholder replaces an image in the saved history: images live in
+// memory only, so a resumed session shows this text instead.
+const imagePlaceholder = "[an image was here]"
+
+// withoutImages is the item as it is saved: input images become a text part.
+func withoutImages(item json.RawMessage) json.RawMessage {
+	if !strings.Contains(string(item), `"input_image"`) {
+		return item
 	}
-	var warnings []Record
-	for _, part := range v.Content {
-		for _, source := range strings.Split(part.Text, originalImage)[1:] {
-			quoted, _, _ := strings.Cut(source, "\n")
-			path, err := strconv.Unquote(quoted)
-			if err != nil {
-				continue
-			}
-			if _, err := os.Stat(path); err != nil {
-				warnings = append(warnings, Record{Kind: "notice", Text: "Original image unavailable for crops: " + path + " (" + err.Error() + "). The saved preview is still available."})
-			}
+	var v map[string]any
+	if json.Unmarshal(item, &v) != nil {
+		return item
+	}
+	parts, _ := v["content"].([]any)
+	for i, part := range parts {
+		if p, ok := part.(map[string]any); ok && p["type"] == "input_image" {
+			parts[i] = map[string]any{"type": "input_text", "text": imagePlaceholder}
 		}
 	}
-	return warnings
+	return raw(v)
 }

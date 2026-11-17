@@ -31,10 +31,10 @@ func (s *session) SelectSession(ctx context.Context, provider, model, effort str
 	sel := c.sel
 	c.mu.Unlock()
 	if err := s.saveDefault(sel); err != nil {
-		return fmt.Errorf("model selected for this session, but zel.toml was not updated: %w", err)
+		return fmt.Errorf("model selected for this session, but the config file was not updated: %w", err)
 	}
 	if err := s.loadConfig(); err != nil {
-		return fmt.Errorf("model selected for this session, but zel.toml does not load: %w", err)
+		return fmt.Errorf("model selected for this session, but the config does not load: %w", err)
 	}
 	return nil
 }

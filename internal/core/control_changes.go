@@ -48,6 +48,6 @@ func (c *Controller) publishReload(err error) {
 	if err != nil {
 		c.emit(Event{Kind: "error", Text: err.Error()})
 	} else {
-		c.emit(Event{Kind: "notice", Text: "zel.toml reloaded"})
+		c.emit(Event{Kind: "notice", Text: "config reloaded"})
 	}
 }

@@ -3,17 +3,11 @@ package core
 import (
 	"cmp"
 	"context"
-	"path/filepath"
 	"strings"
 )
 
 func (c *Controller) Input(input Input) error {
 	session := c.a.session()
-	var stageErr error
-	input, stageErr = session.stageInput(input)
-	if stageErr != nil {
-		return fail(CodeFailed, "%s", stageErr)
-	}
 	if strings.TrimSpace(input.Text) == "" && len(input.Images) > 0 {
 		input.Text = "Describe this image."
 	}
@@ -230,7 +224,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	session := c.a.session()
 	s := session.Settings()
-	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, DB: session.sessionDir(), Provider: s.Provider, Model: s.Model, Effort: s.Effort, Configs: session.configPaths(), Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
+	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, DB: session.sessionDir(), Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
 	info.Usage, info.Requests = session.SessionUsage()
 	return info, nil
 }
@@ -239,19 +233,4 @@ func (c *Controller) Info() (info Info, err error) {
 func (c *Controller) Withdraw(id uint64) (removed bool) {
 	c.view(func() { removed = c.a.Queue().Withdraw(id) })
 	return removed
-}
-
-// UpdateSettings persists UI preferences and providers while the session is idle.
-func (c *Controller) UpdateSettings(s Settings) error {
-	return c.change("settings", func() error { return c.a.UpdateSettings(s) }, nil)
-}
-
-// AttachmentsDir is the folder of the session's images (pasted ones too).
-func (c *Controller) AttachmentsDir() (dir string) {
-	c.view(func() {
-		if s := c.a.session(); s.id != "" {
-			dir = filepath.Join(s.sessionDir(), "attachments")
-		}
-	})
-	return dir
 }

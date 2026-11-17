@@ -9,8 +9,8 @@ subcommands (`zel task`, `zel choice`, ...), which only talk to a session socket
 
 | Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
-| `entities` | Shared input, attachments, tool calls, records, usage, model choices and domain events | None |
-| `config` | zel.toml layers: discovery, parsing and validation, merge, `${{ }}` expansion, point edits that keep comments, file watching, `zel config` text; settings and paths | None |
+| `entities` | Shared input, images, tool calls, records, usage, model choices and domain events | None |
+| `config` | The one config.toml: parsing and validation, `${{ }}` expansion, the default home files, point edits that keep comments, file watching, `zel config` text; settings and paths | None |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list, `tasks.jsonl`, task logs and `choices.jsonl` (answered questions) | None |
 | `shell` | `bash -c` in a process group, cancellation, bounded output and image capture | `entities` |
@@ -53,14 +53,15 @@ event has been delivered, a failed stream is not transparently replayed.
 
 ## Config
 
-A session has its layers: `~/.zel/zel.toml`, `./zel.toml` of its folder and the
-`--config` files (a resumed session keeps the layers of its header; a `zel -p`
-child takes its parent's from `ZEL_CONFIG`). `config.Load` merges them into one
-snapshot: settings, instructions, hooks by event, completions, and the source
-file of every settings key. The menus write a change back into that file with
-`config.SetKey`/`DeleteKey`, which edit only the lines of the key. In the main
-session `config.Watch` polls the files; a change goes through the controller,
-which applies it between turns. A layer with errors keeps the old snapshot.
+A session has one config file: `~/.zel/config.toml`, or the `--config` file in
+its place (a `zel -p` child takes its parent's from `ZEL_CONFIG`). Nothing is
+merged or inherited. `config.Load` reads it into one snapshot: settings,
+instructions, hooks by event and completions. The only write is the model
+selection, made with `config.SetKey`, which edits just the lines of the key.
+In the main session `config.Watch` polls the file; a change goes through the
+controller, which applies it between turns. A file with errors keeps the old
+snapshot. `config.EnsureHome` creates `~/.zel` with a default `config.toml`
+and a `.gitignore`; everything else Zel writes is under `~/.zel/.sessions/`.
 
 ## The bash tool and the socket
 
@@ -86,31 +87,29 @@ Hooks are commands from the config: the event data goes to stdin as JSON, exit
 completions are strings with `${{ }}` expanded by `bash -c`. The system prompt
 is stored in the history and rebuilt only when the instructions change.
 
-## History, attachments, and rendering
+## History, images, and rendering
 
 History items are immutable after append. The session caches their display
 records, type/role and token estimates; compaction caches transformed zones.
 Saves prepare only dirty suffixes and leave unchanged metadata files alone.
 
-New image previews are private, checksum-named files in the session attachments
-directory. History stores versioned `zel-image:v1:` references. Only the compacted
-outgoing request loads and encodes required previews; display extraction does not.
-Legacy embedded images remain readable without migration. Copy the attachment
-folder together with session history; older binaries cannot read new references.
+Images exist only in memory: `zel view` makes a preview, the session sends it
+with the next request, and `withoutImages` turns it into a text placeholder in
+the saved history. Nothing is written to an attachments folder.
 
 Only complete commands are published before tool execution; incomplete argument
 fragments do not become UI records. The tcell frontend has one event loop owning
 all UI state. Controller events use a bounded, lossless spool; background work
 returns results with session identities so stale results cannot replace a draft.
-The shared editor is used for chat, custom answers, search and settings forms;
+The shared editor is used for chat, custom answers, search and forms;
 the shared searchable list is used by menus and completions. There is no widget
 framework or second frontend. tcell owns terminal modes, input, cursor and cell
 updates. Glamour formats Markdown; its output is decoded into styled cells,
 never sent directly to the terminal. Formatted records and stable Markdown
 prefixes are cached; oversized text uses a bounded plain-text fallback.
-Mouse selection holds a screen snapshot while answers continue streaming.
-Drag and release copies selected text; Ctrl+C copies it again. Shift+drag uses
-the terminal's native selection. Ctrl+click opens a rendered hyperlink.
+The mouse is not captured: the terminal selects text and opens links, and the
+arrows or PgUp/PgDn scroll the chat. Lists share one layout: a label column, a
+second column for hotkeys or dates, and the selection arrow `‹` on the right.
 
 Asynchronous hooks belong to the session lifecycle. Shutdown cancels and joins
 them before releasing resources or removing an unsaved session directory.

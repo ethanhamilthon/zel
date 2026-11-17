@@ -74,9 +74,9 @@ func (s Settings) SetupHint() string {
 	case s.Provider != "" && s.Model != "":
 		return ""
 	case len(s.Providers) == 0:
-		return "No provider configured · open Providers in the menu"
+		return "No provider configured: add one to the config file (zel docs config)"
 	}
-	return "No model selected · choose one in the Ctrl+K menu"
+	return "No model selected: choose one with Ctrl+M or set model in the config file"
 }
 
 func Validate(s Settings) error {

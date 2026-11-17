@@ -54,9 +54,9 @@ func fail(code, format string, args ...any) error {
 type Info struct {
 	Session, Title, Project, DB string
 	Provider, Model, Effort     string
-	Configs                     []string // config layers that exist, in merge order
-	Messages, Requests, Tasks   int      // user messages, model requests with usage, running tasks
-	Context                     int64    // estimated context tokens
+	Config                      string
+	Messages, Requests, Tasks   int   // user messages, model requests with usage, running tasks
+	Context                     int64 // estimated context tokens
 	Usage                       Usage
 }
 

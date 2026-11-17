@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"maps"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,177 +15,81 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Layers lists the zel.toml files of a session in merge order: the global
-// home/zel.toml (always, even if missing), ./zel.toml of cwd if it exists, then
-// the extra (--config) files, kept even if missing. Duplicates are dropped.
-func Layers(home, cwd string, extra []string) []Layer {
-	var layers []Layer
-	add := func(name, path string) {
-		path = filepath.Clean(path)
-		for _, l := range layers {
-			if l.Path == path || sameFile(l.Path, path) {
-				return
-			}
-		}
-		layers = append(layers, Layer{name, path})
-	}
-	add("global", filepath.Join(home, "zel.toml"))
-	if local := filepath.Join(cwd, "zel.toml"); fileExists(local) {
-		add("local", local)
-	}
-	for _, p := range extra {
-		if r, err := ResolvePath(p); err == nil {
-			p = r
-		}
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(cwd, p)
-		}
-		add("config", p)
-	}
-	return layers
-}
-
-func fileExists(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir()
-}
-
-func sameFile(a, b string) bool {
-	fa, err1 := os.Stat(a)
-	fb, err2 := os.Stat(b)
-	return err1 == nil && err2 == nil && os.SameFile(fa, fb)
-}
-
 var (
 	completionName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	envName        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
-
-// layerConf is one validated layer, not yet merged or expanded.
-type layerConf struct {
-	settings     []setting
-	providers    []named[Provider]
-	env          []named[string]
-	instructions []Instruction
-	hooks        []Hook
-	completions  []named[string]
-	warnings     []string
-}
-
-type setting struct {
-	key   string // Sources key
-	apply func(*Settings)
-}
 
 type named[T any] struct {
 	name string
 	v    T
 }
 
-type envEntry struct{ path, name, value string }
-
-// Load reads and merges the layers. Unreadable or invalid layers are skipped
-// and reported in Errors. With a non-nil run, ${{ }} in env values (in merge
-// order, each with the env known so far), provider, model, effort, colors,
-// provider fields and instruction texts is expanded with the Expander run
-// returns. A color that is not valid after expansion keeps its default, with a
-// warning. Load does not call Validate.
-func Load(ctx context.Context, layers []Layer, run func(env map[string]string) Expander) *Config {
-	cfg := &Config{Settings: DefaultSettings(), Hooks: map[string][]Hook{}, Completions: map[string]string{}, Sources: map[string]string{}}
-	var env []envEntry // in order of first definition, with the last value
-	envAt := map[string]int{}
-	compFrom := map[string]string{}
-	for _, l := range layers {
-		lc, err := readLayer(l)
-		if err != nil {
-			cfg.Errors = append(cfg.Errors, err.Error())
-			continue
-		}
-		if lc == nil {
-			continue
-		}
-		cfg.Layers = append(cfg.Layers, l)
-		for _, w := range lc.warnings {
-			cfg.Warnings = append(cfg.Warnings, l.Path+": "+w)
-		}
-		for _, s := range lc.settings {
-			s.apply(&cfg.Settings)
-			cfg.Sources[s.key] = l.Path
-		}
-		for _, p := range lc.providers {
-			cfg.Settings.Providers[p.name] = p.v
-			cfg.Sources["providers."+p.name] = l.Path
-		}
-		for _, e := range lc.env {
-			if i, ok := envAt[e.name]; ok {
-				env[i] = envEntry{l.Path, e.name, e.v}
-			} else {
-				envAt[e.name] = len(env)
-				env = append(env, envEntry{l.Path, e.name, e.v})
-			}
-			cfg.Sources["env."+e.name] = l.Path
-		}
-		cfg.Instructions = append(cfg.Instructions, lc.instructions...)
-		for _, h := range lc.hooks {
-			cfg.Hooks[h.Event] = append(cfg.Hooks[h.Event], h)
-		}
-		for _, c := range lc.completions {
-			if prev, ok := compFrom[c.name]; ok {
-				cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("completion #%s of %s replaces the one of %s", c.name, l.Path, prev))
-			}
-			compFrom[c.name] = l.Path
-			cfg.Completions[c.name] = c.v
-		}
+// Load reads the config file at path. An unreadable or invalid file gives the
+// defaults and a message in Errors. With a non-nil run, ${{ }} in env values
+// (each with the env known so far), provider, model, effort, colors, provider
+// fields and instruction texts is expanded with the Expander run returns. A
+// color that is not valid after expansion keeps its default, with a warning.
+// Load does not call Validate.
+func Load(ctx context.Context, path string, run func(env map[string]string) Expander) *Config {
+	cfg, env, err := readFile(path)
+	if err != nil {
+		cfg = newConfig(path)
+		cfg.Errors = append(cfg.Errors, err.Error())
+		return cfg
 	}
 	cfg.expand(ctx, env, run)
 	return cfg
 }
 
-func (c *Config) expand(ctx context.Context, env []envEntry, run func(map[string]string) Expander) {
+func newConfig(path string) *Config {
+	return &Config{Path: path, Settings: DefaultSettings(), Hooks: map[string][]Hook{}, Completions: map[string]string{}}
+}
+
+func (c *Config) expand(ctx context.Context, env []named[string], run func(map[string]string) Expander) {
 	s := &c.Settings
-	do := func(exp Expander, path, key string, v *string) {
+	do := func(exp Expander, key string, v *string) {
 		out, err := Expand(ctx, *v, exp)
 		if err != nil {
-			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: %s: %v", path, key, err))
+			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: %v", key, err))
 		}
 		*v = out
 	}
 	var exp Expander
 	for _, e := range env {
-		v := e.value
+		v := e.v
 		if run != nil {
-			do(run(maps.Clone(s.Env)), e.path, "env."+e.name, &v)
+			do(run(maps.Clone(s.Env)), "env."+e.name, &v)
 		}
 		s.Env[e.name] = v
 	}
 	if run != nil {
 		exp = run(maps.Clone(s.Env))
 	}
-	do(exp, c.Sources["provider"], "provider", &s.Provider)
-	do(exp, c.Sources["model"], "model", &s.Model)
-	do(exp, c.Sources["effort"], "effort", &s.Effort)
+	do(exp, "provider", &s.Provider)
+	do(exp, "model", &s.Model)
+	do(exp, "effort", &s.Effort)
 	defaults := DefaultColors()
 	for i, key := range ColorKeys {
-		path, ok := c.Sources["colors."+key]
-		if !ok || run == nil || !strings.Contains(s.Colors[i], "${{") {
+		if run == nil || !strings.Contains(s.Colors[i], "${{") {
 			continue
 		}
-		do(exp, path, "colors."+key, &s.Colors[i])
+		do(exp, "colors."+key, &s.Colors[i])
 		if err := CheckColor(key, s.Colors[i]); err != nil {
-			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: %v; the default stays", path, err))
+			c.Warnings = append(c.Warnings, fmt.Sprintf("%v; the default stays", err))
 			s.Colors[i] = defaults[i]
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(s.Providers)) {
-		p, path, key := s.Providers[name], c.Sources["providers."+name], "providers."+name
-		do(exp, path, key+".base_url", &p.BaseURL)
-		do(exp, path, key+".api", &p.API)
-		do(exp, path, key+".api_key", &p.APIKey)
+		p, key := s.Providers[name], "providers."+name
+		do(exp, key+".base_url", &p.BaseURL)
+		do(exp, key+".api", &p.API)
+		do(exp, key+".api_key", &p.APIKey)
 		s.Providers[name] = p
 	}
 	kept := c.Instructions[:0]
 	for _, in := range c.Instructions {
-		do(exp, in.Layer, "instructions", &in.Text)
+		do(exp, "instructions", &in.Text)
 		if strings.TrimSpace(in.Text) != "" {
 			kept = append(kept, in)
 		}
@@ -195,41 +97,36 @@ func (c *Config) expand(ctx context.Context, env []envEntry, run func(map[string
 	c.Instructions = kept
 }
 
-// readLayer returns nil, nil for a missing global layer.
-func readLayer(l Layer) (*layerConf, error) {
-	if _, err := os.Stat(l.Path); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("%s: %v", l.Path, errors.Unwrap(err))
-		}
-		if l.Name == "global" {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("%s: file not found", l.Path)
-	}
+// readFile parses and validates the file. The env values come back in file
+// order, not yet expanded.
+func readFile(path string) (*Config, []named[string], error) {
 	var data map[string]any
-	md, err := toml.DecodeFile(l.Path, &data)
+	md, err := toml.DecodeFile(path, &data)
 	if err != nil {
 		var pe toml.ParseError
-		if errors.As(err, &pe) {
-			return nil, fmt.Errorf("%s:%d: %s", l.Path, pe.Position.Line, pe.Message)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil, nil, fmt.Errorf("%s: file not found", path)
+		case errors.As(err, &pe):
+			return nil, nil, fmt.Errorf("%s:%d: %s", path, pe.Position.Line, pe.Message)
 		}
-		return nil, fmt.Errorf("%s: %v", l.Path, err)
+		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
-	p := parser{md: &md, path: l.Path}
-	lc, err := p.layer(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %v", l.Path, err)
+	p := &parser{md: &md, cfg: newConfig(path)}
+	if err := p.file(data); err != nil {
+		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
-	return lc, nil
+	return p.cfg, p.env, nil
 }
 
 type parser struct {
-	md   *toml.MetaData
-	path string
+	md  *toml.MetaData
+	cfg *Config
+	env []named[string]
 }
 
 // keys returns the keys of m (the table at prefix) in file order.
-func (p parser) keys(m map[string]any, prefix ...string) []string {
+func (p *parser) keys(m map[string]any, prefix ...string) []string {
 	var out []string
 	for _, k := range p.md.Keys() {
 		if len(k) == len(prefix)+1 && slices.Equal(k[:len(prefix)], prefix) {
@@ -246,8 +143,7 @@ func (p parser) keys(m map[string]any, prefix ...string) []string {
 	return out
 }
 
-func (p parser) layer(data map[string]any) (*layerConf, error) {
-	lc := &layerConf{}
+func (p *parser) file(data map[string]any) error {
 	for _, k := range p.keys(data) {
 		v := data[k]
 		var err error
@@ -255,42 +151,40 @@ func (p parser) layer(data map[string]any) (*layerConf, error) {
 		case "provider", "model", "effort":
 			s, ok := v.(string)
 			if !ok {
-				return nil, fmt.Errorf("%s: must be a string", k)
+				return fmt.Errorf("%s: must be a string", k)
 			}
-			lc.settings = append(lc.settings, setting{k, func(st *Settings) {
-				switch k {
-				case "provider":
-					st.Provider = s
-				case "model":
-					st.Model = s
-				default:
-					st.Effort = s
-				}
-			}})
+			switch k {
+			case "provider":
+				p.cfg.Settings.Provider = s
+			case "model":
+				p.cfg.Settings.Model = s
+			default:
+				p.cfg.Settings.Effort = s
+			}
 		case "settings":
-			err = p.settings(lc, v)
+			err = p.settings(v)
 		case "colors":
-			err = p.colors(lc, v)
+			err = p.colors(v)
 		case "providers":
-			err = p.providers(lc, v)
+			err = p.providers(v)
 		case "env":
-			err = p.strings(v, "env", envName, func(name, s string) { lc.env = append(lc.env, named[string]{name, s}) })
+			err = p.strings(v, "env", envName, func(name, s string) { p.env = append(p.env, named[string]{name, s}) })
 		case "completions":
 			err = p.strings(v, "completions", completionName, func(name, s string) {
-				lc.completions = append(lc.completions, named[string]{name, s})
+				p.cfg.Completions[name] = s
 			})
 		case "instructions":
-			err = p.instructions(lc, v)
+			err = p.instructions(v)
 		case "hooks":
-			err = p.hooks(lc, v)
+			err = p.hooks(v)
 		default:
 			err = fmt.Errorf("unknown key %q", k)
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return lc, nil
+	return nil
 }
 
 func asTable(v any, where string) (map[string]any, error) {
@@ -318,72 +212,54 @@ func asList(v any) ([]any, bool) {
 	return nil, false
 }
 
-func (p parser) settings(lc *layerConf, v any) error {
+func (p *parser) settings(v any) error {
 	m, err := asTable(v, "settings")
 	if err != nil {
 		return err
 	}
+	st := &p.cfg.Settings
 	for _, k := range p.keys(m, "settings") {
 		v, where := m[k], "settings."+k
-		var apply func(*Settings)
 		switch k {
-		case "compaction", "bash_timeout":
+		case "compaction", "bash_timeout", "bash_output":
 			n, ok := v.(int64)
-			if k == "compaction" && (!ok || n < 0) {
+			switch {
+			case k == "compaction" && (!ok || n < 0):
 				return fmt.Errorf("%s: must be an integer >= 0", where)
-			}
-			if k == "bash_timeout" && (!ok || n <= 0) {
+			case k == "bash_timeout" && (!ok || n <= 0):
 				return fmt.Errorf("%s: must be an integer > 0 (seconds)", where)
-			}
-			apply = func(s *Settings) {
-				if k == "compaction" {
-					s.CompactionThreshold = int(n)
-				} else {
-					s.BashTimeout = int(n)
-				}
-			}
-		case "bash_output":
-			n, ok := v.(int64)
-			if !ok || n < 0 || (n > 0 && n < 1000) {
+			case k == "bash_output" && (!ok || n < 0 || (n > 0 && n < 1000)):
 				return fmt.Errorf("%s: must be 0 (no cut) or an integer >= 1000 (bytes)", where)
 			}
-			apply = func(s *Settings) { s.BashOutput = int(n) }
+			switch k {
+			case "compaction":
+				st.CompactionThreshold = int(n)
+			case "bash_timeout":
+				st.BashTimeout = int(n)
+			default:
+				st.BashOutput = int(n)
+			}
 		case "reasoning_summary", "slash_menu", "show_bash":
 			b, ok := v.(bool)
 			if !ok {
 				return fmt.Errorf("%s: must be true or false", where)
 			}
-			apply = func(s *Settings) {
-				if k == "slash_menu" {
-					s.UI.SlashMenu = b
-				} else if k == "show_bash" {
-					s.UI.ShowBash = b
-				} else {
-					s.ReasoningSummary = b
-				}
+			switch k {
+			case "slash_menu":
+				st.UI.SlashMenu = b
+			case "show_bash":
+				st.UI.ShowBash = b
+			default:
+				st.ReasoningSummary = b
 			}
-		case "accent": // before colors.accent; read as it, with a warning
-			str, ok := v.(string)
-			if !ok {
-				return fmt.Errorf("%s: must be a string", where)
-			}
-			if !strings.Contains(str, "${{") {
-				if err := CheckColor("accent", str); err != nil {
-					return fmt.Errorf("%s: %v", where, err)
-				}
-			}
-			lc.warnings = append(lc.warnings, "settings.accent is now colors.accent; it is read as colors.accent")
-			lc.settings = append(lc.settings, setting{where, func(s *Settings) {}})
-			where, apply = "colors.accent", func(s *Settings) { s.Colors.Set("accent", str) }
 		default:
 			return fmt.Errorf("unknown key %q", where)
 		}
-		lc.settings = append(lc.settings, setting{where, apply})
 	}
 	return nil
 }
 
-func (p parser) providers(lc *layerConf, v any) error {
+func (p *parser) providers(v any) error {
 	m, err := asTable(v, "providers")
 	if err != nil {
 		return err
@@ -420,13 +296,13 @@ func (p parser) providers(lc *layerConf, v any) error {
 				return fmt.Errorf("%s.base_url: must be an http(s) URL", where)
 			}
 		}
-		lc.providers = append(lc.providers, named[Provider]{name, pr})
+		p.cfg.Settings.Providers[name] = pr
 	}
 	return nil
 }
 
 // strings reads a table of strings whose names match re.
-func (p parser) strings(v any, where string, re *regexp.Regexp, add func(name, s string)) error {
+func (p *parser) strings(v any, where string, re *regexp.Regexp, add func(name, s string)) error {
 	m, err := asTable(v, where)
 	if err != nil {
 		return err
@@ -492,13 +368,13 @@ func (f *fields) flag(k string, def bool) bool {
 	return b
 }
 
-func (p parser) instructions(lc *layerConf, v any) error {
+func (p *parser) instructions(v any) error {
 	list, ok := asList(v)
 	if !ok {
 		return fmt.Errorf("instructions: must be an array")
 	}
 	for i, item := range list {
-		in := Instruction{Main: true, Layer: p.path}
+		in := Instruction{Main: true}
 		switch item := item.(type) {
 		case string:
 			in.Text = item
@@ -512,12 +388,12 @@ func (p parser) instructions(lc *layerConf, v any) error {
 		default:
 			return fmt.Errorf("instructions[%d]: must be a string or a table", i)
 		}
-		lc.instructions = append(lc.instructions, in)
+		p.cfg.Instructions = append(p.cfg.Instructions, in)
 	}
 	return nil
 }
 
-func (p parser) hooks(lc *layerConf, v any) error {
+func (p *parser) hooks(v any) error {
 	m, err := asTable(v, "hooks")
 	if err != nil {
 		return err
@@ -531,7 +407,7 @@ func (p parser) hooks(lc *layerConf, v any) error {
 			return fmt.Errorf("hooks.%s: must be a string or an array", event)
 		}
 		for i, item := range list {
-			h := Hook{Event: event, Main: true, Layer: p.path}
+			h := Hook{Event: event, Main: true}
 			where := fmt.Sprintf("hooks.%s[%d]", event, i)
 			switch item := item.(type) {
 			case string:
@@ -568,7 +444,7 @@ func (p parser) hooks(lc *layerConf, v any) error {
 			if strings.TrimSpace(h.Run) == "" {
 				return fmt.Errorf("%s: empty command", where)
 			}
-			lc.hooks = append(lc.hooks, h)
+			p.cfg.Hooks[event] = append(p.cfg.Hooks[event], h)
 		}
 	}
 	return nil

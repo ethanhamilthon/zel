@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 
@@ -21,7 +19,7 @@ import (
 
 func openDB(home string) (*store.Store, error) { return store.Open(home) }
 
-// confHolder keeps the zel.toml snapshot of a session. It is shared by pointer
+// confHolder keeps the config snapshot of a session. It is shared by pointer
 // so a session switch sees the same notice handler.
 type confHolder struct {
 	mu     sync.RWMutex
@@ -53,7 +51,7 @@ func (h *confHolder) setNotice(fn func(string)) {
 	h.mu.Unlock()
 }
 
-// SetNoticeHandler routes config notices (broken layers, failed ${{ }}) to the UI.
+// SetNoticeHandler routes config notices (a broken file, failed ${{ }}) to the UI.
 
 func (s *session) notify(msg string) {
 	s.LogEvent("notice", msg)
@@ -64,67 +62,20 @@ func (s *session) notify(msg string) {
 	}
 }
 
-// configLayers are the zel.toml layers of this session: ~/.zel/zel.toml,
-// ./zel.toml, then the --config files. A child of another session uses the
-// layers of its parent (ZEL_CONFIG) unless it was given its own.
-func (s *session) configLayers(stored []string) []config.Layer {
-	extra := s.opts.Configs
-	if len(extra) == 0 && len(stored) > 0 {
-		// A resumed session keeps its --config files; the default layers are found again.
-		for _, p := range stored {
-			if p != filepath.Join(s.home, "zel.toml") && p != filepath.Join(s.dir, "zel.toml") {
-				extra = append(extra, p)
-			}
-		}
-		if s.parent == nil || len(extra) > 0 {
-			return config.Layers(s.home, s.dir, extra)
-		}
+// configFile is the config file of this session: --config, else the file of
+// the parent session (ZEL_CONFIG), else ~/.zel/config.toml.
+func (s *session) configFile() string {
+	switch {
+	case s.opts.Config != "":
+		return s.opts.Config
+	case s.parent != nil && s.parent.config != "":
+		return s.parent.config
 	}
-	if len(extra) == 0 && s.parent != nil && len(s.parent.config) > 0 {
-		layers := layersFromPaths(s.home, s.parent.config)
-		// A child that works in another folder (after zel cd, or --cwd) also
-		// loads the zel.toml of that folder, last, so it wins.
-		local := filepath.Join(s.dir, "zel.toml")
-		if info, err := os.Stat(local); err == nil && !slices.ContainsFunc(layers, func(l config.Layer) bool {
-			other, err := os.Stat(l.Path)
-			return l.Path == local || (err == nil && os.SameFile(info, other))
-		}) {
-			layers = append(layers, config.Layer{Name: "local", Path: local})
-		}
-		return layers
-	}
-	return config.Layers(s.home, s.dir, extra)
+	return config.File(s.home)
 }
 
-func layersFromPaths(home string, paths []string) []config.Layer {
-	global := filepath.Join(home, "zel.toml")
-	var layers []config.Layer
-	for i, p := range paths {
-		name := "config"
-		switch {
-		case p == global:
-			name = "global"
-		case i <= 1 && filepath.Base(p) == "zel.toml":
-			name = "local"
-		}
-		layers = append(layers, config.Layer{Name: name, Path: p})
-	}
-	if len(layers) == 0 || layers[0].Path != global {
-		layers = append([]config.Layer{{Name: "global", Path: global}}, layers...)
-	}
-	return layers
-}
-
-// configPaths are the layer files that exist, in merge order (ZEL_CONFIG).
-func (s *session) configPaths() []string {
-	var paths []string
-	for _, l := range s.layers {
-		if _, err := os.Stat(l.Path); err == nil {
-			paths = append(paths, l.Path)
-		}
-	}
-	return paths
-}
+// ConfigFile is the config file of the session.
+func (a *Runtime) ConfigFile() string { return a.session().path }
 
 // expander runs a ${{ }} expression: bash in the session folder with the
 // session environment and env on top.
@@ -149,15 +100,15 @@ func (s *session) expander(env map[string]string) config.Expander {
 	}
 }
 
-// loadConfig reads the layers into a new snapshot and applies its settings.
-// Broken layers are skipped with a notice.
+// loadConfig reads the config file into a new snapshot and applies its settings.
+// A broken file is skipped with a notice.
 func (s *session) loadConfig() error {
-	cfg := config.Load(context.Background(), s.layers, s.expander)
+	cfg := config.Load(context.Background(), s.path, s.expander)
 	for _, e := range cfg.Errors {
-		s.notify("zel.toml skipped: " + e)
+		s.notify("config skipped: " + e)
 	}
 	for _, w := range cfg.Warnings {
-		s.notify("zel.toml: " + w)
+		s.notify("config: " + w)
 	}
 	return s.applyConfig(cfg)
 }
@@ -180,19 +131,19 @@ func (s *session) applyConfig(cfg *config.Config) error {
 	return err
 }
 
-// Reload reads the config again for hot reload. If a layer is broken, the old
+// Reload reads the config again for hot reload. If the file is broken, the old
 // snapshot stays and a notice says why; the system prompt is rebuilt when it changed.
 func (a *Runtime) Reload() error { return a.session().Reload() }
 
 func (s *session) Reload() error {
-	cfg := config.Load(context.Background(), s.layers, s.expander)
+	cfg := config.Load(context.Background(), s.path, s.expander)
 	if len(cfg.Errors) > 0 && s.conf.get() != nil {
-		msg := "zel.toml has errors; the previous config stays: " + strings.Join(cfg.Errors, "; ")
-		s.fireHooks("config_changed", map[string]any{"ok": false, "error": msg, "files": s.configPaths()})
+		msg := "config has errors; the previous config stays: " + strings.Join(cfg.Errors, "; ")
+		s.fireHooks("config_changed", map[string]any{"ok": false, "error": msg, "file": s.path})
 		return errors.New(msg)
 	}
 	for _, w := range cfg.Warnings {
-		s.notify("zel.toml: " + w)
+		s.notify("config: " + w)
 	}
 	if err := s.applyConfig(cfg); err != nil {
 		return err
@@ -211,7 +162,7 @@ func (s *session) Reload() error {
 			return err
 		}
 	}
-	s.fireHooks("config_changed", map[string]any{"ok": true, "error": "", "files": s.configPaths()})
+	s.fireHooks("config_changed", map[string]any{"ok": true, "error": "", "file": s.path})
 	return nil
 }
 
@@ -280,146 +231,19 @@ func (s *session) Settings() Settings {
 // Project is the project directory of the session.
 func (a *Runtime) Project() string { return a.project }
 
-// ConfigFiles are the config layers that exist, in merge order.
-func (a *Runtime) ConfigFiles() []string { return a.session().configPaths() }
-
-// target is the layer file a menu change of key goes to: the layer it comes
-// from now, else the layer of fallback, else ~/.zel/zel.toml.
-func (s *session) target(key string, fallback ...string) string {
-	if cfg := s.conf.get(); cfg != nil {
-		if p := cfg.Sources[key]; p != "" {
-			return p
-		}
-		for _, f := range fallback {
-			if p := cfg.Sources[f]; p != "" {
-				return p
-			}
-		}
-	}
-	return filepath.Join(s.home, "zel.toml")
-}
-
-// UpdateSettings writes what the settings and provider menus changed into the
-// zel.toml layers the values come from, then reloads. Call while idle.
-func (a *Runtime) UpdateSettings(next Settings) error { return a.session().UpdateSettings(next) }
-
-func (s *session) UpdateSettings(next Settings) error {
-	if err := config.Validate(next); err != nil {
-		return err
-	}
-	cur := s.Settings()
-	type change struct {
-		key   string
-		value any
-	}
-	var set []change
-	add := func(key string, changed bool, value any) {
-		if changed {
-			set = append(set, change{key, value})
-		}
-	}
-	add("settings.compaction", next.CompactionThreshold != cur.CompactionThreshold, next.CompactionThreshold)
-	add("settings.reasoning_summary", next.ReasoningSummary != cur.ReasoningSummary, next.ReasoningSummary)
-	for i, key := range config.ColorKeys {
-		add("colors."+key, next.Colors[i] != cur.Colors[i], next.Colors[i])
-	}
-	add("settings.slash_menu", next.UI.SlashMenu != cur.UI.SlashMenu, next.UI.SlashMenu)
-	add("settings.show_bash", next.UI.ShowBash != cur.UI.ShowBash, next.UI.ShowBash)
-	add("settings.bash_timeout", next.BashTimeout != cur.BashTimeout, next.BashTimeout)
-	add("settings.bash_output", next.BashOutput != cur.BashOutput, next.BashOutput)
-	for _, c := range set {
-		if err := config.SetKey(s.target(c.key), c.key, c.value); err != nil {
-			return err
-		}
-		// settings.accent was the old place of colors.accent: drop it once the new key is written.
-		if cfg := s.conf.get(); c.key == "colors.accent" && cfg != nil && cfg.Sources["settings.accent"] != "" {
-			if err := config.DeleteKey(cfg.Sources["settings.accent"], "settings.accent"); err != nil {
-				return err
-			}
-		}
-	}
-	for name, p := range next.Providers {
-		old, ok := cur.Providers[name]
-		file := s.target("providers." + name)
-		if !ok || old.BaseURL != p.BaseURL {
-			if err := config.SetKey(file, "providers."+name+".base_url", p.BaseURL); err != nil {
-				return err
-			}
-		}
-		if !ok || old.API != p.API {
-			if err := config.SetKey(file, "providers."+name+".api", cmp.Or(p.API, config.APIResponses)); err != nil {
-				return err
-			}
-		}
-		if !ok || old.APIKey != p.APIKey {
-			if err := config.SetKey(file, "providers."+name+".api_key", p.APIKey); err != nil {
-				return err
-			}
-		}
-	}
-	for name := range cur.Providers {
-		if _, ok := next.Providers[name]; !ok {
-			if err := config.DeleteKey(s.target("providers."+name), "providers."+name); err != nil {
-				return err
-			}
-		}
-	}
-	if next.Provider != cur.Provider || next.Model != cur.Model || next.Effort != cur.Effort {
-		if err := s.saveDefault(selection{next.Provider, next.Model, next.Effort}); err != nil {
-			return err
-		}
-	}
-	return s.loadConfig()
-}
-
-// saveDefault writes provider, model and effort each into the layer it comes
-// from (a key that no layer sets goes where the model is set).
+// saveDefault writes the selected provider, model and effort into the config
+// file, the only thing the app changes in it.
 func (s *session) saveDefault(sel selection) error {
-	cfg := s.conf.get()
-	for _, kv := range [][2]string{{"provider", sel.Provider}, {"model", sel.Model}, {"effort", sel.Effort}} {
-		if kv[1] == "" {
-			// A deleted provider takes its selection along.
-			if cfg != nil && cfg.Sources[kv[0]] != "" {
-				if err := config.DeleteKey(cfg.Sources[kv[0]], kv[0]); err != nil {
-					return err
-				}
-			}
+	s.cfg.mu.Lock()
+	base := s.cfg.base
+	s.cfg.mu.Unlock()
+	for _, kv := range [][3]string{{"provider", sel.Provider, base.Provider}, {"model", sel.Model, base.Model}, {"effort", sel.Effort, base.Effort}} {
+		if kv[1] == "" || kv[1] == kv[2] {
 			continue
 		}
-		if cfg != nil {
-			cur := map[string]string{"provider": cfg.Settings.Provider, "model": cfg.Settings.Model, "effort": cfg.Settings.Effort}[kv[0]]
-			if cur == kv[1] && cfg.Sources[kv[0]] != "" {
-				continue
-			}
-		}
-		if err := config.SetKey(s.target(kv[0], "model"), kv[0], kv[1]); err != nil {
+		if err := config.SetKey(s.path, kv[0], kv[1]); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// WriteConfig writes settings into ~/.zel/zel.toml (onboarding, tests).
-func WriteConfig(home string, s Settings) error {
-	path := filepath.Join(home, "zel.toml")
-	for name, p := range s.Providers {
-		for k, v := range map[string]string{"base_url": p.BaseURL, "api": cmp.Or(p.API, config.APIResponses), "api_key": p.APIKey} {
-			if err := config.SetKey(path, "providers."+name+"."+k, v); err != nil {
-				return err
-			}
-		}
-	}
-	for k, v := range map[string]string{"provider": s.Provider, "model": s.Model, "effort": s.Effort} {
-		if v != "" {
-			if err := config.SetKey(path, k, v); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// LoadConfig is the settings of ~/.zel/zel.toml and ./zel.toml of dir, without ${{ }}.
-func LoadConfig(home, dir string) Settings {
-	return config.Load(context.Background(), config.Layers(home, dir, nil), nil).Settings
 }

@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -17,11 +15,6 @@ import (
 type submission struct {
 	draft, text string
 	serial      int
-}
-type pasted struct {
-	image, text string
-	target      *editor
-	draft       string
 }
 
 func (m *app) key(k *tcell.EventKey) {
@@ -50,19 +43,10 @@ func (m *app) key(k *tcell.EventKey) {
 		m.cancelPrompt()
 		m.ctl.Stop()
 		return
-	case tcell.KeyCtrlC:
-		if m.selected != nil {
-			m.copySelection()
-		}
-		return
 	case tcell.KeyCtrlL:
 		m.screen.Sync()
 		return
-	case tcell.KeyCtrlV:
-		m.pasteClipboard()
-		return
 	}
-	m.selected = nil
 	if m.operation {
 		return
 	}
@@ -105,7 +89,6 @@ func (m *app) key(k *tcell.EventKey) {
 		} else {
 			m.completionHidden = m.input.text
 			m.completions = list{}
-			m.selected = nil
 		}
 		return
 	case tcell.KeyTab, tcell.KeyBacktab:
@@ -127,6 +110,16 @@ func (m *app) key(k *tcell.EventKey) {
 			if err == nil {
 				m.input.set(in.Text)
 				m.queued = 0
+				return
+			}
+		}
+		// Without the mouse, the arrows scroll the chat when the input has no other line to move to.
+		width, _ := m.screen.Size()
+		if len(m.input.rows(width)) == 1 {
+			if k.Key() == tcell.KeyUp {
+				m.scroll += 3
+			} else {
+				m.scroll = max(0, m.scroll-3)
 			}
 			return
 		}
@@ -153,7 +146,7 @@ func (m *app) key(k *tcell.EventKey) {
 func (m *app) editKey(k *tcell.EventKey) {
 	width, _ := m.screen.Size()
 	before := m.input.text
-	m.input.key(k, max(1, width-2), true)
+	m.input.key(k, max(1, width), true)
 	if m.input.text != before {
 		m.composerChanged()
 	}
@@ -246,7 +239,7 @@ func (m *app) choiceKey(k *tcell.EventKey) {
 				m.keepChoice(m.ctl.AnswerChoiceText(m.choice.ID, text))
 			}
 		default:
-			m.answer.key(k, max(1, width-2), true)
+			m.answer.key(k, max(1, width), true)
 		}
 		return
 	}
@@ -285,24 +278,6 @@ func (m *app) keepChoice(r core.Record, ok bool) {
 	m.syncChoice()
 	m.scroll = 0
 }
-func (m *app) pasteClipboard() {
-	if m.clipboardBusy {
-		return
-	}
-	m.clipboardBusy = true
-	target := m.activeEditor()
-	draft := target.text
-	directory := m.ctl.AttachmentsDir()
-	if directory == "" {
-		directory = filepath.Join(m.runtime.Home(), "attachments")
-	}
-	m.work("clipboard", func() (any, error) {
-		ctx, cancel := context.WithTimeout(m.ctx, 3*time.Second)
-		defer cancel()
-		image, text, err := readClipboard(ctx, directory)
-		return pasted{image, text, target, draft}, err
-	})
-}
 func (m *app) accept(r result) {
 	m.dirty = true
 	if r.kind == "choice" {
@@ -314,9 +289,6 @@ func (m *app) accept(r result) {
 		return
 	}
 	if r.generation != m.generation && r.kind != "operation" {
-		if p, ok := r.value.(pasted); ok && p.image != "" {
-			os.Remove(p.image)
-		}
 		return
 	}
 	switch r.kind {
@@ -334,27 +306,6 @@ func (m *app) accept(r result) {
 			return
 		}
 		m.deliver(in.text, in.draft)
-	case "clipboard":
-		m.clipboardBusy = false
-		p := r.value.(pasted)
-		if p.target != m.activeEditor() || p.draft != p.target.text {
-			if p.image != "" {
-				os.Remove(p.image)
-			}
-			return
-		}
-		if r.err != nil {
-			m.notice(r.err)
-			return
-		}
-		if p.image != "" {
-			p.text = p.image + " "
-		}
-		p.target.insert(p.text)
-		if p.target == &m.input {
-			m.composerChanged()
-			m.updateCompletions()
-		}
 	case "files":
 		m.fileLoading = false
 		loaded := r.value.(fileResult)

@@ -1,7 +1,6 @@
-# zel.toml examples
+# config.toml example
 
-- `global-zel.toml` - `~/.zel/zel.toml`: providers, settings, instructions, hooks (a desktop notification, the terminal progress bar) and a completion
-- `project-zel.toml` - `./zel.toml` of a Go repository: AGENTS.md as instructions, a `turn_end` hook and a guard for `git push --force`
+- `config.toml` - `~/.zel/config.toml`: providers, settings, instructions, hooks (a desktop notification, the terminal progress bar, a guard for `git push --force`) and a completion
 - `web-search` - a standalone script: web search via the Tavily API. Invoke it by its path or install it on your normal `PATH`.
 
-The tests in `internal/config` load the toml files, so they stay valid.
+The tests in `internal/config` load the toml file, so it stays valid.

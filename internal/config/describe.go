@@ -8,25 +8,13 @@ import (
 	"strings"
 )
 
-// Describe renders the configuration for `zel config`: layers, problems, every
-// setting with the file that set it, and the names of env variables,
-// instructions, hooks and completions. Secrets are never shown.
+// Describe renders the configuration for `zel config`: the file, problems,
+// every setting, and the names of env variables, instructions, hooks and
+// completions. Secrets are never shown.
 func (c *Config) Describe() string {
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	src := func(key string) string {
-		if s, ok := c.Sources[key]; ok {
-			return DisplayPath(s)
-		}
-		return "default"
-	}
-	p("Layers:")
-	if len(c.Layers) == 0 {
-		p("  (none)")
-	}
-	for _, l := range c.Layers {
-		p("  %-6s  %s", l.Name, DisplayPath(l.Path))
-	}
+	p("Config: %s", DisplayPath(c.Path))
 	for _, list := range []struct {
 		title string
 		items []string
@@ -52,11 +40,11 @@ func (c *Config) Describe() string {
 		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
 		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
 	} {
-		p("  %-26s = %-14s  %s", row[0], row[1], src(row[0]))
+		p("  %-26s = %s", row[0], row[1])
 	}
 	p("Colors:")
 	for i, key := range ColorKeys {
-		p("  %-26s = %-14s  %s", "colors."+key, strconv.Quote(s.Colors[i]), src("colors."+key))
+		p("  %-26s = %s", "colors."+key, strconv.Quote(s.Colors[i]))
 	}
 	if len(s.Providers) > 0 {
 		p("Providers:")
@@ -69,7 +57,7 @@ func (c *Config) Describe() string {
 			if api == "" {
 				api = APIResponses
 			}
-			p("  %s: base_url=%s api=%s api_key=%s  %s", name, pr.BaseURL, api, key, src("providers."+name))
+			p("  %s: base_url=%s api=%s api_key=%s", name, pr.BaseURL, api, key)
 		}
 	}
 	if len(s.Env) > 0 {
@@ -78,18 +66,9 @@ func (c *Config) Describe() string {
 
 	if len(c.Instructions) > 0 {
 		p("Instructions:")
-		for i, in := range c.Instructions {
-			if i == 0 || in.Layer != c.Instructions[i-1].Layer {
-				n := 0
-				for _, other := range c.Instructions {
-					if other.Layer == in.Layer {
-						n++
-					}
-				}
-				p("  %s (%d)", DisplayPath(in.Layer), n)
-			}
+		for _, in := range c.Instructions {
 			first, _, _ := strings.Cut(strings.TrimSpace(in.Text), "\n")
-			p("    - %s%s", clip(first, 70), modes(in.Main, in.Headless))
+			p("  - %s%s", clip(first, 70), modes(in.Main, in.Headless))
 		}
 	}
 	if len(c.Hooks) > 0 {

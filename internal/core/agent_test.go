@@ -240,7 +240,7 @@ func TestProviderFailuresNeverShowTheKey(t *testing.T) {
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL, APIKey: "sk-secret-123"}
-	if err := WriteConfig(home, s); err != nil {
+	if err := writeConfig(home, s); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(t.TempDir(), Options{})
@@ -562,6 +562,34 @@ func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
 	return newTestAgentWith(t, fp, opts, nil)
 }
 
+// writeConfig writes the provider of a test into the config of home. Keys the
+// file already has stay, so a test can bring its own model.
+func writeConfig(home string, s Settings) error {
+	path := config.File(home)
+	cfg := config.Load(context.Background(), path, nil)
+	if _, err := os.Stat(path); err == nil && len(cfg.Errors) > 0 {
+		return nil
+	}
+	for name, p := range s.Providers {
+		for k, v := range map[string]string{"base_url": p.BaseURL, "api": p.API, "api_key": p.APIKey} {
+			if v == "" {
+				continue
+			}
+			if err := config.SetKey(path, "providers."+name+"."+k, v); err != nil {
+				return err
+			}
+		}
+	}
+	for k, v := range map[string][2]string{"provider": {s.Provider, cfg.Settings.Provider}, "model": {s.Model, cfg.Settings.Model}} {
+		if v[0] != "" && v[1] == "" {
+			if err := config.SetKey(path, k, v[0]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(home, dir string)) *Runtime {
 	t.Helper()
 	home, dir := t.TempDir(), t.TempDir()
@@ -571,11 +599,11 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL}
-	if err := WriteConfig(home, s); err != nil {
-		t.Fatal(err)
-	}
 	if pre != nil {
 		pre(home, dir)
+	}
+	if err := writeConfig(home, s); err != nil {
+		t.Fatal(err)
 	}
 	a, err := New(dir, opts)
 	if err != nil {
@@ -746,35 +774,25 @@ func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestFileBackedImagesAndLegacyHistory(t *testing.T) {
+func TestImagesLiveInMemoryOnly(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
 	s := a.session()
-	original := Input{Text: "image", Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}
-	staged, err := s.stageInput(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if staged.Images[0].URL == original.Images[0].URL || !strings.HasPrefix(staged.Images[0].URL, imageRefPrefix) {
-		t.Fatal("not staged")
-	}
-	s.commitInput(original) // immutable legacy record
-	legacy := append([]byte(nil), s.History[0]...)
-	s.commitInput(staged)
-	if strings.Contains(string(s.History[1]), "base64") {
-		t.Fatal("encoded preview retained")
-	}
-	hydrated, err := s.hydrateImages(s.requestInput())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hydrated) != 2 || !strings.Contains(string(hydrated[1]), "data:image/png;base64,aQ==") {
-		t.Fatalf("hydrate: %s", hydrated)
-	}
-	if string(s.History[0]) != string(legacy) {
-		t.Fatal("legacy was migrated")
+	s.commitInput(Input{Text: "look", Images: []shell.Image{{Path: "/tmp/x.png", URL: "data:image/png;base64,aQ=="}}})
+	if !strings.Contains(string(s.requestInput()[0]), "data:image/png;base64,aQ==") {
+		t.Fatalf("the model must get the image: %s", s.requestInput()[0])
 	}
 	if err := a.Save(); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(string(s.History[0]), "base64") {
+		t.Fatal("the image was dropped from memory")
+	}
+	data, err := os.ReadFile(filepath.Join(s.sessionDir(), "session.jsonl"))
+	if err != nil || strings.Contains(string(data), "base64") || !strings.Contains(string(data), imagePlaceholder) {
+		t.Fatalf("the saved history must have a placeholder, not the image: %v\n%s", err, data)
+	}
+	if _, err := os.Stat(filepath.Join(s.sessionDir(), "attachments")); !os.IsNotExist(err) {
+		t.Fatalf("nothing may be stored in an attachments folder: %v", err)
 	}
 	id := s.id
 	a.Close()
@@ -784,31 +802,17 @@ func TestFileBackedImagesAndLegacyHistory(t *testing.T) {
 	}
 	defer resumed.Close()
 	rs := resumed.session()
-	if _, err := rs.hydrateImages(rs.requestInput()); err != nil {
-		t.Fatal(err)
-	}
-	name := strings.TrimPrefix(staged.Images[0].URL, imageRefPrefix)
-	if err := os.Remove(filepath.Join(rs.sessionDir(), "attachments", name)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rs.hydrateImages(rs.requestInput()); err == nil {
-		t.Fatal("missing preview silently omitted")
-	}
-	if _, err := rs.loadPreview("../escape.png"); err == nil {
-		t.Fatal("accepted path traversal")
-	}
-	rs.compacted = compaction{Drop: len(rs.History)}
-	if _, err := rs.hydrateImages(rs.requestInput()); err != nil {
-		t.Fatalf("compacted image was read: %v", err)
+	if got := string(rs.requestInput()[0]); strings.Contains(got, "input_image") || !strings.Contains(got, imagePlaceholder) {
+		t.Fatalf("a resumed session has the placeholder: %s", got)
 	}
 }
 
-func TestFileImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
+func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 	for _, api := range []string{APIResponses, APIChat} {
 		t.Run(api, func(t *testing.T) {
 			fp := &fakeProvider{reply: func(n int, body string) string {
-				if !strings.Contains(body, "data:image/png;base64,aQ==") || strings.Contains(body, imageRefPrefix) {
-					t.Error("image reference leaked to provider or preview missing")
+				if !strings.Contains(body, "data:image/png;base64,aQ==") {
+					t.Error("the image is missing in the request")
 				}
 				if api == APIResponses {
 					if n == 1 {
@@ -829,11 +833,10 @@ func TestFileImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				return sse(events...)
 			}}
 			a := newTestAgent(t, fp, Options{})
-			settings := a.Settings()
-			p := settings.Providers["p"]
-			p.API = api
-			settings.Providers["p"] = p
-			if err := a.UpdateSettings(settings); err != nil {
+			if err := config.SetKey(a.ConfigFile(), "providers.p.api", api); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Reload(); err != nil {
 				t.Fatal(err)
 			}
 			var events []TurnEvent
@@ -854,89 +857,6 @@ func TestFileImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				t.Fatalf("commands %d requests %d", count, len(fp.requests()))
 			}
 		})
-	}
-}
-
-func TestAttachmentReferencesAreTypedAndConfined(t *testing.T) {
-	a := newTestAgent(t, okProvider(), Options{})
-	s := a.session()
-	for _, item := range []json.RawMessage{
-		raw(map[string]any{"role": "user", "content": "explain zel-image:v1: references"}),
-		callOutput("c", "zel-image:v1: is an internal scheme"),
-	} {
-		if _, err := s.hydrateImages([]json.RawMessage{item}); err != nil {
-			t.Fatal("ordinary text treated as attachment", err)
-		}
-	}
-	ref, err := s.storePreview("data:image/png;base64,aQ==")
-	if err != nil {
-		t.Fatal(err)
-	}
-	name := strings.TrimPrefix(ref, imageRefPrefix)
-	if err := os.WriteFile(filepath.Join(s.sessionDir(), "attachments", name), []byte("changed"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.loadPreview(name); err == nil {
-		t.Fatal("corrupt preview accepted")
-	}
-	if err := os.Remove(filepath.Join(s.sessionDir(), "attachments", name)); err != nil {
-		t.Fatal(err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.WriteFile(outside, []byte("i"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(s.sessionDir(), "attachments", name)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.loadPreview(name); err == nil {
-		t.Fatal("symlink escaped attachment root")
-	}
-}
-
-func TestFileBackedImageFailureDoesNotCommit(t *testing.T) {
-	a := newTestAgent(t, okProvider(), Options{})
-	s := a.session()
-	if err := os.WriteFile(filepath.Join(s.sessionDir(), "attachments"), []byte("blocked"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	err := a.RunInput(context.Background(), Input{Text: "image", Images: []shell.Image{{URL: "data:image/png;base64,aQ=="}}}, func(TurnEvent) {})
-	if err == nil || len(s.History) != 0 {
-		t.Fatalf("failed attachment committed: %v %d", err, len(s.History))
-	}
-}
-
-func TestSavedImageOriginalsRetainedAndMissingReported(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	path := filepath.Join(a.home, "attachments", "original.png")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-30 * 24 * time.Hour)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
-	a.commitInput(Input{Text: "image", Images: []shell.Image{{Path: path, URL: "data:image/png;base64,aQ=="}}})
-	if err := a.Save(); err != nil {
-		t.Fatal(err)
-	}
-	b, err := New(a.session().dir, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b.Close()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("saved source removed: %v", err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	records, err := storedRecords(t, a)
-	if err != nil || !slices.ContainsFunc(records, func(r Record) bool { return strings.Contains(r.Text, "Original image unavailable") }) {
-		t.Fatalf("missing-source notice: %v err=%v", records, err)
 	}
 }
 
@@ -1071,7 +991,7 @@ func TestBusyRejectionsAndQuitDuringTurn(t *testing.T) {
 
 func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h := newHarness(t, &fakeModel{})
-	global := filepath.Join(h.a.Home(), "zel.toml")
+	global := h.a.ConfigFile()
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
 			return !h.ctl.Status().Busy && len(doneEvents(events)) == n
@@ -1111,7 +1031,7 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	if strings.Contains(reqs[1], "INSTRUCTIONS-V2") || !strings.Contains(reqs[2], "INSTRUCTIONS-V2") {
 		t.Fatalf("prompt not rebuilt after the turn:\nb: %s\nc: %s", reqs[1], reqs[2])
 	}
-	if events := h.log(); !slices.ContainsFunc(events, func(e Event) bool { return e.Text == "zel.toml reloaded" }) {
+	if events := h.log(); !slices.ContainsFunc(events, func(e Event) bool { return e.Text == "config reloaded" }) {
 		t.Fatalf("no reload notice: %s", describe(events))
 	}
 }
@@ -1217,7 +1137,7 @@ func newHarnessWith(t *testing.T, model *fakeModel, pre func(*Runtime)) *harness
 	s := DefaultSettings()
 	s.Provider, s.Model = "p", "m"
 	s.Providers["p"] = Provider{BaseURL: server.URL}
-	if err := WriteConfig(home, s); err != nil {
+	if err := writeConfig(home, s); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(dir, Options{})
@@ -1407,7 +1327,7 @@ func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 		return textReply("ok")
 	}}
 	a := newTestAgentWith(t, fp, Options{}, func(home, dir string) {
-		if err := config.SetKey(filepath.Join(home, "zel.toml"), "settings.compaction", 100); err != nil {
+		if err := config.SetKey(config.File(home), "settings.compaction", 100); err != nil {
 			t.Fatal(err)
 		}
 	})

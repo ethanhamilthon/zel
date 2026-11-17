@@ -88,7 +88,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 type parentLink struct {
 	session, socket, token  string
 	depth                   int
-	config                  []string
+	config                  string
 	provider, model, effort string
 }
 
@@ -100,9 +100,7 @@ func parentFromEnv() (*parentLink, error) {
 	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
 	p := &parentLink{session: id, socket: socket, token: token, depth: depth,
 		provider: os.Getenv("ZEL_PROVIDER"), model: os.Getenv("ZEL_MODEL"), effort: os.Getenv("ZEL_EFFORT")}
-	if c := os.Getenv("ZEL_CONFIG"); c != "" {
-		p.config = strings.Split(c, string(os.PathListSeparator))
-	}
+	p.config = os.Getenv("ZEL_CONFIG")
 	return p, nil
 }
 
