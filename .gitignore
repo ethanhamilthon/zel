@@ -1,8 +1,4 @@
 /zel
 /dist/
 .zeldev
-
 *.test
-
-
-/TODO.md

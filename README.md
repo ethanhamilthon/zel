@@ -75,6 +75,7 @@ Go 1.27.3+ and Make are required.
 make install     # installs ~/.local/bin/zel
 make dev         # runs with isolated ~/.zeldev data
 make test        # formatting, vet and race tests
+python3 scripts/verify-terminal.py BINARY OUTDIR   # real terminal check with a fake provider (needs pyte, Pillow)
 ```
 
 Keep code, UI and documentation in English. Run `make test` before committing.
