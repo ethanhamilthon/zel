@@ -115,14 +115,15 @@ Enter: send · Shift+Enter / Alt+Enter / Ctrl+J: newline
 Ctrl+D: cancel · Ctrl+Q: save and quit · Ctrl+L: redraw
 Up on empty input: recall a queued message
 Editing a queued message withdraws it
-@files and #prompts: arrows select, Tab or Enter completes
+@files and #prompts: arrows select, Enter makes a token
+Tab completes and enters directories
 PgUp/PgDn: scroll the chat; Up/Down scroll it when the input is one line
 Esc: go back or dismiss
 Tracing: Tab: all, bash, agent or errors · h: show the hooks
   Left/Right in an entry: the previous or next of the view
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.
-The config file (~/.zel/config.toml) reloads automatically.
+The config file (~/.config/zel/settings.toml) reloads automatically.
 Commands run with your user permissions.`
 
 var pageTitles = map[string]string{"sessions": "Sessions", "models": "Models", "effort": "Effort", "trace": "Tracing", "info": "Info", "help": "Help"}
@@ -156,7 +157,18 @@ func (m *app) openMenu(page string) {
 			}
 		}
 	case "help":
-		mu.body = keyboardHelp
+		pairs := []string{}
+		for action, key := range core.DefaultKeys {
+			binding := key
+			if s.Keys != nil {
+				binding = s.Keys[action]
+			}
+			if binding == "" {
+				binding = "Disabled"
+			}
+			pairs = append(pairs, "Ctrl+"+strings.ToUpper(strings.TrimPrefix(key, "ctrl+")), binding)
+		}
+		mu.body = strings.NewReplacer(pairs...).Replace(keyboardHelp)
 	case "trace":
 		mu.title = m.traceTitle()
 		m.loadPage()

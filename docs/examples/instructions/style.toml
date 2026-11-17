@@ -1,0 +1,6 @@
+[instruction.style]
+text = "Talk like a friend: short phrases, no filler.\nUse `zel choice` instead of asking questions in text; then end your turn.\n"
+modes = [
+    "main",
+    "headless",
+]

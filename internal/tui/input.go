@@ -31,8 +31,9 @@ func (m *app) key(k *tcell.EventKey) {
 		}
 		return
 	}
-	switch k.Key() {
-	case tcell.KeyCtrlQ:
+	k = normalizeControl(k)
+	switch shortcut(k, m.ctl.Settings().Keys) {
+	case "quit":
 		m.cancelPrompt()
 		closed, err := m.ctl.Quit()
 		m.notice(err)
@@ -40,11 +41,11 @@ func (m *app) key(k *tcell.EventKey) {
 			m.cancel()
 		}
 		return
-	case tcell.KeyCtrlD:
+	case "stop":
 		m.cancelPrompt()
 		m.ctl.Stop()
 		return
-	case tcell.KeyCtrlL:
+	case "redraw":
 		m.screen.Sync()
 		return
 	}
@@ -59,28 +60,30 @@ func (m *app) key(k *tcell.EventKey) {
 		m.choiceKey(k)
 		return
 	}
-	switch k.Key() {
-	case tcell.KeyCtrlK:
+	switch shortcut(k, m.ctl.Settings().Keys) {
+	case "menu":
 		m.openMenu("main")
 		return
-	case tcell.KeyCtrlM:
+	case "models":
 		m.openMenu("models")
 		return
-	case tcell.KeyCtrlR:
+	case "sessions":
 		m.openMenu("sessions")
 		return
-	case tcell.KeyCtrlN:
+	case "new_session":
 		m.switchSession("")
 		return
-	case tcell.KeyCtrlI:
+	case "info":
 		m.openMenu("info")
 		return
-	case tcell.KeyCtrlT:
+	case "trace":
 		m.openMenu("trace")
 		return
-	case tcell.KeyCtrlE:
+	case "editor":
 		m.openEditor()
 		return
+	}
+	switch k.Key() {
 	case tcell.KeyPgUp:
 		m.scroll += max(1, m.chatHeight-2)
 		return
@@ -135,7 +138,7 @@ func (m *app) key(k *tcell.EventKey) {
 			return
 		}
 		if len(m.completions.items) > 0 {
-			m.pickCompletion()
+			m.completePath(false)
 			return
 		}
 		m.submit()

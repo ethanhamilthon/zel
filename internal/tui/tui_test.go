@@ -48,6 +48,89 @@ func testApp(t *testing.T) *app {
 	})
 	return m
 }
+func TestNewSessionClearsCachedHistory(t *testing.T) {
+	m := testApp(t)
+	m.records = []core.Record{{Kind: "user", Text: "OLD HISTORY"}}
+	m.historyRows(60)
+	s, err := m.ctl.Session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Records = nil
+	m.control(core.Event{Kind: "session", Session: &s})
+	m.historyRows(60)
+	if len(m.history) != 0 || len(m.historyBase) != 0 {
+		t.Fatal("old history remains")
+	}
+}
+
+func TestEnterPathTokenAndTabDirectory(t *testing.T) {
+	for _, descend := range []bool{false, true} {
+		m := testApp(t)
+		m.input.set("@folder")
+		m.completionKind, m.completionStart, m.completionEnd = '@', 0, len(m.input.text)
+		m.completions.items = []item{{label: "folder/", id: "folder/"}}
+		key := tcell.KeyEnter
+		if descend {
+			key = tcell.KeyTab
+		}
+		m.key(tcell.NewEventKey(key, 0, 0))
+		if descend {
+			if m.input.text != "folder/" || len(m.input.tokens) != 0 {
+				t.Fatalf("Tab: %+v", m.input)
+			}
+		} else if m.input.text != "folder/ " || len(m.input.tokens) != 1 {
+			t.Fatalf("Enter: %+v", m.input)
+		}
+	}
+}
+
+func TestBashCountAndCompletionPreview(t *testing.T) {
+	m := testApp(t)
+	for i := 0; i < 15; i++ {
+		m.records = append(m.records, core.Record{Kind: "code", Text: "true"}, core.Record{Kind: "output", Text: "ok"})
+	}
+	m.records = append(m.records, core.Record{Kind: "reasoning", Text: "thinking"})
+	if n := m.turnSteps(); n != 15 {
+		t.Fatalf("bash calls = %d", n)
+	}
+	m.input.set("#pl")
+	m.updateCompletions()
+	if len(m.completions.items) != 1 || m.completions.items[0].detail == "" {
+		t.Fatal("no preview")
+	}
+}
+
+func TestRussianAndConfiguredShortcuts(t *testing.T) {
+	for _, r := range []rune{'k', 'K', 'л', 'Л'} {
+		k := normalizeControl(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModCtrl))
+		if got := shortcut(k, nil); got != "menu" {
+			t.Errorf("%c: %s", r, got)
+		}
+	}
+	keys := map[string]string{"menu": "alt+k"}
+	if shortcut(tcell.NewEventKey(tcell.KeyRune, 'л', tcell.ModAlt), keys) != "menu" {
+		t.Fatal("Russian Alt binding")
+	}
+	if shortcut(tcell.NewEventKey(tcell.KeyCtrlK, 0, 0), keys) != "" {
+		t.Fatal("old key still bound")
+	}
+	for _, key := range []tcell.Key{tcell.KeyEnter, tcell.KeyTab} {
+		if shortcut(tcell.NewEventKey(key, 0, 0), nil) != "" {
+			t.Fatal("legacy Enter/Tab stolen")
+		}
+	}
+	m := testApp(t)
+	m.key(tcell.NewEventKey(tcell.KeyRune, 'л', tcell.ModCtrl))
+	if m.menu == nil || m.menu.page != "main" {
+		t.Fatal("Russian Ctrl+K did not open menu")
+	}
+	plain := tcell.NewEventKey(tcell.KeyRune, 'л', 0)
+	if normalizeControl(plain) != plain || shortcut(plain, nil) != "" {
+		t.Fatal("plain Russian altered")
+	}
+}
+
 func TestChatStateAndChoicePersistence(t *testing.T) {
 	m := testApp(t)
 	m.records = []core.Record{{Kind: "user", Text: "first"}, entities.ChoiceRecord("Question: detail", "Answer")}

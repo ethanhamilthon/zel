@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -15,26 +17,33 @@ var (
 
 type fileStamp struct {
 	exists bool
-	size   int64
-	mod    int64 // mtime, ns
 	sum    [sha256.Size]byte
 }
 
-// stamp describes path; the content is hashed again only when size or mtime
-// differ from prev.
-func stamp(path string, prev fileStamp) fileStamp {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return fileStamp{}
+// treeStamp includes the supported snippets, including additions and removals.
+func treeStamp(path string) fileStamp {
+	h := sha256.New()
+	paths := []string{path}
+	for _, dir := range []string{"hooks", "prompts", "instructions"} {
+		entries, _ := os.ReadDir(filepath.Join(filepath.Dir(path), dir))
+		for _, e := range entries {
+			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") && (filepath.Ext(e.Name()) == ".toml" || (dir != "hooks" && filepath.Ext(e.Name()) == ".md")) {
+				paths = append(paths, filepath.Join(filepath.Dir(path), dir, e.Name()))
+			}
+		}
 	}
-	st := fileStamp{exists: true, size: fi.Size(), mod: fi.ModTime().UnixNano()}
-	if prev.exists && prev.size == st.size && prev.mod == st.mod {
-		st.sum = prev.sum
-		return st
+	st := fileStamp{}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			st.exists = true
+			h.Write([]byte(p))
+			h.Write([]byte{0})
+			h.Write(data)
+			h.Write([]byte{0})
+		}
 	}
-	if data, err := os.ReadFile(path); err == nil {
-		st.sum = sha256.Sum256(data)
-	}
+	copy(st.sum[:], h.Sum(nil))
 	return st
 }
 
@@ -42,7 +51,7 @@ func stamp(path string, prev fileStamp) fileStamp {
 // changed (or it appeared or disappeared) and then stayed unchanged for
 // watchSettle. Touching the file without changing its content does not count.
 func Watch(ctx context.Context, path string, fn func()) {
-	seen := stamp(path, fileStamp{})
+	seen := treeStamp(path)
 	fired := seen // the state fn was last called for
 	var changed time.Time
 	t := time.NewTicker(watchInterval)
@@ -53,7 +62,7 @@ func Watch(ctx context.Context, path string, fn func()) {
 			return
 		case <-t.C:
 		}
-		if st := stamp(path, seen); st != seen {
+		if st := treeStamp(path); st != seen {
 			seen, changed = st, time.Now()
 		}
 		if time.Since(changed) < watchSettle {

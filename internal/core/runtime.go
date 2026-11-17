@@ -23,7 +23,7 @@ type Options struct {
 	Custom                  string               // --mode: a custom mode the session runs in besides Mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
-	Config                  string               // absolute path of --config, used instead of ~/.zel/config.toml
+	Config                  string               // absolute path of --config, used instead of ~/.config/zel/settings.toml
 	Prompt                  string               // headless: the prompt, shown in the parent's row of a child
 	SessionReady            func(*Runtime) error // May persist and announce the session.
 }
@@ -342,7 +342,7 @@ func (s *session) closeTurn(turnSeq int, text string, started time.Time, emit fu
 // one item, such as partial arguments or a retried stream, count once.
 func (s *session) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
 	return func(e TurnEvent) {
-		if e.ID != "" && (e.Kind == "code" || e.Kind == "reasoning" || e.Kind == "reasoning_delta") {
+		if e.ID != "" && e.Kind == "code" {
 			if s.liveSteps == nil {
 				s.liveSteps = map[string]bool{}
 			}
@@ -352,11 +352,11 @@ func (s *session) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
 	}
 }
 
-// countSteps counts the bash calls and thinking blocks of items: the steps a turn summary shows.
+// countSteps counts tool calls, excluding reasoning blocks, for the bash total.
 func countSteps(items []json.RawMessage) (steps int) {
 	for _, item := range items {
 		for _, r := range RecordsForItem(item) {
-			if r.Kind == "code" || r.Kind == "reasoning" {
+			if r.Kind == "code" {
 				steps++
 			}
 		}

@@ -1,0 +1,20 @@
+PASS new layout reads snippets and custom keys
+PASS startup opens model picker
+PASS real streamed answer
+PASS directory instruction reaches provider
+PASS Ctrl+N clears history and opens models
+PASS history stays empty before a new prompt
+PASS completion displays content preview
+PASS selected completion preview stays gray
+PASS Enter commits directory without descending
+PASS Backspace removes committed path as one token
+PASS Tab descends into directory
+PASS Russian Alt+K honors rebound menu key
+PASS New session menu action opens models
+PASS adding a prompt hot-reloads directory
+PASS Russian Ctrl+K works after key hot reload
+PASS deleting prompt hot-reloads directory
+PASS hook check turn finished
+PASS directory hook executed
+PASS 15 bash calls counted; reasoning excluded
+PASS clean quit

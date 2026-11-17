@@ -2,7 +2,7 @@
 
 Zel gives the model one tool, `bash`: its input is a bash script. Background
 tasks, questions to the user, images and edits are `zel` commands the script
-runs. You configure Zel with one file, `~/.zel/config.toml`: settings, providers,
+runs. You configure Zel with one file, `~/.config/zel/settings.toml`: settings, providers,
 instructions, hooks and prompt completions.
 
 ## The bash tool
@@ -161,13 +161,52 @@ session, error}`). `zel -p --resume ID` continues one of your own children
 only. Children nest at most 3 deep. In a bash call a child has the same time
 limit, so longer work runs as a task: `zel task run --name review -- zel -p "..."`.
 
-## config.toml
+## settings.toml
 
-One file: `~/.zel/config.toml` (or `$ZEL_HOME/config.toml`). `--config FILE`
-(one path) replaces it: Zel works by that file alone, with no inheritance or
-merging. There is no per-folder config. Zel creates `~/.zel` with a commented
-`config.toml` and a `.gitignore` (`.env`, `.sessions/`) when they are missing.
-Everything else Zel writes lives in `~/.zel/.sessions/`. Without a configured
+Settings: `~/.config/zel/settings.toml` (or `$ZEL_HOME/settings.toml`). `--config FILE`
+replaces it and reads snippets beside that file, not from the default home.
+There is no per-project config. Zel creates the home, `settings.toml`,
+`hooks/`, `prompts/`, `instructions/` and a `.gitignore` (`.env`, `.sessions/`).
+This is a breaking layout: old `~/.zel` files and sessions are not imported.
+
+Snippets load in filename order, after the settings file:
+- `hooks/*.toml`: `[hook.NAME]` tables, with the hook fields documented below.
+- `prompts/*.toml`: `[completion.NAME]` tables or `[completion]` strings.
+- `instructions/*.toml`: `[instruction.NAME]` tables or `[instruction]` strings.
+- `prompts/NAME.md` and `instructions/NAME.md`: raw text named `NAME`, main mode
+  by default. Use TOML to select other modes. `${{ }}` works as documented below.
+
+Each TOML snippet only accepts its directory's entry type. Duplicate names are
+errors. Hidden files and other extensions are ignored; subdirectories are not
+scanned. Scripts can live alongside hook snippets and be called by their paths.
+Adding, editing or deleting a supported snippet hot-reloads the configuration.
+Inline entries remain supported, but no old files are migrated automatically.
+
+`[keys]` binds actions to `ctrl+LETTER` or `alt+LETTER` (case-insensitive).
+An empty string disables an action. Unspecified actions keep their defaults;
+duplicate bindings and unknown actions are errors. Actions and defaults:
+
+```toml
+[keys]
+menu = "ctrl+k"
+models = "ctrl+m"
+sessions = "ctrl+r"
+new_session = "ctrl+n"
+info = "ctrl+i"
+trace = "ctrl+t"
+editor = "ctrl+e"
+stop = "ctrl+d"
+quit = "ctrl+q"
+redraw = "ctrl+l"
+```
+
+Bindings reload live and Help shows the current values. Russian letters on the
+same physical keys work with Ctrl/Alt too. Plain Russian text is unchanged.
+Legacy terminals cannot distinguish Ctrl+M from Enter or Ctrl+I from Tab;
+use an enhanced keyboard protocol or bind those actions to other keys.
+Navigation/editing keys keep their usual meaning when not bound to an action.
+
+Everything else Zel writes lives in `~/.config/zel/.sessions/`. Without a configured
 provider the TUI exits with an error. The app never edits this file, except
 that choosing a model writes `provider`, `model` and `effort`; Providers and
 Settings are not in the UI, you edit the file and Zel follows it.
@@ -471,4 +510,4 @@ Strings and numbers in highlighted bash keep fixed tones.
 
 ## Examples
 
-See the examples topic: a complete config.toml and a standalone web-search script.
+See the examples topic: a complete settings.toml and a standalone web-search script.

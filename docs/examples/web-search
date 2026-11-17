@@ -1,6 +1,6 @@
 #!/bin/bash
 # web search via Tavily. usage: web-search <query> [-n 5] [--answer]
-# Put the header line "Authorization: Bearer tvly-..." in ~/.zel/tavily.hdr.
+# Put the header line "Authorization: Bearer tvly-..." in ~/.config/zel/tavily.hdr.
 n=5; a=false; q=()
 while [ $# -gt 0 ]; do
   case $1 in -n) n=$2; shift;; --answer) a=true;; *) q+=("$1");; esac; shift

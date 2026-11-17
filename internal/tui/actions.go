@@ -40,7 +40,11 @@ func (m *app) operationTo(page string, fn func() error) {
 }
 func (m *app) switchSession(id string) {
 	m.cancelPrompt()
-	m.operationTo("", func() error {
+	page := ""
+	if id == "" {
+		page = "models"
+	}
+	m.operationTo(page, func() error {
 		if id == "" {
 			return m.ctl.NewSession()
 		}

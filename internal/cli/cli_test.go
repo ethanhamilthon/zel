@@ -221,7 +221,7 @@ func TestConfigShowsTheFile(t *testing.T) {
 	t.Setenv("ZEL_HOME", home)
 	t.Chdir(t.TempDir())
 	extra := filepath.Join(t.TempDir(), "extra.toml")
-	for file, text := range map[string]string{filepath.Join(home, "config.toml"): "model = \"m1\"\n", extra: "model = \"m2\"\n"} {
+	for file, text := range map[string]string{filepath.Join(home, "settings.toml"): "model = \"m1\"\n", extra: "model = \"m2\"\n"} {
 		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}

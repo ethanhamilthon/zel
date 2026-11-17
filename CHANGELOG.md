@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0
+
+Breaking release. No migration or rollback of the old config or sessions.
+
+- Settings now live in `~/.config/zel/settings.toml`, with hot-reloaded
+  `hooks/`, `prompts/` and `instructions/` snippets beside them.
+- `[keys]` rebinds UI shortcuts; Ctrl/Alt letters work on Russian layouts.
+- New sessions clear the old history immediately and open the model picker.
+- Bash totals count tool calls, not reasoning blocks, including live calls.
+- Prompt completion rows show a gray preview without executing expansions.
+- Enter turns an @ path into a token; only Tab enters a directory.
+
+
 ## 0.9.5
 
 Tracing is easier to find your way in.

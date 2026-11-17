@@ -41,7 +41,10 @@ func (m *app) drawList(x, y, width int, items []item, selected int, spread bool)
 			label = traceColors["user"]
 		}
 		if i == selected {
-			label, detail = accentColor, accentColor
+			label = accentColor
+			if spread {
+				detail = accentColor
+			}
 			m.at(x+rowW+1, y+i, "‹", 1, accentColor)
 		}
 		m.at(x, y+i, ansi.Truncate(it.label, labelW, "…"), labelW, label)

@@ -41,6 +41,14 @@ func (c *Config) Describe() string {
 	} {
 		p("  %-26s = %s", row[0], row[1])
 	}
+	p("Keys:")
+	keys := s.Keys
+	if keys == nil {
+		keys = DefaultKeys
+	}
+	for _, action := range slices.Sorted(maps.Keys(keys)) {
+		p("  %-26s = %s", action, strconv.Quote(keys[action]))
+	}
 	p("Colors:")
 	for i, key := range ColorKeys {
 		p("  %-26s = %s", "colors."+key, strconv.Quote(s.Colors[i]))

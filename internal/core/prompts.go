@@ -82,6 +82,12 @@ func (s *session) completions() map[string]string {
 	return out
 }
 
+// PromptPreview returns unexpanded completion text without running commands.
+func (c *Controller) PromptPreview(name string) (text string) {
+	c.view(func() { text = c.a.session().completions()[name] })
+	return strings.Join(strings.Fields(text), " ")
+}
+
 // PromptNames lists the completion names, sorted.
 func (c *Controller) PromptNames() []string {
 	var names []string

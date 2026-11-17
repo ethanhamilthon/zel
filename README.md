@@ -7,7 +7,7 @@ system to learn before you can get started.
 Zel is an agent that simply writes bash. Through that one tool, it can run
 background tasks and subagents, view images, work with files, and more.
 
-One file, `~/.zel/config.toml`, lets you tailor Zel to yourself, including the
+One file, `~/.config/zel/settings.toml`, lets you tailor Zel to yourself, including the
 look of the terminal interface. A project's own rules come in through your
 instructions, for example `[instruction] agents = "${{ cat AGENTS.md }}"`. The TUI is as minimal as it
 gets: just you and your agent.
@@ -24,9 +24,9 @@ nothing else.
 
 ## Get started
 
-Run `zel` once: it creates `~/.zel` with a commented `config.toml`. Add your
+Run `zel` once: it creates `~/.config/zel` with a commented `settings.toml`. Add your
 provider there (`zel docs config`), run `zel` in your project folder, and choose
-a model with Ctrl+M. Without a provider Zel exits with an error.
+a model in the picker that opens automatically. Without a provider Zel exits with an error.
 
 Ctrl+K opens the menu for models, sessions and Info. Type `@` for files
 or `#` for prompt completions. Ctrl+E opens what you typed in your editor
@@ -49,8 +49,13 @@ Only use configuration files and tools you trust.
 
 ## Make it yours
 
-Zel reads one file, `~/.zel/config.toml`. `--config FILE` uses another file
-instead (not on top of it). Everything else Zel writes is in `~/.zel/.sessions/`.
+Zel reads `~/.config/zel/settings.toml` and snippets in `hooks/`, `prompts/`,
+`instructions/` beside it. `--config FILE` uses that file and its sibling
+folders instead. Sessions live in `~/.config/zel/.sessions/`.
+Version 0.10.0 is a breaking release: no import from `~/.zel` and no rollback.
+
+Use `[keys]` to rebind shortcuts, for example `menu = "alt+k"`.
+Ctrl/Alt shortcuts also recognize the Russian keyboard layout.
 
 Use the file to set instructions, providers, colors, hooks and prompt
 completions; each of them is a named entry such as `[provider.openai]` or

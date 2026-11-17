@@ -43,6 +43,7 @@ class Provider(BaseHTTPRequestHandler):
         elif last == 'view-relative' and 'rel' not in calls: output = [command(f'mkdir -p {OUT}/relsub && cp {OUT}/fixture.png {OUT}/relsub/rel.png && cd {OUT}/relsub && {BIN} view rel.png', 'rel')]
         elif last == 'hook-check' and 'hook' not in calls: output = [command('echo hooked', 'hook')]
         elif last == 'trace-check' and 'tr1' not in calls: output = [command('echo traced', 'tr1'), command('false', 'tr2')]
+        elif last == 'fifteen-bash' and 'batch0' not in calls: output = [{'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'Thinking is not a bash call.'}]}] + [command('echo batch-' + str(i), 'batch' + str(i)) for i in range(15)]
         elif last == 'task-run' and 'task' not in calls: output = [command(f'{BIN} task run --name bg-check -- sleep 90', 'task')]
         elif last == 'spawn-sub' and 'spawn' not in calls: output = [command(f'{BIN} -p sub-work', 'spawn')]
         elif last == 'sub-work' and 'subsleep' not in calls: output = [command('sleep 12', 'subsleep')]
@@ -58,7 +59,7 @@ class Provider(BaseHTTPRequestHandler):
                 emit({'type': 'response.output_item.added', 'output_index': index, 'item': initial})
                 if item['type'] == 'function_call':
                     emit({'type': 'response.function_call_arguments.delta', 'output_index': index, 'delta': item['arguments']})
-                else:
+                elif item['type'] == 'message':
                     for i in range(0, len(item['content'][0]['text']), 4):
                         emit({'type': 'response.output_text.delta', 'output_index': index, 'delta': item['content'][0]['text'][i:i+4]})
             emit({'type': 'response.completed', 'response': {'output': output, 'usage': {'input_tokens': 200, 'output_tokens': 40}}})
@@ -135,20 +136,20 @@ class Term:
         except subprocess.TimeoutExpired: self.p.kill()
         return self.p.returncode
 
-# 1. No provider: the app exits with an error, and ~/.zel gets its default files.
+# 1. No provider: the app exits with an error, and ~/.config/zel gets its default files.
 home1, cwd = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-empty-')), pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-project-'))
 t = Term(home1 / 'new', cwd)
 while t.p.poll() is None: t.pump(.05)
 t.pump(.3)
 check(t.p.returncode not in (None, 0) and 'no provider configured' in t.view(), 'no provider: exit with an error', t.view())
 (OUT / '00-no-provider.txt').write_text(t.view())
-check(sorted(os.listdir(home1 / 'new')) == ['.gitignore', '.sessions', 'config.toml'] or sorted(os.listdir(home1 / 'new')) == ['.gitignore', 'config.toml'], 'default files', os.listdir(home1 / 'new'))
+check(set(os.listdir(home1 / 'new')) - {'.sessions'} == {'.gitignore', 'settings.toml', 'hooks', 'prompts', 'instructions'}, 'default files', os.listdir(home1 / 'new'))
 check((home1 / 'new' / '.gitignore').read_text() == '.env\n.sessions/\n', '.gitignore content')
 
 # 2. The TUI with a provider.
-home = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-home-')); (home / 'config.toml').write_text(CONFIG)
+home = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-home-')); (home / 'settings.toml').write_text(CONFIG)
 (cwd / 'my file.go').write_text('sample\n'); (cwd / 'zel.toml').write_text('model = "from-local-file"\n')
-t = Term(home, cwd); t.pump(1.5)
+t = Term(home, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.screen.cursor.x == 0 and t.screen.cursor.y == 0, 'empty composer starts at the corner, no padding', (t.screen.cursor.x, t.screen.cursor.y))
 t.send('draft'); check(t.screen.cursor.x == 5, 'typed text has no left padding'); t.shot('01-composer')
 t.send('\x15'); t.send('stream-check\r')
@@ -183,19 +184,19 @@ def title_at(title):
     return next(((y, r.index(title)) for y, r in enumerate(t.rows()) if title in r), None)
 main_at = title_at('Zel '); t.shot('06-menu')
 t.send('info'); t.send('\r'); t.pump(.6); t.shot('07-info')
-check('config.toml' in t.view(), 'Info shows config.toml', t.view())
+check('settings.toml' in t.view(), 'Info shows settings.toml', t.view())
 check(title_at('Info') == main_at, 'the menu and Info are one box: the title stays in place', (main_at, title_at('Info'))); t.send('\x1b', .5)
 t.send('models'); t.send('\r'); t.pump(1.2); t.shot('08-models')
-before = (home / 'config.toml').read_text()
+before = (home / 'settings.toml').read_text()
 t.send('second'); t.send('\r'); t.pump(.5); t.shot('09-effort'); t.send('\r'); t.pump(1.0)
-after = (home / 'config.toml').read_text()
+after = (home / 'settings.toml').read_text()
 changed = [l for l in after.splitlines() if l not in before.splitlines()]
 check(changed == ['model = "fixture/second-model"'], 'choosing a model writes only the model line', changed)
-check('zel.toml' not in os.listdir(home), 'only config.toml is used')
+check('zel.toml' not in os.listdir(home), 'only settings.toml is used')
 # the file is watched: an outside edit is applied
-(home / 'config.toml').write_text(after.replace('#FF3B30', '#30D158')); t.pump(1.8)
+(home / 'settings.toml').write_text(after.replace('#FF3B30', '#30D158')); t.pump(1.8)
 t.send('@'); t.pump(.8)
-check(any(t.fg(x, y) == '30d158' for y in range(ROWS) for x in range(COLS)), 'an edit of config.toml is applied while running (the arrow is the new accent)', t.view())
+check(any(t.fg(x, y) == '30d158' for y in range(ROWS) for x in range(COLS)), 'an edit of settings.toml is applied while running (the arrow is the new accent)', t.view())
 t.send('\x1b', .4); t.send('\x15')
 
 # mouse is left to the terminal; links and selection are the terminal's business
@@ -209,10 +210,10 @@ check(t.close() == 0, 'clean quit')
 session_files = list((home / '.sessions').rglob('session.jsonl')); data = ''.join(f.read_text() for f in session_files)
 check('base64' not in data and '[an image was here]' in data, 'saved history has a placeholder, no image data', data[-400:])
 check(not list(home.rglob('attachments')), 'no attachments folder anywhere', list(home.rglob('attachments')))
-check(sorted(p.name for p in home.iterdir()) == ['.gitignore', '.sessions', 'config.toml'], 'home holds only config, .gitignore and .sessions', os.listdir(home))
+check(set(p.name for p in home.iterdir()) == {'.gitignore', '.sessions', 'settings.toml', 'hooks', 'prompts', 'instructions'}, 'home holds settings, snippets and sessions', os.listdir(home))
 
 # resume shows the placeholder where the image was (Tracing keeps the notification that carried it)
-t = Term(home, cwd); t.pump(1); t.send('\x12'); t.pump(.8); t.send('\r'); t.pump(1.2)
+t = Term(home, cwd); t.pump(1); t.send('\x1b', .4); t.send('\x1b', .4); t.send('\x12'); t.pump(.8); t.send('\r'); t.pump(1.2)
 t.send('\x0b'); t.send('tracing'); t.send('\r'); t.pump(.8)
 t.send('notification attached'); t.send('\r', .6)
 found = '[an image was here]' in t.view()
@@ -256,8 +257,8 @@ r = run('config', '--config', str(old)); check('only message, notification' in r
 
 # "/" always opens the menu; a bash_after hook with match fires and is in Tracing
 home3 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-hook-'))
-(home3 / 'config.toml').write_text(CONFIG + '\n[hook.saw]\nevent = "bash_after"\nmatch = "^echo hooked"\nrun = "cat >/dev/null; echo HOOK-SAW-IT"\n')
-t = Term(home3, cwd); t.pump(1.2)
+(home3 / 'settings.toml').write_text(CONFIG + '\n[hook.saw]\nevent = "bash_after"\nmatch = "^echo hooked"\nrun = "cat >/dev/null; echo HOOK-SAW-IT"\n')
+t = Term(home3, cwd); t.pump(1.2); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('/', .6); t.shot('13-slash-menu')
 check('Resume' in t.view() and 'Models' in t.view(), '"/" opens the menu', t.view())
 t.send('\x1b', .4)
@@ -288,8 +289,8 @@ check('PLAN-MODE-RULE' not in plain_prompt, 'zel -p without --mode has no plan i
 r = run('-p', 'x', '--mode', 'main'); check(r.returncode != 0 and 'not a custom mode' in r.stderr, '--mode main is refused', r.stderr)
 
 home4 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-092-'))
-(home4 / 'config.toml').write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/second-model"') + '\n[settings]\neditor = "sleep 2; perl -pi -e s/draft/EDITED/"\n')
-t = Term(home4, cwd, ('--mode', 'plan')); t.pump(1.5)
+(home4 / 'settings.toml').write_text(CONFIG.replace('model = "fixture/fixture"', 'model = "fixture/second-model"') + '\n[settings]\neditor = "sleep 2; perl -pi -e s/draft/EDITED/"\n')
+t = Term(home4, cwd, ('--mode', 'plan')); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 # the current model is the first row of the models menu
 t.send('\x0b'); t.send('models'); t.send('\r'); t.pump(1.5)
 rows = t.rows(); first = next((r for r in rows if 'second-model' in r or 'fixture  ' in r), '')
@@ -302,7 +303,7 @@ t.pump(1.8)
 check('my EDITED text' in t.view(), 'Ctrl+E: the editor changed the input and zel shows it', t.view()); t.shot('22-ctrl-e-result')
 t.send('\x15')
 # a real nvim: type into it, save and quit
-(home4 / 'config.toml').write_text((home4 / 'config.toml').read_text().replace('editor = "sleep 2; perl -pi -e s/draft/EDITED/"', 'editor = "nvim -u NONE -i NONE"')); t.pump(1.8)
+(home4 / 'settings.toml').write_text((home4 / 'settings.toml').read_text().replace('editor = "sleep 2; perl -pi -e s/draft/EDITED/"', 'editor = "nvim -u NONE -i NONE"')); t.pump(1.8)
 t.send('from zel'); t.send('\x05', 1.5); t.shot('23-nvim-open')
 check('from zel' in t.view() and '~' in t.view(), 'Ctrl+E opens nvim with the input', t.view())
 t.send('A and nvim\x1b', .4); t.send(':wq\r', 1.2)
@@ -335,8 +336,8 @@ check(t.close() == 0, 'clean quit after the 0.9.2 checks')
 r = run('-p', 'stream-check'); desc = json.dumps(requests[-1].get('tools', []))
 check('Run a bash script in current dir.' in desc and 'zel docs [TOPIC]' in desc and 'zel choice' not in desc and 'no user to ask' in desc, 'headless: the new bash description, no zel choice', desc[:400])
 home5 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-093-'))
-(home5 / 'config.toml').write_text(CONFIG)
-t = Term(home5, cwd); t.pump(1.5)
+(home5 / 'settings.toml').write_text(CONFIG)
+t = Term(home5, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('hook-check\r'); t.wait('Ready for the next check', 'a turn with one bash call', 20)
 desc = json.dumps(requests[-1].get('tools', []))
 check('Run a bash script in current dir.' in desc and 'zel choice \\"Question\\"' in desc and 'zel docs [TOPIC]' in desc, 'main: the new bash description with zel choice', desc[:400])
@@ -354,8 +355,8 @@ check(t.close() == 0, 'clean quit after the 0.9.3 checks')
 
 # 0.9.5: Tracing by turn, Tab filters, bash with its output, arrows of the view, Esc, h and trace_hooks
 home6 = pathlib.Path(tempfile.mkdtemp(prefix='zelcheck-095-'))
-(home6 / 'config.toml').write_text(CONFIG + '\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
-t = Term(home6, cwd); t.pump(1.5)
+(home6 / 'settings.toml').write_text(CONFIG + '\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+t = Term(home6, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4)
 t.send('stream-check\r'); t.wait('Hello from the fake provider.', 'turn 1 answered')
 t.send('trace-check\r'); t.wait('Ready for the next check', 'turn 2: two bash calls in one response, then an answer', 20); t.pump(.8)
 t.send('\x14', 1.0); v = t.view(); t.shot('30-tracing-turns')
@@ -374,8 +375,8 @@ t.send('\t\t\t', .5); t.send('h', .6); v = t.view(); t.shot('34-tracing-hooks-hi
 check('Tracing · All · hooks hidden' in v and 'turn_start' not in v and 'Turn 2' in v, 'h hides the hooks', v)
 t.send('\x1b', .4); t.send('\x1b', .4)
 check(t.close() == 0, 'clean quit after the 0.9.5 checks')
-(home6 / 'config.toml').write_text(CONFIG + '\n[settings]\ntrace_hooks = false\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
-t = Term(home6, cwd); t.pump(1.5); t.send('\x12', .8); t.send('\r', 1.2)
+(home6 / 'settings.toml').write_text(CONFIG + '\n[settings]\ntrace_hooks = false\n[hook.noise]\nevent = ["turn_start", "idle"]\nrun = "true"\n')
+t = Term(home6, cwd); t.pump(1.5); t.send('\x1b', .4); t.send('\x1b', .4); t.send('\x12', .8); t.send('\r', 1.2)
 t.send('\x14', 1.0); v = t.view(); t.shot('35-trace-hooks-false')
 check('hooks hidden' in v and 'turn_start' not in v and 'Turn 2 · trace-check' in v, 'trace_hooks = false: a resumed session opens Tracing without hooks', v)
 t.send('h', .6); check(re.search(r'hook\s+', t.view()) is not None, 'h shows them again', t.view())

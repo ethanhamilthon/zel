@@ -1,0 +1,14 @@
+go vet ./...
+go test -race ./...
+?   	zel	[no test files]
+ok  	zel/docs	2.003s
+ok  	zel/internal/cli	3.797s
+ok  	zel/internal/config	(cached)
+ok  	zel/internal/core	(cached)
+ok  	zel/internal/edit	(cached)
+?   	zel/internal/entities	[no test files]
+ok  	zel/internal/ipc	(cached)
+ok  	zel/internal/provider	(cached)
+ok  	zel/internal/shell	(cached)
+ok  	zel/internal/store	(cached)
+ok  	zel/internal/tui	(cached)

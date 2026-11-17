@@ -10,7 +10,7 @@ subcommands (`zel task`, `zel choice`, ...), which only talk to a session socket
 | Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
 | `entities` | Shared input, images, tool calls, records, usage, model choices and domain events | None |
-| `config` | The one config.toml: parsing and validation, `${{ }}` expansion, the default home files, the write of `provider`/`model`/`effort` that keeps comments, file watching, `zel config` text; settings and paths | None |
+| `config` | The one settings.toml: parsing and validation, `${{ }}` expansion, the default home files, the write of `provider`/`model`/`effort` that keeps comments, file watching, `zel config` text; settings and paths | None |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
 | `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list, `tasks.jsonl`, task logs and `choices.jsonl` (answered questions) | None |
 | `shell` | `bash -c` in a process group, cancellation, bounded output and image capture | `entities` |
@@ -53,19 +53,22 @@ stays silent for five minutes ends as a retryable failure.
 
 ## Config
 
-A session has one config file: `~/.zel/config.toml`, or the `--config` file in
+A session has one config file: `~/.config/zel/settings.toml`, or the `--config` file in
 its place (a `zel -p` child takes its parent's from `ZEL_CONFIG`). Nothing is
-merged or inherited. `config.Load` reads it into one snapshot: settings,
+inherited from other homes. `config.Load` reads the selected file and sorted
+`hooks/`, `prompts/`, `instructions/` snippets beside it into one snapshot: settings,
 providers, instructions, hooks by event and completions. Providers,
 instructions, hooks and completions are named entries (`[hook.NAME]`) with
 `modes`; a session keeps those whose modes meet its own (`main` or `headless`,
 plus the `--mode` one), see `config.InModes`. The only write is the model
 selection, made with `config.SetKey`, which replaces or adds just the top-level
 `model` (`PROVIDER/MODEL`) and `effort` lines.
-In the main session `config.Watch` polls the file; a change goes through the
+In the main session `config.Watch` hashes the file and supported directory
+entries, including creations and removals; a change goes through the
 controller, which applies it between turns. A file with errors keeps the old
-snapshot. `config.EnsureHome` creates `~/.zel` with a default `config.toml`
-and a `.gitignore`; everything else Zel writes is under `~/.zel/.sessions/`.
+snapshot. `config.EnsureHome` creates `~/.config/zel` with a default `settings.toml`
+and the three snippet directories and a `.gitignore`; runtime data is under
+`~/.config/zel/.sessions/`. No migration from older layouts is attempted.
 
 ## The bash tool and the socket
 
@@ -78,7 +81,7 @@ the configured bash working folder and its own process group, with the session e
 (`ZEL_SESSION_ID`, `ZEL_MODE`, `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG`, ...),
 `bash_before`/`bash_after` hooks around it and the `settings.bash_timeout` and `settings.bash_output` limits.
 
-Every session (main or headless) listens on `~/.zel/.sessions/run/<hash>.sock`
+Every session (main or headless) listens on `~/.config/zel/.sessions/run/<hash>.sock`
 (the hash is of the session ID; a very long home falls back to the temp folder)
 with a random token. The `zel` subcommands its bash, tasks and hooks run send one
 request there: tasks (`bash -c` jobs owned by the session, logged in

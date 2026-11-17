@@ -156,15 +156,15 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	// Two streamed steps, one reasoning block and one bash call preview, count once each.
-	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 2 {
+	// Only the bash preview counts; reasoning is not a bash call.
+	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 1 {
 		t.Fatalf("live closing = %+v", live)
 	}
 	stored, err := storedRecords(t, a)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("stored %+v %v", stored, err)
 	}
-	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 2 {
+	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 1 {
 		t.Fatalf("stored closing = %+v", closing)
 	}
 }
@@ -196,14 +196,14 @@ func TestStoppedStreamCountsStepsSeenBeforeCancel(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("stopped turn returned no error")
 	}
-	if live := events[len(events)-1]; live.Kind != "turn_end" || live.Text != "stopped by user" || live.Meta == nil || live.Meta.Steps != 1 {
+	if live := events[len(events)-1]; live.Kind != "turn_end" || live.Text != "stopped by user" || live.Meta == nil || live.Meta.Steps != 0 {
 		t.Fatalf("live closing = %+v", live)
 	}
 	stored, err := storedRecords(t, a)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("stored %+v %v", stored, err)
 	}
-	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 1 {
+	if closing := stored[len(stored)-1]; closing.Kind != "turn_end" || closing.Meta == nil || closing.Meta.Steps != 0 {
 		t.Fatalf("stored closing = %+v", closing)
 	}
 }

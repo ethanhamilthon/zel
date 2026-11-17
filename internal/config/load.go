@@ -140,6 +140,9 @@ func readFile(path string) (*Config, []named[string], error) {
 	if err := p.file(data); err != nil {
 		return nil, nil, fmt.Errorf("%s: %v", path, err)
 	}
+	if err := p.loadDirectories(path); err != nil {
+		return nil, nil, err
+	}
 	return p.cfg, p.env, nil
 }
 
@@ -208,6 +211,8 @@ func (p *parser) file(data map[string]any) error {
 			} else {
 				p.cfg.Settings.Model = s
 			}
+		case "keys":
+			err = p.keyBindings(v)
 		case "settings":
 			err = p.settings(v)
 		case "colors":

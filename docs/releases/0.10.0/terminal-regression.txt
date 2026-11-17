@@ -1,0 +1,87 @@
+PASS no provider: exit with an error
+PASS default files
+PASS .gitignore content
+PASS empty composer starts at the corner, no padding
+PASS typed text has no left padding
+PASS answer streamed
+PASS exactly one empty line between the answer and the input
+PASS working indicator shown
+PASS the command is one line cut with ...
+PASS time is accent, the command is dark gray
+PASS file completions: an empty line, no left padding, arrow on the right
+PASS menu: no Providers, Settings or hints
+PASS main menu: descriptions instead of hotkeys, flush with the right edge of the box
+PASS the arrow is in the last column of the box
+PASS Info shows settings.toml
+PASS the menu and Info are one box: the title stays in place
+PASS choosing a model writes only the model line
+PASS only settings.toml is used
+PASS an edit of settings.toml is applied while running (the arrow is the new accent)
+PASS the mouse is not captured
+PASS zel view image reached the model
+PASS the provider received the image bytes
+PASS clean quit
+PASS saved history has a placeholder, no image data
+PASS no attachments folder anywhere
+PASS home holds settings, snippets and sessions
+PASS a resumed chat shows the placeholder where the image was
+PASS answer after two retries
+PASS the provider failed twice, then answered
+PASS retries are shown in Tracing
+PASS clean quit again
+PASS zel config --config reads that file only
+PASS a ./zel.toml is not read
+PASS zel -p --config uses the model of that file
+PASS the main description is the 0.9.3 text with zel choice
+PASS no [nest] marker, no tool hints
+PASS no template placeholder is left
+PASS the reasoning summary is always requested
+PASS the headless description has no user and no zel choice
+PASS settings.slash_menu is gone
+PASS settings.reasoning_summary is gone
+PASS match on an event with nothing to match is an error
+PASS "/" opens the menu
+PASS answer after the hooked command
+PASS bash_after with match added its line to the output
+PASS the hook run is an entry in Tracing
+PASS zel view takes a path relative to the folder of the call
+PASS the image of a relative path reached the model
+PASS clean quit after hooks
+PASS the old provider key is an error that names model = PROVIDER/MODEL
+PASS the old [providers.x] is an error that names [provider.NAME]
+PASS zel -p --mode plan gets the plan instruction
+PASS zel -p without --mode has no plan instruction
+PASS --mode main is refused
+PASS the current model is first and selected in the models menu
+PASS while the editor runs zel does not draw
+PASS Ctrl+E: the editor changed the input and zel shows it
+PASS Ctrl+E opens nvim with the input
+PASS the text saved in nvim is the input now
+PASS a background task started
+PASS task line, one empty line, working line
+PASS the task line is styled like the working line
+PASS Info shows the subagent: model, effort, context, spend
+PASS the subagent finished and the agent answered
+PASS clean quit after the 0.9.2 checks
+PASS headless: the new bash description, no zel choice
+PASS a turn with one bash call
+PASS main: the new bash description with zel choice
+PASS the turn summary says "1 bash", not steps
+PASS a 25-line input shows all 25 lines (a third of the screen was 10)
+PASS Info: a centered half-screen box, title at its top left
+PASS clean quit after the 0.9.3 checks
+PASS turn 1 answered
+PASS turn 2: two bash calls in one response, then an answer
+PASS Ctrl+T: Tracing with a row per turn, at the latest entry
+PASS PgUp: the first turn has its row too
+PASS hooks shown, the failed bash says exit 1 with its duration, no separate output row
+PASS Tab: only bash entries
+PASS an entry: command and output together, exit, duration, request tokens
+PASS Left: the previous bash of the view
+PASS Esc: back on the same row
+PASS h hides the hooks
+PASS clean quit after the 0.9.5 checks
+PASS trace_hooks = false: a resumed session opens Tracing without hooks
+PASS h shows them again
+PASS clean quit after trace_hooks
+ALL PASS

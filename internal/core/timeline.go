@@ -48,7 +48,7 @@ func (s *session) answerMetadata(seq int) Metadata {
 	known := true
 	for i := m.TurnSeq; i <= seq; i++ {
 		for _, r := range s.projection(i).records {
-			if r.Kind == "code" || r.Kind == "reasoning" {
+			if r.Kind == "code" {
 				m.Steps++
 			}
 		}

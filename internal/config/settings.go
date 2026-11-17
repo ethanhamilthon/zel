@@ -40,12 +40,13 @@ type Provider struct {
 type Settings struct {
 	Provider, Model, Effort string
 	CompactionThreshold     int
-	BashTimeout             int    // seconds per bash call of the agent
-	BashOutput              int    // bytes of one bash call's output the agent gets, 0 = no cut
-	ShowBash                bool   // show the running command in the working line
-	TraceHooks              bool   // Tracing opens with the hook runs shown
-	Editor                  string // the command Ctrl+E opens the composer text in
-	Colors                  Colors // [colors]: the TUI theme, defaults filled in
+	BashTimeout             int               // seconds per bash call of the agent
+	BashOutput              int               // bytes of one bash call's output the agent gets, 0 = no cut
+	ShowBash                bool              // show the running command in the working line
+	TraceHooks              bool              // Tracing opens with the hook runs shown
+	Editor                  string            // the command Ctrl+E opens the composer text in
+	Colors                  Colors            // [colors]: the TUI theme, defaults filled in
+	Keys                    map[string]string // [keys]: action to shortcut
 	Providers               map[string]Provider
 	Env                     map[string]string // [env]: extra variables for bash, tasks, hooks and ${{ }}
 }

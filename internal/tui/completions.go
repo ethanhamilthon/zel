@@ -44,7 +44,7 @@ func (m *app) updateCompletions() {
 		end = byteOffset(text, b)
 		for _, name := range m.ctl.PromptNames() {
 			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(q)) {
-				items = append(items, item{label: "#" + name, id: "#" + name})
+				items = append(items, item{label: "#" + name, detail: firstLine(m.ctl.PromptPreview(name)), id: "#" + name})
 			}
 		}
 	} else if token, ok := findFileToken(text, runeOffset(text, pos)); ok {
@@ -81,14 +81,16 @@ func (m *app) updateCompletions() {
 	m.completions.items = items
 	m.completions.clamp()
 }
-func (m *app) pickCompletion() {
+func (m *app) pickCompletion() { m.completePath(true) }
+
+func (m *app) completePath(descend bool) {
 	it, ok := m.completions.current()
 	if !ok {
 		return
 	}
 	text := it.id
 	suffix := " "
-	if m.completionKind == '@' && strings.HasSuffix(it.label, "/") {
+	if descend && m.completionKind == '@' && strings.HasSuffix(it.label, "/") {
 		suffix = ""
 	}
 	m.input.text = m.input.text[:m.completionStart] + text + suffix + m.input.text[m.completionEnd:]

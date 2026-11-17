@@ -259,10 +259,15 @@ func (m *app) drawEditor(e *editor, x, y, width, height int, secret bool) {
 	}
 	m.screen.ShowCursor(x+min(cx, max(0, width-1)), y+cy-e.scroll)
 }
+
+// turnSteps counts the tool calls of the running turn, not reasoning. The
+// chat hides those entries, but they still arrive and keep the count live.
+// Completed answers carry authoritative totals, including steps missing from live
+// events. Continue counting subsequent work from that total without resetting it.
 func (m *app) turnSteps() int {
 	count := 0
 	for _, r := range m.records[min(m.turnIndex, len(m.records)):] {
-		if r.Kind == "bash" || r.Kind == "reasoning" {
+		if r.Kind == "code" {
 			count++
 		}
 		if r.Meta != nil {
@@ -328,8 +333,3 @@ func activityLine(status core.Status, now time.Time) string {
 	}
 	return lines[int(max(0, now.Sub(status.LiveSince))/activityStep)%len(lines)]
 }
-
-// turnSteps counts the tool calls and thinking blocks of the running turn. The
-// chat hides those entries, but they still arrive and keep the count live.
-// Completed answers carry authoritative totals, including steps missing from live
-// events. Continue counting subsequent work from that total without resetting it.

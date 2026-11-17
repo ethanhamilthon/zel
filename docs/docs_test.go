@@ -53,6 +53,15 @@ func TestProductionPackageBoundaries(t *testing.T) {
 
 // Every section of bash-api.md has a topic and every topic returns text, so the
 // agent can reach the whole reference through zel docs.
+func TestExamplesIncludeSnippets(t *testing.T) {
+	text := exampleText()
+	for _, want := range []string{"hooks/notify.toml", "prompts/", "instructions/", "[hook.notify]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("examples missing %s", want)
+		}
+	}
+}
+
 func TestEverySectionIsReachable(t *testing.T) {
 	src, err := files.ReadFile("bash-api.md")
 	if err != nil {

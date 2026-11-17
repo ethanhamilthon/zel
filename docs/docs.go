@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-//go:embed bash-api.md examples/*.toml examples/web-search examples/README.md
+//go:embed bash-api.md examples/*.toml examples/hooks/*.toml examples/prompts/*.toml examples/instructions/*.toml examples/web-search examples/README.md
 var files embed.FS
 
 // Topic is one piece of the reference.
@@ -19,16 +19,16 @@ type Topic struct{ Name, Summary string }
 var sections = map[string]Topic{
 	"The bash tool":      {"bash", "how a bash call runs: limits, output, environment"},
 	"Commands":           {"commands", "zel task, choice, view, cd, session, edit, -p (subagents), exit codes"},
-	"config.toml":        {"config", "config.toml keys, ${{ }}, hot reload"},
+	"settings.toml":      {"config", "settings.toml keys, ${{ }}, hot reload"},
 	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
 	"Prompt completions": {"completions", "#name expansion in the user's composer"},
 	"Colors":             {"colors", "[colors]: the TUI theme, key by key"},
 }
 
-var examples = Topic{"examples", "a complete config.toml and a script tool"}
+var examples = Topic{"examples", "a complete settings.toml and a script tool"}
 
 // order is the order of the topics in the index.
-var order = []string{"The bash tool", "Commands", "config.toml", "Hooks", "Prompt completions", "Colors"}
+var order = []string{"The bash tool", "Commands", "settings.toml", "Hooks", "Prompt completions", "Colors"}
 
 // parse splits bash-api.md into its "## " sections; the text before the first one
 // is the intro and has no topic.
@@ -97,7 +97,16 @@ func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")
 	b.WriteString(strings.TrimSpace(string(readme)))
-	for _, name := range []string{"config.toml", "web-search"} {
+	names := []string{"settings.toml", "web-search"}
+	for _, dir := range []string{"hooks", "prompts", "instructions"} {
+		entries, _ := files.ReadDir("examples/" + dir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				names = append(names, dir+"/"+e.Name())
+			}
+		}
+	}
+	for _, name := range names {
 		data, _ := files.ReadFile("examples/" + name)
 		fmt.Fprintf(&b, "\n\n# --- %s\n%s", name, strings.TrimSpace(string(data)))
 	}

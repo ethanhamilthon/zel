@@ -23,6 +23,61 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+func TestDirectoryLayoutAndKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZEL_HOME", "")
+	root, err := ZelHome(home)
+	if err != nil || root != filepath.Join(home, ".config", "zel") {
+		t.Fatalf("home: %s %v", root, err)
+	}
+	if err := EnsureHome(root); err != nil {
+		t.Fatal(err)
+	}
+	path := File(root)
+	writeFile(t, path, "[keys]\nmenu = 'alt+k'\n")
+	writeFile(t, filepath.Join(root, "prompts", "plan.md"), "Plan first. ${{ echo preview }}")
+	writeFile(t, filepath.Join(root, "instructions", "rules.toml"), "[instruction.rules]\ntext='Read first'\nmodes=['headless']\n")
+	writeFile(t, filepath.Join(root, "hooks", "notify.toml"), "[hook.notify]\nevent='turn_end'\nrun='true'\n")
+	cfg := Load(context.Background(), path, fakeRun)
+	if len(cfg.Errors) != 0 || cfg.Settings.Keys["menu"] != "alt+k" || len(cfg.Completions) != 1 || len(cfg.Instructions) != 1 || len(cfg.Hooks["turn_end"]) != 1 {
+		t.Fatalf("config: %+v", cfg)
+	}
+	if cfg.Completions["plan"].Text != "Plan first. ${{ echo preview }}" {
+		t.Fatal("preview executed expansion")
+	}
+	before := treeStamp(path)
+	writeFile(t, filepath.Join(root, "prompts", "new.md"), "new")
+	if treeStamp(path) == before {
+		t.Fatal("addition not watched")
+	}
+	if err := os.Remove(filepath.Join(root, "prompts", "new.md")); err != nil {
+		t.Fatal(err)
+	}
+	if treeStamp(path) != before {
+		t.Fatal("removal not watched")
+	}
+	writeFile(t, filepath.Join(root, "prompts", "duplicate.toml"), "[completion]\nplan='duplicate'\n")
+	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
+		t.Fatal("duplicate accepted")
+	}
+}
+
+func TestInvalidKeyBindings(t *testing.T) {
+	for _, text := range []string{"menu='ctrl+q'", "unknown='ctrl+x'", "menu='f999'", "menu=42"} {
+		path := filepath.Join(t.TempDir(), "settings.toml")
+		writeFile(t, path, "[keys]\n"+text)
+		if cfg := Load(context.Background(), path, nil); len(cfg.Errors) == 0 {
+			t.Fatalf("accepted %s", text)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	writeFile(t, path, "[keys]\nmenu=''\n")
+	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) != 0 || cfg.Settings.Keys["menu"] != "" {
+		t.Fatalf("disable: %+v", cfg)
+	}
+}
+
 // fakeRun expands every expression to "X:<script>", "fail" fails.
 func fakeRun(env map[string]string) Expander {
 	return func(_ context.Context, script string) (string, error) {
@@ -207,7 +262,7 @@ func TestExpand(t *testing.T) {
 }
 
 func TestEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+	path := filepath.Join(t.TempDir(), "sub", "settings.toml")
 	read := func() string {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -352,7 +407,7 @@ func TestPortableHomePaths(t *testing.T) {
 
 // The documented examples must load without errors.
 func TestDocExamplesLoad(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "examples", "config.toml")
+	path := filepath.Join("..", "..", "docs", "examples", "settings.toml")
 	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) > 0 {
 		t.Errorf("%s: %v", path, cfg.Errors)
 	}

@@ -292,7 +292,7 @@ func TestBashOutputOffAndInvalid(t *testing.T) {
 		t.Fatalf("bash_output = 0 cut the output: %d bytes", len(got))
 	}
 	for _, bad := range []string{"-1", "500"} {
-		path := filepath.Join(t.TempDir(), "config.toml")
+		path := filepath.Join(t.TempDir(), "settings.toml")
 		if err := os.WriteFile(path, []byte("[settings]\nbash_output = "+bad+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}

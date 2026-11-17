@@ -119,6 +119,9 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 	ticker := time.NewTicker(33 * time.Millisecond)
 	defer ticker.Stop()
 	m.fetchModels()
+	if len(m.records) == 0 {
+		m.openMenu("models")
+	}
 	m.draw()
 	for {
 		select {
@@ -260,6 +263,7 @@ func (m *app) control(e core.Event) {
 		m.modelsLoading = false
 		m.records = slices.Clone(e.Session.Records)
 		m.cache = nil
+		m.history, m.historyBase = nil, nil
 		m.scroll = 0
 		m.turnIndex = len(m.records)
 		m.input = editor{}

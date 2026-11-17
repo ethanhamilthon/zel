@@ -11,6 +11,7 @@ const APIChat = config.APIChat
 
 var Efforts = config.Efforts
 var DefaultSettings = config.DefaultSettings
+var DefaultKeys = config.DefaultKeys
 var DefaultColors = config.DefaultColors
 var ZelHome = config.ZelHome
 var ResolvePath = config.ResolvePath

@@ -58,7 +58,7 @@ func (s *session) notify(msg string) {
 }
 
 // configFile is the config file of this session: --config, else the file of
-// the parent session (ZEL_CONFIG), else ~/.zel/config.toml.
+// the parent session (ZEL_CONFIG), else ~/.config/zel/settings.toml.
 func (s *session) configFile() string {
 	switch {
 	case s.opts.Config != "":
@@ -226,6 +226,7 @@ func (s *session) settingsLocked() Settings {
 	st := s.cfg.s
 	st.Providers = maps.Clone(st.Providers)
 	st.Env = maps.Clone(st.Env)
+	st.Keys = maps.Clone(st.Keys)
 	return st
 }
 
