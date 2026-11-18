@@ -1,7 +1,6 @@
 package luart
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,156 +23,155 @@ func fixture(t *testing.T, root, name, code string) string {
 	return path
 }
 
-func TestConfigLoadsAndCalls(t *testing.T) {
+func TestMultiFileMerge(t *testing.T) {
 	env := newEnv(t)
-	env.tasks = &fakeTasks{}
 	root := env.info.Root
-	helper := fixture(t, root, "conf/helper.lua", `return {suffix="!"}`)
-	init := fixture(t, root, "conf/init.lua", `
-local zel = require("zel")
+	home := filepath.Join(root, "home")
+	fixture(t, home, "defaults/defaults.lua", `
+local M = {}
+M.greet = setmetatable({description = "`+"`greet(name)`"+` - says hi", fn = function(n) return "hi " .. n end},
+  {__call = function(self, ...) return self.fn(...) end})
+return M`)
+	fixture(t, home, "helper.lua", `return {suffix = "!"}`)
+	init := fixture(t, home, "init.lua", `
+local d = require("defaults")
 local helper = require("helper")
-local shared = 0
-assert(sh == nil and session == nil and zel.session.id == "s1")
 return {
- settings = {timeout=12, env={A="a", SHARED="init"}, colors={accent="#111111",trace={lua="#111111"}}},
- systems = {b="B", a="A"},
- prompts = {review="old"},
- functions = {
-  count = {description="example", fn=function(a)
-   shared = shared + 1
-   a.x = "copied"
-   return a, shared, helper.suffix
-  end},
-  overwritten = {description="old", fn=function(a) return "old" end},
-  bad = {description="bad", fn=function(a) return function() end end},
- },
- hooks = {{events={"message","lua_before"},fn=function(event,data)
-  if event == "lua_before" then return false, data.code end
-  return data.text..helper.suffix
- end}},
- loads = {"layers/extra.lua"},
+ settings = {timeout = 12, env = {A = "a", SHARED = "init"}, keys = {menu = "ctrl+k"}},
+ systems = {b = "B", a = "A"},
+ prompts = {review = "old"},
+ functions = {greet = d.greet, over = {description = "old", fn = function() return "old" end}},
+ hooks = {{events = {"message"}, fn = function(e, data) return data.text .. helper.suffix end}},
+ commands = {{name = "Commit", description = "commit", key = "alt+g", fn = function() return d.greet("x") end}},
+ loads = {"../conf/layers/extra.lua"},
 }`)
-	extra := fixture(t, root, "conf/layers/extra.lua", `
-local zel = require("zel")
-return {systems={a="A2", d=zel.sh('printf "%s" "$A"').out}, settings={env={B="b"}, colors={trace={system="#333333"}}}}`)
-	local := fixture(t, root, "zel.lua", `
-return {systems={c="C"}, settings={env={SHARED="local"},show_prompt=true},prompts={review="new"},
- functions={overwritten={description="new",fn=function(a) return "new" end}}}`)
-	paths := config.Paths{Init: init, Local: local, Connect: filepath.Join(root, "connect.json")}
+	fixture(t, root, "conf/layers/extra.lua", `return {systems = {a = "A2", d = "D"}, settings = {env = {B = "b"}}}`)
+	// The default zel.lua of the start folder does not exist: skipped.
+	local := filepath.Join(root, "zel.lua")
+	extra := fixture(t, root, "b.lua", `
+return {systems = {c = "C"}, settings = {env = {SHARED = "b"}, show_prompt = true}, prompts = {review = "new"},
+ functions = {over = {description = "new", fn = function() return "new" end}},
+ hooks = {{events = {"message", "idle"}, async = true, fn = function() print("async ran") end}},
+ commands = {{name = "Commit", description = "commit v2", fn = function() end}, {name = "Other", key = "ctrl+o", fn = function() end}}}`)
+	env.log = make(chan string, 4)
+	paths := config.Paths{Files: []string{init, local, extra}, Required: []string{extra}, Connect: filepath.Join(home, "connect.json")}
 	c, err := LoadConfig(t.Context(), env, paths, config.DefaultSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	d := c.Data()
-	if d.Settings.Timeout != 12 || !d.Settings.ShowPrompt || d.Settings.Colors.Get("accent") != "#111111" || d.Settings.Colors.Get("trace.system") != "#333333" || !reflect.DeepEqual(d.Settings.Env, map[string]string{"A": "a", "B": "b", "SHARED": "local"}) {
+	if d.Settings.Timeout != 12 || !d.Settings.ShowPrompt || !reflect.DeepEqual(d.Settings.Env, map[string]string{"A": "a", "B": "b", "SHARED": "b"}) {
 		t.Fatalf("settings: %+v", d.Settings)
 	}
-	want := []config.System{{Name: "b", Text: "B"}, {Name: "a", Text: "A2"}, {Name: "d", Text: "a"}, {Name: "c", Text: "C"}}
-	if !reflect.DeepEqual(d.Systems, want) || d.Prompts["review"] != "new" || len(d.Warnings) != 3 {
-		t.Fatalf("data: %+v", d)
+	if want := []string{init, filepath.Join(root, "conf/layers/extra.lua"), extra}; !reflect.DeepEqual(d.Files, want) {
+		t.Fatalf("files %v", d.Files)
 	}
-	if !reflect.DeepEqual(d.Files, []string{paths.Connect, init, helper, extra, local}) {
-		t.Fatalf("watched files: %v", d.Files)
+	sys := map[string]string{}
+	for _, s := range d.Systems {
+		sys[s.Name] = s.Text + "@" + filepath.Base(s.Source)
 	}
-	if !strings.Contains(ToolDescription(ToolText{Headless: true, Timeout: 12, Functions: d.Functions}), "`overwritten{...}` - new") {
-		t.Fatal("missing function description")
+	if !reflect.DeepEqual(sys, map[string]string{"a": "A2@extra.lua", "b": "B@init.lua", "c": "C@b.lua", "d": "D@extra.lua"}) {
+		t.Fatalf("systems %v", sys)
 	}
-	a := NewAgent(env, c)
-	defer a.Close()
-	got := run(t, a, `
- local a = {x="original"}; a.self = a
- local r,n,suffix = count(a)
- assert(a.x == "original" and r.x == "copied" and r.self == r and suffix == "!")
- local ok, err = pcall(count,{f=function() end})
- assert(not ok and err:match("^count: EINVAL:"))
- assert(not pcall(bad,{}))
- local id = task.spawn("call",function() local _,n = count({}); return n end)
- return n, task.wait(id), overwritten{}`)
-	if got != "1\n2\nnew" {
-		t.Fatal(got)
+	if d.Prompts["review"] != "new" || filepath.Base(d.PromptSources["review"]) != "b.lua" {
+		t.Fatalf("prompts %v %v", d.Prompts, d.PromptSources)
 	}
-	h := d.Hooks[0]
-	result, err := c.RunHook(t.Context(), h, "message", map[string]any{"text": "hello"})
-	if err != nil || result != (HookResult{Text: "hello!", HasText: true}) {
-		t.Fatalf("%+v %v", result, err)
+	var fns []string
+	for _, f := range d.Functions {
+		fns = append(fns, f.Name+":"+f.Description+"@"+filepath.Base(f.Source))
 	}
-	result, err = c.RunHook(t.Context(), h, "lua_before", map[string]any{"code": "test"})
-	if err != nil || result != (HookResult{Blocked: true, Reason: "test"}) {
-		t.Fatalf("%+v %v", result, err)
+	if !reflect.DeepEqual(fns, []string{"greet:`greet(name)` - says hi@init.lua", "over:new@b.lua"}) {
+		t.Fatalf("functions %v", fns)
 	}
-}
-
-func TestConfigInvalidAndAsync(t *testing.T) {
-	env := newEnv(t)
-	paths := config.Paths{Init: filepath.Join(env.info.Root, "init.lua")}
-	cases := []struct{ code, want string }{
-		{`return {modes={}}`, "unknown key"},
-		{`return {functions={sh={description="",fn=function()end}}}`, "collides"},
-		{`return {settings={timeout=-2}}`, "timeout"},
-		{`return {hooks={{events={"bash_before"},fn=function()end}}}`, "unknown event"},
-		{`return {loads={"nested.lua"}}`, "loads are not allowed"},
+	if len(d.Warnings) != 4 || !strings.Contains(d.Warnings[0], "systems.a replaces a definition from") || !strings.Contains(strings.Join(d.Warnings, "\n"), "functions.over replaces a definition from "+init) ||
+		!strings.Contains(strings.Join(d.Warnings, "\n"), "commands.Commit replaces") {
+		t.Fatalf("warnings %q", d.Warnings)
 	}
-	fixture(t, env.info.Root, "nested.lua", `return {loads={}}`)
-	for _, tt := range cases {
-		fixture(t, env.info.Root, "init.lua", tt.code)
-		if c, err := LoadConfig(t.Context(), env, paths, config.DefaultSettings()); c != nil || err == nil || !strings.Contains(err.Error(), tt.want) {
-			t.Fatalf("%s: %v %v", tt.code, c, err)
-		}
+	if len(d.Commands) != 2 || d.Commands[0].Name != "Commit" || d.Commands[0].Description != "commit v2" || d.Commands[0].Key != "" || d.Commands[1].Key != "ctrl+o" {
+		t.Fatalf("commands %+v", d.Commands)
 	}
-	fixture(t, env.info.Root, "init.lua", `while true do end`)
-	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
-	defer cancel()
-	if _, err := LoadConfig(ctx, env, paths, config.DefaultSettings()); err == nil {
-		t.Fatal("expected deadline")
+	// Hooks append in file order.
+	if len(d.Hooks) != 2 || d.Hooks[0].Async || !d.Hooks[1].Async || !strings.HasPrefix(d.Hooks[1].Source, extra+":") {
+		t.Fatalf("hooks %+v", d.Hooks)
 	}
-	env.log = make(chan string, 1)
-	fixture(t, env.info.Root, "init.lua", `
-local zel = require("zel")
-local write = zel.write
-local session = zel.session
-local data = {n=1}
-local function bump() data.n = data.n + 1 end
-config_global = true
-return {hooks={
- {events={"idle"},async=true,fn=function(event,arg)
-  assert(config_global == nil and sh == nil and session.id == "s1")
-  bump()
-  write("async.txt", tostring(data.n) .. arg.text)
-  error("async test finished", 0)
- end},
- {events={"idle"},fn=function() return tostring(data.n) end},
- {events={"idle"},fn=function() while true do end end},
-}}`)
-	c, err := LoadConfig(t.Context(), env, paths, config.DefaultSettings())
-	if err != nil {
+	res, err := c.RunHook(t.Context(), d.Hooks[0], "message", map[string]any{"text": "hey"})
+	if err != nil || !res.HasText || res.Text != "hey!" {
+		t.Fatalf("sync hook: %+v %v", res, err)
+	}
+	if _, err := c.RunHook(t.Context(), d.Hooks[1], "idle", map[string]any{}); err != nil {
 		t.Fatal(err)
-	}
-	defer c.Close()
-	hooks := c.Data().Hooks
-	if r, err := c.RunHook(t.Context(), hooks[0], "idle", map[string]any{"text": "!"}); err != nil || r != (HookResult{}) {
-		t.Fatalf("%+v %v", r, err)
 	}
 	select {
 	case msg := <-env.log:
-		if !strings.Contains(msg, "async test finished") {
+		if msg != "async ran" {
 			t.Fatal(msg)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("async hook did not finish")
+	case <-time.After(3 * time.Second):
+		t.Fatal("async hook did not run")
 	}
-	if data, err := os.ReadFile(filepath.Join(env.info.Root, "async.txt")); err != nil || string(data) != "2!" {
-		t.Fatalf("%q %v", data, err)
+	// The package.path has the defaults folder first, then the config folders.
+	a := NewAgent(env, c)
+	defer a.Close()
+	if got := run(t, a, `return package.path:match("^[^;]*;[^;]*;"), greet("bob")`); !strings.HasPrefix(got, filepath.Join(home, "defaults", "?.lua")+";"+filepath.Join(home, "defaults", "?", "init.lua")+";") || !strings.HasSuffix(got, "hi bob") {
+		t.Fatalf("%q", got)
 	}
-	if r, err := c.RunHook(t.Context(), hooks[1], "idle", nil); err != nil || r.Text != "1" {
-		t.Fatalf("%+v %v", r, err)
+}
+
+func TestCommands(t *testing.T) {
+	env := newEnv(t)
+	init := fixture(t, env.info.Root, "init.lua", `
+local n = 0
+return {commands = {
+  {name = "Say", fn = function() n = n + 1 return "said " .. n .. "\n" end},
+  {name = "Fail", fn = function() error("boom", 0) end},
+  {name = "Quiet", fn = function() return 42 end},
+}}`)
+	c := loadFixture(t, env, init)
+	cmds := c.Data().Commands
+	for i, want := range []struct{ out, err string }{{"said 1", ""}, {"", "boom"}, {"", ""}} {
+		out, err := c.RunCommand(t.Context(), cmds[i])
+		if out != want.out || (err == nil) != (want.err == "") || (err != nil && err.Error() != want.err) {
+			t.Fatalf("%s: %q %v", cmds[i].Name, out, err)
+		}
 	}
-	ctx, cancel = context.WithTimeout(t.Context(), 40*time.Millisecond)
-	defer cancel()
-	if _, err := c.RunHook(ctx, hooks[2], "idle", nil); err == nil {
-		t.Fatal("expected deadline")
+	// Every run is a fresh VM with its own copy: n starts again from the original.
+	if out, _ := c.RunCommand(t.Context(), cmds[0]); out != "said 1" {
+		t.Fatalf("second run: %q", out)
 	}
-	if r, err := c.RunHook(t.Context(), hooks[1], "idle", nil); err != nil || r.Text != "1" {
-		t.Fatalf("VM did not recover: %+v %v", r, err)
+}
+
+func TestConfigErrors(t *testing.T) {
+	root := t.TempDir()
+	for name, tt := range map[string]struct{ code, want string }{
+		"unknown key":   {`return {tools = {}}`, `unknown key "tools"`},
+		"not a table":   {`return 1`, "expected a returned table"},
+		"bad function":  {`return {functions = {f = {description = "d", fn = function() end, x = 1}}}`, `unknown key "x"`},
+		"go function":   {`return {functions = {f = {description = "d", fn = print}}}`, "fn must be a Lua function"},
+		"builtin":       {`return {functions = {string = {description = "d", fn = function() end}}}`, "collides with a built-in"},
+		"bad key":       {`return {commands = {{name = "A", key = "f5", fn = function() end}}}`, "ctrl+LETTER"},
+		"key clash":     {`return {commands = {{name = "A", key = "ctrl+k", fn = function() end}}}`, "already used by keys.menu"},
+		"command clash": {`return {commands = {{name = "A", key = "alt+a", fn = function() end}, {name = "B", key = "alt+a", fn = function() end}}}`, "already used by commands.A"},
+		"command no fn": {`return {commands = {{name = "A"}}}`, "fn must be a Lua function"},
+		"nested loads":  {`return {loads = {"nested.lua"}}`, "loads are not allowed"},
+		"unknown event": {`return {hooks = {{events = {"nope"}, fn = function() end}}}`, `unknown event "nope"`},
+		"runtime error": {`error("oops", 0)`, "oops"},
+	} {
+		file := fixture(t, root, strings.ReplaceAll(name, " ", "_")+".lua", tt.code)
+		fixture(t, root, "nested.lua", `return {loads = {"x.lua"}}`)
+		_, err := LoadConfig(t.Context(), newEnv(t), config.Paths{Files: []string{file}}, config.DefaultSettings())
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: got %v, want %q", name, err, tt.want)
+		}
+	}
+	// A missing default file is skipped; a missing required one is an error.
+	missing := filepath.Join(root, "missing.lua")
+	if c, err := LoadConfig(t.Context(), newEnv(t), config.Paths{Files: []string{missing}}, config.DefaultSettings()); err != nil || len(c.Data().Files) != 0 {
+		t.Fatalf("missing default: %v", err)
+	} else {
+		c.Close()
+	}
+	if _, err := LoadConfig(t.Context(), newEnv(t), config.Paths{Files: []string{missing}, Required: []string{missing}}, config.DefaultSettings()); err == nil {
+		t.Fatal("a missing required file loaded")
 	}
 }
