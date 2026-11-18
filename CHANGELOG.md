@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.12.0
+
+Breaking release. Defaults move from Go host functions to plain Lua.
+
+- The session VM has only the Lua 5.1 standard library plus `functions` from
+  your config: no built-in host API, no `print`, no `require("zel")`, and no
+  `task.*`. Child processes of `io.popen`/`os.execute` get no TTY and are
+  killed with their process group when the call ends.
+- `~/.config/zel/defaults/` (`require("defaults")`) provides `sh`, `read`,
+  `write`, `edit`, `slice`, `list`, `glob`, `grep`, `exists`, `cd`, `choice`,
+  `docs`, `models`, `session`, and `rename` in plain Lua backed by the `zel`
+  CLI. The default `init.lua` wires them in (`choice` omitted in headless mode).
+  `zel defaults --reset` restores `defaults/` from the binary.
+- New CLI subcommands: `zel exec`, `zel steer`, `zel status` (`new`, `-i ID`,
+  `--done`), `zel choice`, `zel print`, `zel session`, `zel rename`, and
+  `zel defaults --reset`.
+- Configs load in order (`init.lua`, `./zel.lua`, repeatable `--config FILE`;
+  `--no-default-configs` drops the defaults) without file watching. Reload
+  happens at start, new/resumed session, and via `Ctrl+R` in the new `Config`
+  menu screen.
+- Config `commands` (`{name, description?, key?, fn}`) appear in the main menu
+  and run on their global shortcut key.
+- UI updates: working line shows `zel status` of the running call (else code's
+  first line when `show_code`); `zel status new` indicators show above it as
+  `◐ 6s · text`; `zel print` lines show in `dark_gray` with no header; the menu
+  now closes with `keys.menu` instead of hard-coded `Ctrl+K`.
+
 ## 0.11.0
 
 Breaking release: Lua only. No migration of the old config or sessions.

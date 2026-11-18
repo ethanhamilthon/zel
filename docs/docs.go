@@ -18,8 +18,8 @@ type Topic struct{ Name, Summary string }
 // is a bug, so the tests fail when lua-api.md gets a section that is not listed.
 var sections = map[string]Topic{
 	"The lua tool": {"tool", "how a lua call runs: limits, output, Tracing"},
-	"API":          {"api", "the Lua functions: sh, read, edit, task, choice, ..."},
-	"Config":       {"config", "init.lua, zel.lua, settings, systems, functions, loads"},
+	"API":          {"api", "the defaults module and zel CLI: sh, read, edit, choice, ..."},
+	"Config":       {"config", "init.lua, zel.lua, settings, systems, functions, commands, loads"},
 	"connect.json": {"connect", "providers and the selected model"},
 	"Hooks":        {"hooks", "hook functions, events, return values"},
 	"Prompts":      {"prompts", "#name expansion in the user's composer, show_prompt"},

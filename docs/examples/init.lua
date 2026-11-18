@@ -1,5 +1,5 @@
 -- ~/.config/zel/init.lua: the global config. Copy it and cut what you do not need.
-local zel = require("zel")
+local d = require("defaults")
 
 return {
   settings = {
@@ -15,9 +15,9 @@ return {
 
   systems = {
     style = "Reply short. Prefer plain words.",
-    git = "git branch: " .. zel.sh("git branch --show-current").out,
-    -- config code checks the mode instead of the old `modes` key
-    plan = zel.session.mode == "main" and "Plan first: list the steps, then do them." or nil,
+    git = "git branch: " .. d.sh("git branch --show-current").out,
+    -- config code checks ZEL_MODE directly instead of mode markers
+    plan = os.getenv("ZEL_MODE") == "main" and "Plan first: list the steps, then do them." or nil,
   },
 
   prompts = {
@@ -26,10 +26,36 @@ return {
   },
 
   functions = {
+    sh = d.sh,
+    read = d.read,
+    write = d.write,
+    edit = d.edit,
+    slice = d.slice,
+    list = d.list,
+    glob = d.glob,
+    grep = d.grep,
+    exists = d.exists,
+    cd = d.cd,
+    docs = d.docs,
+    models = d.models,
+    session = d.session,
+    rename = d.rename,
+    choice = os.getenv("ZEL_MODE") ~= "headless" and d.choice or nil,
     server_sh = {
-      description = "run bash on mainserver. args: cmd. returns like sh()",
-      fn = function(a)
-        return zel.sh("ssh mainserver 'bash -s'", { stdin = a.cmd })
+      description = "`server_sh(cmd) -> {ok, code, out}` - run bash on mainserver",
+      fn = function(cmd)
+        return d.sh("ssh mainserver 'bash -s'", { stdin = cmd })
+      end,
+    },
+  },
+
+  commands = {
+    {
+      name = "Status",
+      description = "show git status",
+      key = "alt+g",
+      fn = function()
+        return d.sh("git status --short").out
       end,
     },
   },
@@ -44,7 +70,7 @@ return {
 
     -- ask the agent to commit before it stops
     { events = { "turn_end" }, fn = function(event, data)
-        if zel.sh("git status --short").out ~= "" then
+        if d.sh("git status --short").out ~= "" then
           return "uncommitted changes, commit them"
         end
       end },
@@ -59,7 +85,7 @@ return {
 
     -- notification when the agent is idle
     { events = { "idle" }, async = true, fn = function()
-        zel.sh([[osascript -e 'display notification "done" with title "zel"']])
+        d.sh([[osascript -e 'display notification "done" with title "zel"']])
       end },
   },
 
