@@ -2,29 +2,115 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	"zel/internal/config"
+	"zel/internal/luart"
 )
+
+// HookResult is what one hook returned.
+type HookResult = luart.HookResult
 
 // hookOutput is what the hooks of one event produced.
 type hookOutput struct {
 	input   map[string]any // the input after the rewriting hooks (field chain)
-	outs    []string       // non-empty stdout of each hook, in order
+	outs    []string       // non-empty text each hook returned, in order
 	blocked bool
-	reason  string // stderr of the hook that blocked
+	reason  string // what the blocking hook returned after false
 }
 
-func (s *session) hooksFor(string) []config.Hook { return nil }
+// blockable events stop what they guard when a hook returns false.
+var blockable = map[string]bool{"message": true, "notification": true, "lua_before": true}
 
-func (s *session) hasHooks(string) bool { return false }
+// chained events: each hook gets the field as the previous hook rewrote it.
+var chained = map[string]string{"message": "text", "notification": "text", "lua_before": "code"}
 
-func (s *session) runHooks(_ context.Context, _ string, input map[string]any) hookOutput {
-	return hookOutput{input: input}
+// hooksFor lists the hooks of the config for event, in config order.
+func (s *session) hooksFor(event string) []config.Hook {
+	cfg := s.conf.get()
+	if cfg == nil {
+		return nil
+	}
+	var list []config.Hook
+	for _, h := range cfg.Hooks {
+		if slices.Contains(h.Events, event) {
+			list = append(list, h)
+		}
+	}
+	return list
 }
 
-func (s *session) fireHooks(string, map[string]any) {}
+func (s *session) hasHooks(event string) bool { return len(s.hooksFor(event)) > 0 }
+
+// runHooks calls the hooks of event one by one with input as their data. A
+// returned string rewrites the chained field or is collected; false blocks a
+// blockable event; an error is logged in Tracing and the hook is skipped.
+// Async hooks start in their own VM and are not waited for.
+func (s *session) runHooks(ctx context.Context, event string, input map[string]any) hookOutput {
+	res := hookOutput{input: input}
+	field := chained[event]
+	lc := s.luaConfig()
+	if lc == nil {
+		return res
+	}
+	for _, h := range s.hooksFor(event) {
+		if ctx.Err() != nil {
+			break
+		}
+		started := time.Now()
+		r, err := lc.RunHook(ctx, h, event, res.input)
+		s.logHook(event, h, started, r, err)
+		switch {
+		case err != nil || h.Async:
+		case r.Blocked && blockable[event]:
+			res.blocked, res.reason = true, r.Reason
+			return res
+		case !r.HasText || strings.TrimSpace(r.Text) == "":
+		case field != "":
+			next := maps.Clone(res.input)
+			next[field] = r.Text
+			res.input = next
+		default:
+			res.outs = append(res.outs, strings.TrimRight(r.Text, "\n"))
+		}
+	}
+	return res
+}
+
+// logHook records one hook call in Tracing: "event: source -> result, Nms",
+// with the error or the returned text on the next lines.
+func (s *session) logHook(event string, h config.Hook, started time.Time, r HookResult, err error) {
+	result, detail := "ok", ""
+	switch {
+	case err != nil:
+		result, detail = "error", err.Error()
+	case h.Async:
+		result = "async"
+	case r.Blocked:
+		result, detail = "blocked", r.Reason
+	case r.HasText:
+		detail = r.Text
+	}
+	line := fmt.Sprintf("%s: %s -> %s, %dms", event, h.Source, result, time.Since(started).Milliseconds())
+	if detail = strings.TrimSpace(detail); detail != "" {
+		line += "\n" + detail
+	}
+	s.LogEvent("hook", line)
+}
+
+// fireHooks runs the hooks of an event whose output is not used.
+func (s *session) fireHooks(event string, input map[string]any) {
+	if !s.hasHooks(event) || s.ended.Load() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), config.HookTimeout)
+	defer cancel()
+	s.runHooks(ctx, event, input)
+}
 
 // hookInput lets message hooks rewrite or block what the user typed, and
 // notification hooks rewrite or drop a notification. ok is false when the input

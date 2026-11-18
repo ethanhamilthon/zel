@@ -50,11 +50,11 @@ func (s *session) openSession(id string) error {
 	s.id, s.created = id, v.Created
 	if v.BashCwd != "" {
 		if info, err := os.Stat(v.BashCwd); err == nil && info.IsDir() {
-			s.bashMu.Lock()
-			s.bashDir = v.BashCwd
-			s.bashMu.Unlock()
+			s.dirMu.Lock()
+			s.workDirPath = v.BashCwd
+			s.dirMu.Unlock()
 		} else {
-			defer s.notify("Folder " + v.BashCwd + " (zel cd) is gone: bash starts in " + s.dir)
+			defer s.notify("Folder " + v.BashCwd + " (cd) is gone: calls start in " + s.dir)
 		}
 	}
 	s.histMu.Lock()
@@ -156,7 +156,7 @@ func (s *session) Save() error {
 	first := s.firstUserLine()
 	s.histMu.RUnlock()
 	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
-		Mode: s.mode(), Depth: s.depth, Created: s.created, BashCwd: s.bashCwdSet()}
+		Mode: s.mode(), Depth: s.depth, Created: s.created, BashCwd: s.workDirSet()}
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}

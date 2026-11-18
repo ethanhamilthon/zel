@@ -2,21 +2,12 @@ package core
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"zel/internal/config"
+	"zel/internal/luart"
 )
-
-// The description of the bash tool, one text per session mode.
-//
-//go:embed bash_main.md
-var bashMain string
-
-//go:embed bash_headless.md
-var bashHeadless string
 
 // instructions returns the session's system prompt. It is assembled once and stored
 // in the history, so a resumed session keeps its prompt until the config changes.
@@ -58,29 +49,18 @@ func (s *session) assemblePrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// toolDescription is everything Zel itself tells the model: how the bash tool
-// and the zel commands work. It is built live for every request, from the text
-// of the session mode. Lines marked [nest] are dropped at the deepest level of
-// zel -p children, which cannot start more of them.
+// toolDescription is everything Zel itself tells the model: how the lua tool
+// and its API work, and the functions of the config. It is built live for
+// every request; zel -p children at the deepest level cannot start more.
 func (s *session) toolDescription() string {
-	text, timeout := bashMain, config.Timeout
-	if s.mode() == "headless" {
-		text = bashHeadless
-	}
+	t := luart.ToolText{Headless: s.mode() == "headless", Nest: s.depth < MaxDepth, Timeout: config.Timeout}
 	if s.cfg != nil {
-		timeout = s.Settings().Timeout
+		t.Timeout = s.Settings().Timeout
 	}
-	var lines []string
-	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
-		if rest, ok := strings.CutPrefix(line, "[nest] "); ok {
-			if s.depth >= MaxDepth {
-				continue
-			}
-			line = rest
-		}
-		lines = append(lines, line)
+	if cfg := s.conf.get(); cfg != nil {
+		t.Functions = cfg.Functions
 	}
-	return strings.ReplaceAll(strings.Join(lines, "\n"), "{timeout}", strconv.Itoa(timeout))
+	return luart.ToolDescription(t)
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {

@@ -10,7 +10,7 @@ import (
 )
 
 // TraceEntry is one step of a session trace: the system prompt, a message, a
-// bash call with its output or a notice, in the order the session produced it.
+// lua call with its output or a notice, in the order the session produced it.
 
 // traceKinds names the record kinds that the chat hides and the Tracing menu shows.
 var traceKinds = map[string]string{"code": "lua", "reasoning": "thinking", "assistant": "agent"}
@@ -59,7 +59,7 @@ func mergeTrace(history, rest []TraceEntry) []TraceEntry {
 	return entries
 }
 
-// historyTrace lists the history items. A bash call and its output are one
+// historyTrace lists the history items. A lua call and its output are one
 // entry; the records of a model response share its request. A turn starts at
 // the item its responses name (TurnSeq), or at a user message outside a known
 // turn: one without an answer yet, or any in sessions saved before turns were
@@ -112,7 +112,7 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 				continue // the TUI logs the error or stop separately
 			}
 			if i, ok := calls[call.CallID]; ok && call.Type == "function_call_output" && (r.Kind == "output" || r.Kind == "error") {
-				entries[i].Output, entries[i].Status = r.Text, bashStatus(r.Text)
+				entries[i].Output, entries[i].Status = r.Text, callStatus(r.Text)
 				if meta != nil {
 					entries[i].Duration = meta.Duration
 				}
@@ -132,24 +132,21 @@ func (s *session) historyTrace() (entries []TraceEntry) {
 	return entries
 }
 
-// bashStatus reads the failure of a bash call from the lines zel appends to its
-// output (bash_after hooks may print after them).
-func bashStatus(out string) string {
-	if strings.HasPrefix(out, "error: ") {
-		return "error"
-	}
+// callStatus reads the failure of a lua call from the lines zel appends to
+// its output (lua_after hooks may add lines after them).
+func callStatus(out string) string {
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= max(0, len(lines)-20); i-- {
 		line := lines[i]
 		switch {
-		case strings.HasPrefix(line, "[exit ") && strings.HasSuffix(line, "]"):
-			if _, err := strconv.Atoi(line[6 : len(line)-1]); err == nil {
-				return line[1 : len(line)-1]
-			}
 		case strings.HasPrefix(line, "[timeout after "):
 			return "timeout"
-		case line == "[cancelled]":
+		case strings.HasPrefix(line, "error: lua: ECANCELED"):
 			return "cancelled"
+		case strings.HasPrefix(line, "error: "):
+			return "error"
+		case strings.HasPrefix(line, "[blocked by a hook"):
+			return "blocked"
 		}
 	}
 	return ""
@@ -209,16 +206,17 @@ func eventTrace(path string) (entries []TraceEntry) {
 	return entries
 }
 
-// hookResult reads the end of a hook line, "-> exit N, Mms": a failure is an
-// exit other than 0 and 2 (2 blocks on purpose).
-func hookResult(line string) (status string, took time.Duration) {
-	i := strings.LastIndex(line, " -> exit ")
+// hookResult reads the end of the first line of a hook entry,
+// "-> RESULT, Nms": a failure is the result "error".
+func hookResult(text string) (status string, took time.Duration) {
+	line, _, _ := strings.Cut(text, "\n")
+	i := strings.LastIndex(line, " -> ")
 	if i < 0 {
 		return "", 0
 	}
-	code, ms, _ := strings.Cut(line[i+len(" -> exit "):], ", ")
-	if n, err := strconv.Atoi(code); err == nil && n != 0 && n != 2 {
-		status = "exit " + code
+	result, ms, _ := strings.Cut(line[i+len(" -> "):], ", ")
+	if result == "error" {
+		status = "error"
 	}
 	if n, err := strconv.Atoi(strings.TrimSuffix(ms, "ms")); err == nil {
 		took = time.Duration(n) * time.Millisecond

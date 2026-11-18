@@ -11,7 +11,7 @@ import (
 	"zel/internal/store"
 )
 
-// Choice is a question the agent asks the user with zel choice: the UI shows
+// Choice is a question the agent asks the user with choice(): the UI shows
 // the options instead of the composer until one is picked or Esc cancels it.
 // Waiting is how many questions are queued, this one included.
 type Choice struct {
@@ -146,14 +146,14 @@ func (s *session) recordChoice(title, answer string, ok bool) (Record, bool) {
 }
 
 // OnChoiceChanged registers fn to run when the queue of questions changes; with
-// fn set, zel choice has a UI to ask in. fn must not block.
+// fn set, choice() has a UI to ask in. fn must not block.
 func (a *Runtime) OnChoiceChanged(fn func()) {
 	a.ask.mu.Lock()
 	a.ask.changed = fn
 	a.ask.mu.Unlock()
 }
 
-// Ask queues a question of the main session, as zel choice does.
+// Ask queues a question of the main session, as choice() does.
 func (a *Runtime) Ask(title string, options []string) (int, error) {
 	s := a.session()
 	return s.ask.ask(s, title, options)

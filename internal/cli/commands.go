@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -73,33 +73,7 @@ func loadConfig(flag string) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if flag == "" {
-		flag = os.Getenv("ZEL_CONFIG")
-	}
-	paths := config.DefaultPaths(home, cwd, flag)
-	if flag == "" && os.Getenv("ZEL_NO_LOCAL") == "1" {
-		paths.Local = ""
-	}
-	cfg := &config.Config{
-		Paths:    paths,
-		Settings: config.DefaultSettings(),
-	}
-	conn, err := config.LoadConnect(paths.Connect)
-	if err == nil {
-		cfg.Settings.Providers = conn.Providers
-		if conn.Provider != "" {
-			cfg.Settings.Provider = conn.Provider
-		}
-		if conn.Model != "" {
-			cfg.Settings.Model = conn.Model
-		}
-		if conn.Effort != "" {
-			cfg.Settings.Effort = conn.Effort
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		cfg.Errors = append(cfg.Errors, err.Error())
-	}
-	return cfg, nil
+	return core.LoadConfig(home, cwd, cmp.Or(flag, os.Getenv("ZEL_CONFIG"))), nil
 }
 
 func modelsCommand(ctx context.Context, args []string, out io.Writer) error {

@@ -192,12 +192,10 @@ func RecordsForItem(item json.RawMessage) []Record {
 	case v.Type == "turn_end":
 		return []Record{{Kind: "turn_end", Text: v.Text}}
 	case v.Type == "function_call":
-		var args struct{ Command string }
+		var args struct{ Code string }
 		_ = json.Unmarshal([]byte(v.Arguments), &args)
-		switch v.Name {
-		case "bash":
-			return []Record{{Kind: "code", Text: args.Command}}
-
+		if v.Name == "lua" {
+			return []Record{{Kind: "code", Text: args.Code}}
 		}
 		return []Record{{Kind: "code", Text: v.Name + "\n" + v.Arguments}}
 	case v.Type == "function_call_output":

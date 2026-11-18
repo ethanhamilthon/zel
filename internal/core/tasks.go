@@ -1,7 +1,6 @@
 package core
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,11 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"zel/internal/entities"
-	"zel/internal/shell"
+	"zel/internal/luart"
 	"zel/internal/store"
 )
 
@@ -56,7 +54,7 @@ func (s *session) newTasks() *tasks {
 		life: life, stopLife: stopLife, changed: func() { s.changes.notify(); s.checkIdle() }}
 }
 
-// proc is one running task: a bash command in its own process group.
+// proc is one running task: a Lua function on its own goroutine.
 type proc struct {
 	cancel func()       // end it now
 	term   func()       // ask it to end; the caller cancels it later if it lingers
@@ -70,26 +68,33 @@ type startOpts struct {
 	timeout   time.Duration
 }
 
-// spawn starts command with `bash -c` as a background task.
-func (t *tasks) spawn(command string, o startOpts) (*job, error) {
+// spawnLua starts a Lua function as a background task; run gets the task
+// log as its output and ends with its context.
+func (t *tasks) spawnLua(name string, timeout time.Duration, run luart.TaskFunc) (*job, error) {
 	var j *job
-	_, err := t.start(command, o, func(log io.Writer, jb *job) (*proc, error) {
+	_, err := t.start(name, startOpts{name: name, timeout: timeout}, func(log io.Writer, jb *job) (*proc, error) {
 		j = jb
-		env := t.s.shellEnv()
-		env["ZEL_TASK"] = jb.id
-		cmd := shell.Command(context.Background(), cmp.Or(o.cwd, t.s.bashCwd()), env, command)
-		cmd.Stdin = strings.NewReader("")
-		cmd.Stdout, cmd.Stderr = log, log
-		if err := cmd.Start(); err != nil {
-			return nil, err
-		}
+		ctx, cancel := context.WithCancel(t.life)
 		done := make(chan error, 1)
-		go func() { done <- shell.Reap(cmd) }()
-		var waitErr error
-		signal := func(sig syscall.Signal) { _ = syscall.Kill(-cmd.Process.Pid, sig) }
-		return &proc{cancel: func() { signal(syscall.SIGKILL) }, term: func() { signal(syscall.SIGTERM) },
-			wait: func() error { waitErr = <-done; return waitErr },
-			exit: func() int { return exitCode(waitErr) }}, nil
+		go func() {
+			result, err := run(ctx, log)
+			jb.mu.Lock()
+			jb.value = result
+			if err != nil {
+				jb.failure = err.Error()
+			}
+			jb.mu.Unlock()
+			done <- err
+		}()
+		var runErr error
+		return &proc{cancel: cancel, term: cancel,
+			wait: func() error { runErr = <-done; cancel(); return runErr },
+			exit: func() int {
+				if runErr != nil {
+					return 1
+				}
+				return 0
+			}}, nil
 	})
 	if err == nil {
 		t.changed()

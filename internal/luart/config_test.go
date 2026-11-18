@@ -76,7 +76,7 @@ return {systems={c="C"}, settings={env={SHARED="local"},show_prompt=true},prompt
 	if !reflect.DeepEqual(d.Files, []string{paths.Connect, init, helper, extra, local}) {
 		t.Fatalf("watched files: %v", d.Files)
 	}
-	if !strings.Contains(ToolDescription(true, 12, d.Functions), "overwritten{...}: new") {
+	if !strings.Contains(ToolDescription(ToolText{Headless: true, Timeout: 12, Functions: d.Functions}), "`overwritten{...}` - new") {
 		t.Fatal("missing function description")
 	}
 	a := NewAgent(env, c)

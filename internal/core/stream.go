@@ -29,9 +29,9 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 		}
 	}
 	s.histMu.RUnlock()
-	// The system prompt is only what the user wrote in the config; our own text goes into the bash tool description.
+	// The system prompt is only what the user wrote in the config; our own text goes into the lua tool description.
 	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort,
-		Tools: []provider.Tool{{Name: "bash", Description: s.toolDescription(), Parameters: bashParameters(), Freeform: "command"}}}
+		Tools: []provider.Tool{{Name: "lua", Description: s.toolDescription(), Parameters: luaParameters(), Freeform: "code"}}}
 	started := time.Now()
 	s.histMu.Lock()
 	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}

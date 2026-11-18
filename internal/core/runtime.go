@@ -15,6 +15,7 @@ import (
 	"zel/internal/config"
 	"zel/internal/entities"
 	"zel/internal/ipc"
+	"zel/internal/luart"
 	"zel/internal/store"
 )
 
@@ -30,7 +31,7 @@ type Options struct {
 
 // Runtime is the stable application handle held by callers and the controller
 // across NewSession/Resume. Each opened session owns an independent *session so
-// surviving background work (hooks, tasks, abandoned bash calls) keeps its own
+// surviving background work (hooks, tasks, abandoned lua calls) keeps its own
 // session identity and environment without racing with session replacement.
 type Runtime struct {
 	opts      Options
@@ -52,32 +53,36 @@ type Runtime struct {
 // session is the owned state of one Zel session. It is never overwritten in
 // place when switching sessions.
 type session struct {
-	opts         Options
-	home         string
-	dir          string
-	store        *store.Store // shared handle of the sessions folder
-	project      string
-	id           string
-	created      time.Time
-	cfg          *settingsState
-	conf         *confHolder
-	path         string      // the config file
-	token        string      // key of the session socket
-	sock         *ipc.Server // nil until the session is acquired
-	stopWatch    func()
-	changes      *notifier
-	reloads      *notifier
-	parent       *parentLink // set when this is a zel -p started from another session
-	childMu      sync.Mutex
-	children     map[string]SubagentRun // zel -p children that run now, by session ID
-	childPIDs    map[string]int
-	hookWG       sync.WaitGroup // async hooks
-	hookMu       sync.Mutex
-	hookCtx      context.Context
-	stopHooks    context.CancelFunc
-	outputMu     sync.Mutex // numbers the files of cut bash outputs
-	bashMu       sync.Mutex
-	bashDir      string // zel cd: where bash calls and tasks start; empty = dir
+	opts        Options
+	home        string
+	dir         string
+	store       *store.Store // shared handle of the sessions folder
+	project     string
+	id          string
+	created     time.Time
+	cfg         *settingsState
+	conf        *confHolder
+	path        string      // the config file
+	token       string      // key of the session socket
+	sock        *ipc.Server // nil until the session is acquired
+	stopWatch   func()
+	changes     *notifier
+	reloads     *notifier
+	parent      *parentLink // set when this is a zel -p started from another session
+	childMu     sync.Mutex
+	children    map[string]SubagentRun // zel -p children that run now, by session ID
+	childPIDs   map[string]int
+	hookWG      sync.WaitGroup // async hooks
+	hookMu      sync.Mutex
+	hookCtx     context.Context
+	stopHooks   context.CancelFunc
+	outputMu    sync.Mutex // numbers the files of cut call outputs
+	dirMu       sync.Mutex
+	workDirPath string // cd(): where the next Lua calls work; empty = dir
+
+	luaMu        sync.Mutex
+	luaConf      *luart.Config // the config VM of the snapshot in conf
+	agent        *luart.Agent  // the agent VM, created on first call
 	turning      atomic.Bool
 	idleSent     atomic.Bool
 	histMu       sync.RWMutex
@@ -103,7 +108,7 @@ type session struct {
 	requestedLen int            // History length when lastRequest was sent
 	compacted    compaction     // latest automatic compaction boundaries
 	choices      []store.Choice // answered questions shown in the chat, by history position
-	ask          *chooser       // the questions of zel choice the UI shows
+	ask          *chooser       // the questions of choice() the UI shows
 	depth        int            // zel -p nesting depth: 0 for a session you started
 	acts         *activities    // foreground host operations in progress
 	queue        *Steering
@@ -142,7 +147,7 @@ func New(dir string, opts Options) (*Runtime, error) {
 	}
 	a := &Runtime{opts: opts, home: home, state: state, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
 	if opts.Mode == "headless" {
-		// A zel -p started by the bash of another session is its child.
+		// A zel -p started by sh() of another session is its child.
 		if a.parent, err = parentFromEnv(); err != nil {
 			return nil, err
 		}
@@ -358,7 +363,7 @@ func (s *session) noteSteps(emit func(TurnEvent)) func(TurnEvent) {
 	}
 }
 
-// countSteps counts tool calls, excluding reasoning blocks, for the bash total.
+// countSteps counts tool calls, excluding reasoning blocks, for the calls total.
 func countSteps(items []json.RawMessage) (steps int) {
 	for _, item := range items {
 		for _, r := range RecordsForItem(item) {
@@ -381,22 +386,22 @@ func callOutput(callID, output string) json.RawMessage {
 	return raw(map[string]any{"type": "function_call_output", "call_id": callID, "output": output})
 }
 
-// runTool executes a bash tool call and returns the text the model sees. Messages
+// runTool executes a lua tool call and returns the text the model sees. Messages
 // the user types meanwhile stay queued until the call ends.
 func (s *session) runTool(ctx context.Context, callID, name, arguments string, emit func(TurnEvent)) string {
 	if ctx.Err() != nil {
-		return "error: bash: ECANCELED: the call was cancelled"
+		return "error: lua: ECANCELED: the call was cancelled"
 	}
-	if name != "bash" {
+	if name != "lua" {
 		return "error: unknown tool: " + name
 	}
 	var args struct {
-		Command string `json:"command"`
+		Code string `json:"code"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return "error: bash: EINVAL: the tool input must be a bash script (" + err.Error() + ")"
+		return "error: lua: EINVAL: the tool input must be Lua code (" + err.Error() + ")"
 	}
-	return s.runBash(ctx, args.Command)
+	return s.runLua(ctx, args.Code)
 }
 
 func (s *session) itemID(index int64) string {
@@ -475,11 +480,11 @@ func (s *session) FinalText() string {
 
 func (a *Runtime) SessionID() string { return a.session().id }
 
-func bashParameters() map[string]any {
+func luaParameters() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"properties":           map[string]any{"command": map[string]any{"type": "string", "description": "bash script"}},
-		"required":             []string{"command"},
+		"properties":           map[string]any{"code": map[string]any{"type": "string", "description": "Lua code"}},
+		"required":             []string{"code"},
 		"additionalProperties": false,
 	}
 }

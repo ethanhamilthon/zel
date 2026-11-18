@@ -68,7 +68,7 @@ func (s *session) reapChildrenLocked() {
 		if !run.Ended.IsZero() {
 			continue
 		}
-		// A child killed with its bash call or task never says child.end.
+		// A child killed with its lua call or task never says child.end.
 		if pid := s.childPIDs[id]; pid > 0 && syscall.Kill(pid, 0) == syscall.ESRCH {
 			run.Ended = time.Now()
 			s.children[id] = run
@@ -151,7 +151,7 @@ func (a *Runtime) OnSubagentsChanged(fn func()) { a.changes.set(fn) }
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // parentLink is the session that started this zel -p, from the environment
-// its bash gave us.
+// its sh() gave us.
 type parentLink struct {
 	session, socket, token  string
 	depth                   int

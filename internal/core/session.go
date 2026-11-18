@@ -65,6 +65,7 @@ func (s *session) release() {
 	if s.tasks != nil {
 		s.tasks.close(nil)
 	}
+	s.closeLua()
 	if s.sock != nil {
 		s.sock.Close()
 		s.sock = nil
@@ -172,8 +173,8 @@ func (s *session) startWatch() {
 	})
 }
 
-// baseEnv is the environment of everything the session runs: the bash calls,
-// tasks, hooks and ${{ }}. API keys are never exported.
+// baseEnv is the environment of what sh() runs in the session: agent calls,
+// tasks, hooks and the config. API keys are never exported.
 func (s *session) baseEnv() map[string]string {
 	env := map[string]string{
 		"ZEL_SESSION_ID": s.id,
@@ -181,7 +182,8 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_DEPTH":      strconv.Itoa(s.depth),
 		"ZEL_SOCKET":     s.socketPath(),
 		"ZEL_TOKEN":      s.token,
-		"ZEL_CONFIG":     s.path,
+		// Only a --config file is passed on: a child reads init.lua and its own zel.lua.
+		"ZEL_CONFIG": s.configFlag(),
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session

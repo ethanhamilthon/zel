@@ -3,14 +3,15 @@ package core
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"zel/internal/luart"
 )
 
-// job is one background task started with zel task run.
+// job is one background task: a Lua function started with task.spawn.
 type job struct {
 	t             *tasks
 	id, name, cmd string
@@ -24,10 +25,12 @@ type job struct {
 	timedOut bool
 	pushed   string // text of the queued result message
 
-	mu     sync.Mutex
-	status string
-	code   int
-	took   time.Duration
+	mu      sync.Mutex
+	status  string
+	code    int
+	took    time.Duration
+	value   string // what the function returned
+	failure string // the error it raised
 }
 
 func (j *job) Status() string {
@@ -43,38 +46,35 @@ func (j *job) complete(status string, code int, took time.Duration) {
 	j.mu.Unlock()
 }
 
-// noticeText is the notification the model gets when nobody waited for the job.
+// noticeText is the notification the model gets when nobody waited for the
+// job: its state and the start of its result or error.
 func (j *job) noticeText(status string) string {
 	word := map[string]string{"done": "finished", "timeout": "timed out"}[status]
-	return j.id + " " + cmp.Or(word, status)
-}
-
-// line is the one-line state of the job: "t1 done build 12s exit 0".
-func (j *job) line() string {
+	text := j.id + " " + cmp.Or(word, status)
 	j.mu.Lock()
-	status, code, took := j.status, j.code, j.took
+	detail := cmp.Or(j.failure, j.value)
 	j.mu.Unlock()
-	if status == "running" {
-		took = time.Since(j.started)
-	}
-	parts := []string{j.id, status}
-	if j.name != "" {
-		parts = append(parts, j.name)
-	}
-	parts = append(parts, took.Round(100*time.Millisecond).String())
-	if status != "running" && code >= 0 {
-		parts = append(parts, fmt.Sprintf("exit %d", code))
-	}
-	return strings.Join(parts, " ")
-}
-
-// result is the line, the command and the last lines of the output.
-func (j *job) result(lines int) string {
-	text := j.line() + "\n$ " + FirstLine(j.cmd)
-	if out := tailLines(j.log, lines); strings.TrimSpace(out) != "" {
-		text += "\n" + out
+	if detail = strings.TrimSpace(detail); detail != "" {
+		if r := []rune(detail); len(r) > noticeDetail {
+			detail = string(r[:noticeDetail]) + "… (task.get(\"" + j.id + "\") has the rest)"
+		}
+		text += ": " + detail
 	}
 	return text
+}
+
+// noticeDetail bounds the result in a task notification, in runes.
+const noticeDetail = 2000
+
+// info is the row of task.list and task.get.
+func (j *job) info() luart.TaskInfo {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	took := j.took
+	if j.status == "running" {
+		took = time.Since(j.started)
+	}
+	return luart.TaskInfo{ID: j.id, Name: j.name, State: j.status, Ms: took.Milliseconds(), Result: j.value, Error: j.failure}
 }
 
 // Wait blocks until the job ends, the timeout passes (zero: no limit) or ctx
@@ -178,16 +178,4 @@ func tailLines(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
-}
-
-// lockedWriter serializes writes from stdout and stderr.
-type lockedWriter struct {
-	mu sync.Mutex
-	w  interface{ Write([]byte) (int, error) }
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
 }

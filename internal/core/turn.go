@@ -13,7 +13,7 @@ type turnHost struct {
 	accept   func() bool
 	turnSeq  int
 	injected int
-	skipBash bool // discard the rest of this response after typed steering
+	skipCalls bool // discard the rest of this response after typed steering
 }
 
 // run is the model/tool loop of one turn: steering is accepted only at safe
@@ -91,7 +91,7 @@ func (h *turnHost) Request(ctx context.Context) ([]json.RawMessage, error) {
 	return h.s.request(ctx, h.emit)
 }
 func (h *turnHost) CommitResponse(items []json.RawMessage) error {
-	h.skipBash = false
+	h.skipCalls = false
 	s, emit := h.s, h.emit
 	s.histMu.RLock()
 	meta := s.lastRequest
@@ -128,12 +128,12 @@ func (h *turnHost) CommitResponse(items []json.RawMessage) error {
 func (h *turnHost) Execute(ctx context.Context, call entities.ToolCall) error {
 	s, emit := h.s, h.emit
 	started := time.Now()
-	h.skipBash = h.skipBash || s.queue.hasTyped()
+	h.skipCalls = h.skipCalls || s.queue.hasTyped()
 	output0 := "[skipped: superseded by steering]"
-	if call.Name != "bash" || !h.skipBash {
+	if call.Name != "lua" || !h.skipCalls {
 		output0 = s.runTool(ctx, call.CallID, call.Name, call.Arguments, emit)
 	}
-	h.skipBash = h.skipBash || s.queue.hasTyped()
+	h.skipCalls = h.skipCalls || s.queue.hasTyped()
 	output := callOutput(call.CallID, output0)
 	s.histMu.Lock()
 	s.History = append(s.History, output)

@@ -2,7 +2,7 @@ package core
 
 import "sync"
 
-// imageSlots counts zel view images admitted since the last model request.
+// imageSlots counts images admitted since the last model request (read() of an image).
 type imageSlots struct {
 	mu sync.Mutex
 	n  int

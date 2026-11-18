@@ -1,15 +1,18 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
 	"zel/internal/config"
+	"zel/internal/luart"
 	"zel/internal/provider"
 )
 
@@ -66,11 +69,17 @@ func (s *session) configFile() string {
 	return config.DefaultPaths(s.home, s.dir, "").Init
 }
 
-func (s *session) paths() config.Paths {
-	flag := s.opts.Config
-	if flag == "" && s.parent != nil {
-		flag = s.parent.config
+// configFlag is the --config file of the session or of its parent, empty
+// when it uses the default init.lua and zel.lua.
+func (s *session) configFlag() string {
+	if s.opts.Config == "" && s.parent != nil {
+		return s.parent.config
 	}
+	return s.opts.Config
+}
+
+func (s *session) paths() config.Paths {
+	flag := s.configFlag()
 	p := config.DefaultPaths(s.home, s.dir, flag)
 	if flag == "" && os.Getenv("ZEL_NO_LOCAL") == "1" {
 		p.Local = ""
@@ -97,44 +106,63 @@ func (a *Runtime) ConfigErrors() []string {
 	return nil
 }
 
-// loadConfigStub builds a Config from connect.json and defaults (Lua execution
-// is wired during luart integration).
-func (s *session) loadConfigStub() *config.Config {
+// baseSettings are the defaults with the providers and the selection of
+// connect.json, which the settings of init.lua and zel.lua then change.
+func baseSettings(path string) (config.Settings, error) {
+	base := config.DefaultSettings()
+	conn, err := config.LoadConnect(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return base, nil
+	}
+	if err != nil {
+		return base, err
+	}
+	base.Providers = conn.Providers
+	base.Provider, base.Model, base.Effort = conn.Provider, conn.Model, cmp.Or(conn.Effort, base.Effort)
+	return base, nil
+}
+
+// loadSnapshot runs init.lua, zel.lua and their loads in a new config VM.
+// On an error lc is nil and cfg holds the defaults, the error and the files to
+// watch, so a fix is noticed.
+func (s *session) loadSnapshot() (lc *luart.Config, cfg *config.Config) {
 	p := s.paths()
-	cfg := &config.Config{
-		Paths:    p,
-		Settings: config.DefaultSettings(),
-		Files:    []string{p.Init, p.Local, p.Connect},
-	}
-	conn, err := config.LoadConnect(p.Connect)
+	base, err := baseSettings(p.Connect)
 	if err == nil {
-		cfg.Settings.Providers = conn.Providers
-		if conn.Provider != "" {
-			cfg.Settings.Provider = conn.Provider
-		}
-		if conn.Model != "" {
-			cfg.Settings.Model = conn.Model
-		}
-		if conn.Effort != "" {
-			cfg.Settings.Effort = conn.Effort
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		cfg.Errors = append(cfg.Errors, err.Error())
+		lc, err = luart.LoadConfig(context.Background(), luaEnv{s}, p, base)
 	}
-	return cfg
+	if err == nil {
+		return lc, lc.Data()
+	}
+	files := []string{p.Init, p.Connect}
+	if p.Local != "" {
+		files = append(files, p.Local)
+	}
+	if old := s.conf.get(); old != nil {
+		files = append(files, old.Files...)
+	}
+	slices.Sort(files)
+	return nil, &config.Config{Paths: p, Settings: base, Prompts: map[string]string{}, Files: slices.Compact(files), Errors: []string{err.Error()}}
 }
 
 // loadConfig reads the config into a new snapshot and applies its settings.
-// A broken file is skipped with a notice.
+// A broken config leaves the defaults with a notice.
 func (s *session) loadConfig() error {
-	cfg := s.loadConfigStub()
+	lc, cfg := s.loadSnapshot()
 	for _, e := range cfg.Errors {
 		s.notify("config skipped: " + e)
 	}
 	for _, w := range cfg.Warnings {
 		s.notify("config: " + w)
 	}
-	return s.applyConfig(cfg)
+	if err := s.applyConfig(cfg); err != nil {
+		if lc != nil {
+			lc.Close()
+		}
+		return err
+	}
+	s.setLuaConfig(lc)
+	return nil
 }
 
 func (s *session) applyConfig(cfg *config.Config) error {
@@ -160,8 +188,12 @@ func (s *session) applyConfig(cfg *config.Config) error {
 func (a *Runtime) Reload() error { return a.session().Reload() }
 
 func (s *session) Reload() error {
-	cfg := s.loadConfigStub()
-	if len(cfg.Errors) > 0 && s.conf.get() != nil {
+	lc, cfg := s.loadSnapshot()
+	if lc == nil && s.conf.get() != nil {
+		// Watch the files of both, so the fix of the broken one is seen too.
+		old := *s.conf.get()
+		old.Files = cfg.Files
+		s.conf.set(&old)
 		msg := "config has errors; the previous config stays: " + strings.Join(cfg.Errors, "; ")
 		s.fireHooks("config_changed", map[string]any{"ok": false, "error": msg, "file": s.path})
 		return errors.New(msg)
@@ -170,8 +202,12 @@ func (s *session) Reload() error {
 		s.notify("config: " + w)
 	}
 	if err := s.applyConfig(cfg); err != nil {
+		if lc != nil {
+			lc.Close()
+		}
 		return err
 	}
+	s.setLuaConfig(lc)
 	s.histMu.RLock()
 	frozen, previous := s.promptFrozen, s.prompt
 	s.histMu.RUnlock()

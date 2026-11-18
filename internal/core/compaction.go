@@ -118,7 +118,7 @@ func conversationOnly(item json.RawMessage) (json.RawMessage, bool) {
 	return raw(v), true
 }
 
-// pruneOutput cuts a bash call result to its first line.
+// pruneOutput cuts a lua call result to its first line.
 func pruneOutput(item json.RawMessage) json.RawMessage {
 	var v map[string]any
 	if json.Unmarshal(item, &v) != nil || v["type"] != "function_call_output" {

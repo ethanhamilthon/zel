@@ -1,4 +1,4 @@
-// Package edit applies the exact-text edits of `zel edit`: blocks of old and
+// Package edit applies exact-text edits: blocks of old and
 // new text, read from stdin, all applied or none.
 package edit
 

@@ -3,6 +3,7 @@ package luart
 import (
 	_ "embed"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"zel/internal/config"
@@ -11,29 +12,40 @@ import (
 //go:embed lua_main.md
 var luaMain string
 
-//go:embed lua_headless.md
-var luaHeadless string
+// ToolText says what the description of the lua tool covers.
+type ToolText struct {
+	Headless  bool // zel -p: no user, no choice()
+	Nest      bool // may start zel -p subagents
+	Timeout   int  // seconds per call
+	Functions []config.Function
+}
 
-const mainChoice = "- `choice(question, {options...}) -> id`: ask the user; the answer arrives as a notification.\n"
-
-func ToolDescription(headless bool, timeout int, functions []config.Function) string {
-	if timeout <= 0 {
-		timeout = 30
+// ToolDescription is everything Zel tells the model about the lua tool. Lines
+// marked [main], [headless] or [nest] are kept only in that case.
+func ToolDescription(t ToolText) string {
+	if t.Timeout <= 0 {
+		t.Timeout = config.Timeout
 	}
-	text := fmt.Sprintf(luaMain, timeout)
-	if headless {
-		text += luaHeadless
-	} else {
-		text += mainChoice
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(luaMain), "\n") {
+		keep := true
+		for marker, ok := range map[string]bool{"[main]": !t.Headless, "[headless]": t.Headless, "[nest]": t.Nest} {
+			if rest, found := strings.CutPrefix(line, marker); found {
+				line, keep = rest, ok
+			}
+		}
+		if keep {
+			lines = append(lines, line)
+		}
 	}
-	if len(functions) == 0 {
-		return strings.TrimSpace(text)
+	text := strings.ReplaceAll(strings.Join(lines, "\n"), "{timeout}", strconv.Itoa(t.Timeout))
+	if len(t.Functions) == 0 {
+		return text
 	}
 	var b strings.Builder
-	b.WriteString(text)
-	b.WriteString("\nConfigured functions (pass one table):\n")
-	for _, f := range functions {
-		fmt.Fprintf(&b, "- %s{...}: %s\n", f.Name, f.Description)
+	b.WriteString(text + "\n\n## Functions of the config (globals, called with one table)\n")
+	for _, f := range t.Functions {
+		fmt.Fprintf(&b, "`%s{...}` - %s\n", f.Name, f.Description)
 	}
 	return strings.TrimSpace(b.String())
 }
