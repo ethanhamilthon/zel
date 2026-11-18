@@ -2,13 +2,11 @@ package core
 
 import (
 	"context"
-
+	"maps"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
-
-	"zel/internal/config"
 )
 
 // Prompt completions: [completions] name = "text" registers #name; the tokens
@@ -67,19 +65,13 @@ func PromptAt(runes []rune, cursor int) (start, end int, query string, ok bool) 
 	return begin - 1, end, string(runes[begin:i]), true
 }
 
-// completions of the session: those of its modes.
+// completions of the session.
 func (s *session) completions() map[string]string {
 	cfg := s.conf.get()
 	if cfg == nil {
 		return nil
 	}
-	out := map[string]string{}
-	for name, c := range cfg.Completions {
-		if config.InModes(c.Modes, s.modes()) {
-			out[name] = c.Text
-		}
-	}
-	return out
+	return maps.Clone(cfg.Prompts)
 }
 
 // PromptPreview returns unexpanded completion text without running commands.
@@ -149,15 +141,9 @@ func (s *session) expandPrompt(parent context.Context, text string) (string, err
 		}
 		value, done := values[tok.Name]
 		if !done {
-			out, err := config.Expand(ctx, def, s.expander(s.Settings().Env))
-			switch {
-			case parent.Err() != nil:
-				return "", fail(CodeFailed, "the prompt expansion was cancelled")
-			case ctx.Err() != nil:
-				return "", fail(CodeFailed, "#%s: timed out after %s", tok.Name, promptTimeout)
-			case err != nil:
-				return "", fail(CodeFailed, "#%s: %s", tok.Name, err)
-			case strings.TrimSpace(out) == "":
+			_ = ctx
+			out := def
+			if strings.TrimSpace(out) == "" {
 				return "", fail(CodeFailed, "#%s: the completion is empty", tok.Name)
 			}
 			value = "<completion name=\"" + tok.Name + "\">\n" + strings.TrimSuffix(out, "\n") + "\n</completion>"

@@ -32,7 +32,7 @@ func (s *session) runBash(ctx context.Context, command string) string {
 		}
 		command, _ = res.input["command"].(string)
 	}
-	timeout := time.Duration(s.Settings().BashTimeout) * time.Second
+	timeout := time.Duration(s.Settings().Timeout) * time.Second
 	end := s.beginActivity(bashLabel(config.Redact(s.Settings(), command)))
 	started := time.Now()
 	out, code, timedOut, capture := s.execBash(ctx, command, timeout)
@@ -60,7 +60,7 @@ func (s *session) execBash(ctx context.Context, command string, timeout time.Dur
 	}
 	started := time.Now()
 	cmd := shell.Command(context.Background(), s.bashCwd(), s.shellEnv(), command)
-	capture = &bashCapture{buffer: shell.NewOutputBuffer(bashOutputLimit), limit: s.Settings().BashOutput, open: s.openOutputFile}
+	capture = &bashCapture{buffer: shell.NewOutputBuffer(bashOutputLimit), limit: s.Settings().Output, open: s.openOutputFile}
 	buffer := capture.buffer
 	w := &lockedWriter{w: capture}
 	cmd.Stdin = strings.NewReader("")

@@ -156,11 +156,11 @@ func (a *Runtime) changeSession(id string) error {
 // (hot reload); without it the session reloads at once. fn must not block.
 func (a *Runtime) OnConfigChanged(fn func()) { a.reloads.set(fn) }
 
-// startWatch follows the config file of the session for hot reload.
+// startWatch follows the config files of the session for hot reload.
 func (s *session) startWatch() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.stopWatch = cancel
-	go config.Watch(ctx, s.path, func() {
+	go config.Watch(ctx, s.watchFiles, func() {
 		if s.ended.Load() {
 			return
 		}

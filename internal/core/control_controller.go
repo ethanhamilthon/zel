@@ -100,7 +100,7 @@ func (c *Controller) Appearance() (config.Colors, bool) {
 	s := c.a.session()
 	s.cfg.mu.Lock()
 	defer s.cfg.mu.Unlock()
-	return s.cfg.s.Colors, s.cfg.s.ShowBash
+	return s.cfg.s.Colors, s.cfg.s.ShowCode
 }
 
 func (c *Controller) Settings() (s Settings) {
