@@ -1,0 +1,28 @@
+PASS no provider fails without a model request
+PASS creates Zel home on first use
+PASS first use creates only bundled configuration files
+PASS installs the defaults module
+PASS ignores .env
+PASS normal startup preserves user edits
+PASS reset replaces only defaults/
+PASS config lists default, explicit and relative load files in order
+PASS config reports overridden definitions
+PASS layered config can send a headless turn
+PASS prompt honors layer precedence and connect.json (skip defaults=False)
+PASS layered config can send a headless turn
+PASS prompt honors layer precedence and connect.json (skip defaults=True)
+PASS a missing explicit config is an error
+PASS headless runtime turn succeeds
+PASS one Lua tool with static documentation and substituted timeout
+PASS configured functions are sorted in system prompt
+PASS reasoning summary requested
+PASS no injected print, task, sh or zel module
+PASS Lua globals persist and stdio does not leak
+PASS copied functions share a closure upvalue
+PASS subprocess timeout resets Lua globals
+PASS output cap leaves a full-result artifact
+PASS default init works headless
+PASS defaults share cwd, batch edits are atomic, grep and sh work, headless has no choice
+PASS zel exec reports timeout, partial output and elapsed time
+PASS socket command without a session fails clearly
+27 passed, 0 failed
