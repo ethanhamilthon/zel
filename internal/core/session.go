@@ -72,7 +72,9 @@ func (s *session) release() {
 		stored := s.stored
 		s.histMu.RUnlock()
 		if !stored {
+			s.logMu.Lock() // no late LogEvent writes while the folder goes
 			_ = os.RemoveAll(s.sessionDir())
+			s.logMu.Unlock()
 		}
 	}
 }

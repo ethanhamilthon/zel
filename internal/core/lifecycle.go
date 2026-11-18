@@ -61,7 +61,9 @@ func (s *session) LogEvent(kind, text string) {
 	path := s.eventsLog()
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
-	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
+	// A hook that ends after the shutdown must not bring back the folder of a
+	// session that release removed: only an existing folder gets the line.
+	if !s.ended.Load() && os.MkdirAll(filepath.Dir(path), 0700) != nil {
 		return
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)

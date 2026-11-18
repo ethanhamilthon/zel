@@ -769,6 +769,23 @@ return {hooks = {
 	}
 }
 
+func TestLogEventAfterShutdownKeepsRemovedSessionGone(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	s := a.session()
+	dir := s.sessionDir()
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("a started session has its folder: %v", err)
+	}
+	a.Close()
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("an unsaved session keeps its folder after the shutdown")
+	}
+	s.LogEvent("notice", "late hook run")
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("a late LogEvent brought back the folder of the closed session")
+	}
+}
+
 func TestAsyncHookDoesNotBlock(t *testing.T) {
 	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`local zel = require("defaults")
 return {hooks = {

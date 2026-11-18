@@ -7,6 +7,8 @@
 - The `zel status` text stays until the next `zel status` arrives (also in the
   next calls and turns) or a new/resumed session starts. A session without any
   status shows no status text.
+- Fixed a race on shutdown: a hook that ended after the session closed could
+  bring back the folder of an unsaved session (flaky `make test` on macOS).
 - `settings.show_code` is removed. Configs that still set it load as before;
   the value is ignored. It no longer appears in the `Config` screen.
 

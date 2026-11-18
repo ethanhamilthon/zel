@@ -1,16 +1,16 @@
 go vet ./...
 go test -race ./...
 ?   	zel	[no test files]
-ok  	zel/docs	1.977s
-ok  	zel/internal/cli	4.832s
-ok  	zel/internal/config	1.604s
-ok  	zel/internal/core	18.998s
-ok  	zel/internal/defaults	5.468s
+ok  	zel/docs	(cached)
+ok  	zel/internal/cli	5.252s
+ok  	zel/internal/config	(cached)
+ok  	zel/internal/core	19.519s
+ok  	zel/internal/defaults	(cached)
 ?   	zel/internal/entities	[no test files]
 ok  	zel/internal/ipc	(cached)
-ok  	zel/internal/luart	2.549s
+ok  	zel/internal/luart	(cached)
 ok  	zel/internal/provider	(cached)
 ok  	zel/internal/shell	(cached)
 ok  	zel/internal/store	(cached)
-ok  	zel/internal/tui	2.276s
+ok  	zel/internal/tui	2.302s
 EXIT=0
