@@ -1,6 +1,6 @@
 // Package store keeps sessions as files: one folder per session under
 // ~/.zel/sessions/<project key>/<id>/ with an append-only session.jsonl, a
-// meta.json cache for the session list, tasks.jsonl and the task logs.
+// meta.json cache for the session list.
 package store
 
 import (

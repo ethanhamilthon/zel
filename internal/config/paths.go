@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"zel/internal/defaults"
 )
 
 // ResolvePath expands a leading home marker using the current user's actual home.
@@ -78,65 +80,36 @@ func StateHome(cwd string) (string, error) {
 	return filepath.Join(home, ".zel"), nil
 }
 
-// DefaultPaths returns the config file paths for a session. When configFlag is
-// set, it replaces init.lua and local zel.lua is disabled.
-func DefaultPaths(home, cwd string, configFlag string) Paths {
-	connect := filepath.Join(home, "connect.json")
-	if configFlag != "" {
-		p, err := ResolvePath(configFlag)
+// DefaultPaths returns the config files of a session: the default init.lua
+// and ./zel.lua (unless noDefaults), then the configs of --config, made
+// absolute against cwd.
+func DefaultPaths(home, cwd string, configs []string, noDefaults bool) Paths {
+	p := Paths{Connect: filepath.Join(home, "connect.json")}
+	if !noDefaults {
+		p.Files = append(p.Files, filepath.Join(home, "init.lua"))
+		if cwd != "" {
+			p.Files = append(p.Files, filepath.Join(cwd, "zel.lua"))
+		}
+	}
+	for _, c := range configs {
+		if c == "" {
+			continue
+		}
+		path, err := ResolvePath(c)
 		if err != nil {
-			p = configFlag
+			path = c
 		}
-		if !filepath.IsAbs(p) && cwd != "" {
-			p = filepath.Join(cwd, p)
+		if !filepath.IsAbs(path) && cwd != "" {
+			path = filepath.Join(cwd, path)
 		}
-		if abs, err := filepath.Abs(p); err == nil {
-			p = abs
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
 		}
-		return Paths{Init: p, Local: "", Connect: connect}
+		p.Files = append(p.Files, path)
+		p.Required = append(p.Required, path)
 	}
-	local := ""
-	if cwd != "" {
-		local = filepath.Join(cwd, "zel.lua")
-	}
-	return Paths{
-		Init:    filepath.Join(home, "init.lua"),
-		Local:   local,
-		Connect: connect,
-	}
+	return p
 }
-
-const defaultInitLua = `-- Zel configuration. Edits apply by themselves. Reference: zel docs config
--- Project-local overrides live in ./zel.lua.
--- Providers and active model selection live in connect.json.
---
--- local zel = require("zel")
---
--- return {
---   settings = {
---     compaction = 400000,
---     timeout = 30,
---     output = 8000,
---     show_code = true,
---     show_prompt = false,
---     trace_hooks = true,
---     editor = "nvim",
---     -- colors = { accent = "#c3e88d", trace = { lua = "#a0a0a0" } },
---     -- keys = { menu = "ctrl+k" },
---     -- env = { EDITOR = "true" },
---   },
---   systems = {
---     -- style = "Reply short.",
---   },
---   prompts = {
---     -- review = "Review the diff of the current branch.",
---   },
---   hooks = {
---     -- { events = {"idle"}, async = true, fn = function() end },
---   },
--- }
-return {}
-`
 
 const defaultConnectJSON = `{
   "provider": "",
@@ -146,14 +119,36 @@ const defaultConnectJSON = `{
 }
 `
 
-// EnsureHome creates the Zel home with default init.lua, connect.json and
-// .gitignore. Existing files stay untouched.
+// DefaultsDir is the folder of the Lua defaults module in the Zel home.
+func DefaultsDir(home string) string { return filepath.Join(home, "defaults") }
+
+// WriteDefaults writes the files of internal/defaults into <home>/defaults.
+func WriteDefaults(home string) error {
+	for rel, text := range defaults.Files() {
+		path := filepath.Join(DefaultsDir(home), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureHome creates the Zel home with the default init.lua, defaults/,
+// connect.json and .gitignore. Existing files and folders stay untouched.
 func EnsureHome(home string) error {
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return err
 	}
+	if _, err := os.Stat(DefaultsDir(home)); errors.Is(err, os.ErrNotExist) {
+		if err := WriteDefaults(home); err != nil {
+			return err
+		}
+	}
 	files := map[string]string{
-		"init.lua":     defaultInitLua,
+		"init.lua":     defaults.InitLua(),
 		"connect.json": defaultConnectJSON,
 		".gitignore":   ".env\n",
 	}

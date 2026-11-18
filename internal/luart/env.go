@@ -1,53 +1,19 @@
-// Package luart owns Zel's agent, task and configuration Lua states.
+// Package luart owns Zel's config VM, the agent (session) VM and the VMs of
+// async hooks and commands. The VMs have the Lua standard library only; every
+// other function comes from the config.
 package luart
 
-import (
-	"context"
-	"io"
-	"time"
-)
-
 type SessionInfo struct {
-	ID, Name, Cwd, Root, Mode       string
+	ID, Name, Cwd, Root, Mode       string // Cwd is the session start folder
 	Modes                           []string
 	Depth                           int
 	Model, Effort, Provider, TmpDir string
 }
 
-type ModelInfo struct {
-	Provider, Model string
-	ContextWindow   int64
-}
-
 // Env is the session-owned host. The runtime may call it concurrently from
-// agents, tasks and hooks.
+// the agent and from hooks.
 type Env interface {
 	Info() SessionInfo
-	ShellEnv() []string
-	Cd(dir string) error
-	Attach(path string) error
-	Choice(question string, options []string) (string, error)
-	Rename(name string) error
-	Models(ctx context.Context) ([]ModelInfo, map[string]string)
-	Tasks() Tasks
+	ShellEnv() []string // KEY=VALUE for the children of io.popen and os.execute
 	Log(kind, msg string)
-}
-
-type TaskFunc func(ctx context.Context, out io.Writer) (result string, err error)
-
-type TaskInfo struct {
-	ID, Name, State string
-	Ms              int64
-	Result, Error   string
-}
-
-// Tasks owns scheduling, lifetimes, logs and notifications. Spawn calls run
-// once on success and applies timeout, if nonzero, to the context it passes.
-type Tasks interface {
-	Spawn(name string, timeout time.Duration, run TaskFunc) (id string, err error)
-	List() []TaskInfo
-	Get(id string) (TaskInfo, bool)
-	Wait(ctx context.Context, ids []string, timeout time.Duration) []TaskInfo
-	Tail(id string, n int) (string, error)
-	Stop(id string) error
 }

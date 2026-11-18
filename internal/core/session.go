@@ -2,15 +2,14 @@ package core
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
-	"zel/internal/config"
 	"zel/internal/ipc"
 )
 
@@ -25,7 +24,7 @@ func (s *session) socketPath() string {
 	return ipc.Path(filepath.Join(s.store.Root, "run"), s.id)
 }
 
-// acquire takes the session lock, opens the session socket and starts the tasks.
+// acquire takes the session lock, opens the session socket.
 func (s *session) acquire() error {
 	if err := os.MkdirAll(s.sessionDir(), 0700); err != nil {
 		return err
@@ -44,26 +43,19 @@ func (s *session) acquire() error {
 		return err
 	}
 	s.owner = file
-	s.tasks = s.newTasks()
+	s.life = newLifecycle()
 	if s.sock, err = ipc.Listen(s.socketPath(), s.token, s.serveSocket); err != nil {
 		s.release()
 		return fmt.Errorf("session socket: %w", err)
 	}
-	if s.opts.Mode != "headless" {
-		s.startWatch()
-	}
 	return nil
 }
 
-// release stops the jobs, closes the socket, drops the lock and removes the
+// release closes the socket, drops the lock and removes the
 // folder of a session that was never saved.
 func (s *session) release() {
-	if s.stopWatch != nil {
-		s.stopWatch()
-		s.stopWatch = nil
-	}
-	if s.tasks != nil {
-		s.tasks.close(nil)
+	if s.life != nil {
+		s.life.close(nil)
 	}
 	s.closeLua()
 	if s.sock != nil {
@@ -151,26 +143,6 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
-// OnConfigChanged registers fn to run when the config file of the session changed
-// (hot reload); without it the session reloads at once. fn must not block.
-func (a *Runtime) OnConfigChanged(fn func()) { a.reloads.set(fn) }
-
-// startWatch follows the config files of the session for hot reload.
-func (s *session) startWatch() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.stopWatch = cancel
-	go config.Watch(ctx, s.watchFiles, func() {
-		if s.ended.Load() {
-			return
-		}
-		if !s.reloads.call() {
-			if err := s.Reload(); err != nil {
-				s.notify(err.Error())
-			}
-		}
-	})
-}
-
 // baseEnv is the environment of what sh() runs in the session: agent calls,
 // tasks, hooks and the config. API keys are never exported.
 func (s *session) baseEnv() map[string]string {
@@ -180,8 +152,14 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_DEPTH":      strconv.Itoa(s.depth),
 		"ZEL_SOCKET":     s.socketPath(),
 		"ZEL_TOKEN":      s.token,
-		// Only a --config file is passed on: a child reads init.lua and its own zel.lua.
-		"ZEL_CONFIG": s.configFlag(),
+	}
+	// Only the --config files are passed on: a child reads the default files itself.
+	configs, noDefaults := s.explicitConfigs()
+	if len(configs) > 0 {
+		env["ZEL_CONFIGS"] = strings.Join(configs, "\n")
+	}
+	if noDefaults {
+		env["ZEL_NO_DEFAULT_CONFIGS"] = "1"
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session

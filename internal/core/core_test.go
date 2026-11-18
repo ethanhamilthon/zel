@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -164,10 +165,15 @@ func BenchmarkImageContext(b *testing.B) {
 // provider is added to connect.json.
 func withLocal(text string) func(home, dir string) {
 	return func(home, dir string) {
-		if err := os.WriteFile(config.DefaultPaths(home, dir, "").Init, []byte(text), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(home, "init.lua"), []byte(text), 0600); err != nil {
 			panic(err)
 		}
 	}
+}
+
+// withSh is withLocal with sh() of the (stub) defaults and body as more keys of the config table.
+func withSh(body string) func(home, dir string) {
+	return withLocal("local d = require('defaults')\nreturn {functions = {sh = d.sh}, " + body + "}\n")
 }
 
 // sock sends one request to the session socket, as the zel subcommands do.
@@ -222,10 +228,10 @@ func instructionItems(a *Runtime) int {
 }
 
 func TestLuaOutputErrorAndEnvironment(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("return {settings = {env = {GREETING = 'hello'}}}\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withSh("settings = {env = {GREETING = 'hello'}}"))
 	s, ctx := a.session(), context.Background()
 	for code, want := range map[string]string{
-		"print('a'); return 'b'":     "a\nb",
+		"return 'a', 'b'":            "a\nb",
 		"return 1, {x = 2}":          "1\n{\"x\":2}",
 		"error('boom', 0)":           "error: boom",
 		"return sh('exit 3').code":   "3",
@@ -290,7 +296,7 @@ func TestLuaOutputCut(t *testing.T) {
 }
 
 func TestLuaOutputOff(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("return {settings = {output = 0}}\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withSh("settings = {output = 0}"))
 	if got := runSh(a.session(), "head -c 13000 /dev/zero | tr '\\0' a"); len(got) < 13000 {
 		t.Fatalf("output = 0 cut the output: %d bytes", len(got))
 	}
@@ -302,14 +308,14 @@ func TestLuaOutputOff(t *testing.T) {
 }
 
 func TestLuaTimeoutAndCancel(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("return {settings = {timeout = 1}}\n"))
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withSh("settings = {timeout = 1}"))
 	s := a.session()
 	if !strings.Contains(s.toolDescription(), "1 s") {
 		t.Fatal("the tool description does not say the timeout")
 	}
 	start := time.Now()
-	got := s.runLua(context.Background(), "print('started'); while true do end")
-	if !strings.HasPrefix(got, "started\n") || !strings.Contains(got, "timeout after 1s") || time.Since(start) > 5*time.Second {
+	got := s.runLua(context.Background(), "x = 1; while true do end")
+	if !strings.Contains(got, "timeout after 1s") || time.Since(start) > 5*time.Second {
 		t.Fatalf("timeout: %q after %s", got, time.Since(start))
 	}
 	if got := s.runLua(context.Background(), "return 'fresh'"); !strings.Contains(got, "[lua: fresh VM]") {
@@ -424,18 +430,17 @@ func TestNotificationHooksGetPlainTextAndAreWrapped(t *testing.T) {
 }
 
 func TestConfigFollowsTheMode(t *testing.T) {
-	conf := withLocal(`local zel = require("zel")
-local plan = false
-for _, m in ipairs(zel.session.modes) do if m == "plan" then plan = true end end
+	conf := withLocal(`local mode = os.getenv("ZEL_MODE")
+local plan = os.getenv("ZEL_CUSTOM_MODE") == "plan"
 return {
   systems = {
-    all = "SYSTEM-" .. zel.session.mode,
+    all = "SYSTEM-" .. mode,
     plan = plan and "PLAN-ONLY" or "",
   },
   prompts = { hi = "say hi", planned = plan and "PLANNED" or "plain" },
   functions = { ping = { description = "PING-DESC", fn = function() return "pong" end } },
   hooks = {
-    { events = {"lua_after"}, fn = function() return zel.session.mode end },
+    { events = {"lua_after"}, fn = function() return mode end },
   },
 }
 `)
@@ -446,12 +451,12 @@ return {
 	if got := main.session().runLua(ctx, "return 'x'"); got != "x\nmain" {
 		t.Errorf("main hook: %q", got)
 	}
-	if got := headless.session().runLua(ctx, "return ping{}"); got != "pong\nheadless" {
+	if got := headless.session().runLua(ctx, "return ping()"); got != "pong\nheadless" {
 		t.Errorf("headless call: %q", got)
 	}
-	prompt, desc := main.session().assemblePrompt(), main.session().toolDescription()
-	if !strings.Contains(prompt, "SYSTEM-main") || strings.Contains(prompt, "PLAN-ONLY") || !strings.Contains(desc, "PING-DESC") {
-		t.Errorf("main prompt:\n%s\ntool:\n%s", prompt, desc)
+	prompt := main.session().assemblePrompt()
+	if !strings.Contains(prompt, "SYSTEM-main") || strings.Contains(prompt, "PLAN-ONLY") || !strings.Contains(prompt, "## Functions\n`ping` - PING-DESC") {
+		t.Errorf("main prompt:\n%s", prompt)
 	}
 	if prompt := headless.session().assemblePrompt(); !strings.Contains(prompt, "SYSTEM-headless") {
 		t.Errorf("headless prompt:\n%s", prompt)
@@ -471,7 +476,7 @@ return {
 func TestControllerReadsStayResponsiveDuringSlowChange(t *testing.T) {
 	dir := t.TempDir()
 	started, release := filepath.Join(dir, "started"), filepath.Join(dir, "release")
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf(`local zel = require("zel")
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(fmt.Sprintf(`local zel = require("defaults")
 return {hooks = {
   { events = {"model_changed"}, fn = function()
       zel.sh("touch %s; while [ ! -f %s ]; do sleep 0.01; done")
@@ -517,7 +522,7 @@ return {hooks = {
 }
 
 func TestAsyncHooksCancelledBeforeSessionCleanup(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(`local zel = require("zel")
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(`local zel = require("defaults")
 return {hooks = {
   { events = {"turn_start"}, async = true, fn = function()
       zel.sh("touch hook-started; sleep 30; touch survived")
@@ -550,7 +555,7 @@ return {hooks = {
 }
 
 func TestIdleHookCancelledAndJoinedOnShutdown(t *testing.T) {
-	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(`local zel = require("zel")
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(`local zel = require("defaults")
 return {hooks = {
   { events = {"idle"}, fn = function() zel.sh("touch idle-started; sleep 30") end },
 }}
@@ -573,7 +578,7 @@ return {hooks = {
 }
 
 func TestAsyncHookDoesNotBlock(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`local zel = require("zel")
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal(`local zel = require("defaults")
 return {hooks = {
   { events = {"lua_after"}, async = true, fn = function()
       zel.sh("sleep 1; touch async-done")
@@ -599,58 +604,10 @@ return {hooks = {
 	}
 }
 
-func TestTaskFunctions(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	s, ctx := a.session(), context.Background()
-	if got := s.runLua(ctx, `return task.spawn("greet", function() print("hello"); print("world"); return "done" end)`); got != "t1" {
-		t.Fatalf("spawn: %q", got)
-	}
-	got := s.runLua(ctx, `local r = task.wait("t1", 10); return r, task.get("t1").state, task.tail("t1", 1)`)
-	if got != "done\ndone\nworld\n" && got != "done\ndone\nworld" {
-		t.Fatalf("wait: %q", got)
-	}
-	if got := s.runLua(ctx, `return task.spawn("slow", function() sh("sleep 30") end)`); got != "t2" {
-		t.Fatalf("spawn: %q", got)
-	}
-	if got := s.runLua(ctx, `return task.wait("t2", 0.1)`); got != "" && got != "nil" {
-		t.Fatalf("wait timeout: %q", got)
-	}
-	if got := s.runLua(ctx, `return #task.list()`); got != "2" {
-		t.Fatalf("list: %q", got)
-	}
-	if active := a.ActiveTasks(); len(active) != 1 || active[0].ID != "t2" {
-		t.Fatalf("active: %+v", active)
-	}
-	s.runLua(ctx, `task.stop("t2")`)
-	if got := s.runLua(ctx, `task.wait("t2", 10); return task.get("t2").state`); got != "stopped" {
-		t.Fatalf("stopped: %q", got)
-	}
-	// Waited-for results are not notified; the others are.
-	if got := a.Queue().Take(); len(got) != 0 {
-		t.Fatalf("waited tasks notified: %+v", got)
-	}
-	s.runLua(ctx, `task.spawn("quick", function() end)`)
-	if got := awaitInput(t, a); len(got) != 1 || !strings.HasPrefix(got[0].Text, "<notification>t3 finished") {
-		t.Fatalf("notification: %+v", got)
-	}
-	if got := s.runLua(ctx, `return task.get("t9")`); got != "" && got != "nil" {
-		t.Fatalf("unknown task: %q", got)
-	}
-	if got := s.runLua(ctx, `task.wait()`); !strings.Contains(got, "EINVAL") {
-		t.Fatalf("wait without ids: %q", got)
-	}
-}
-
 func TestChoiceDoesNotBlockAndAnswersByNotification(t *testing.T) {
 	a := newTestAgent(t, &fakeProvider{}, Options{})
-	s, ctx := a.session(), context.Background()
-	ask := func(title string, options ...string) string {
-		list := "{"
-		for _, o := range options {
-			list += strconv.Quote(o) + ","
-		}
-		return s.runLua(ctx, "return choice("+strconv.Quote(title)+", "+list+"})")
-	}
+	s := a.session()
+	ask := func(title string, options ...string) string { return askChoice(s, title, options...) }
 	if got := ask("Color", "Blue", "Red"); !strings.Contains(got, "EDENIED") {
 		t.Fatalf("asked without a UI: %q", got)
 	}
@@ -661,9 +618,6 @@ func TestChoiceDoesNotBlockAndAnswersByNotification(t *testing.T) {
 	}
 	if got := ask("Size", "S"); got != "c2" {
 		t.Fatalf("second ask: %q", got)
-	}
-	if got := ask("Nothing"); !strings.Contains(got, "EINVAL") {
-		t.Fatalf("no options: %q", got)
 	}
 	if c := a.PendingChoice(); c == nil || c.ID != 1 || c.Title != "Color" || !slices.Equal(c.Options, []string{"Blue", "Red"}) || c.Waiting != 2 {
 		t.Fatalf("pending: %+v", c)
@@ -693,37 +647,6 @@ func TestChoiceDoesNotBlockAndAnswersByNotification(t *testing.T) {
 		t.Fatalf("pending %+v after %d changes", c, changes.Load())
 	}
 
-	headless := newTestAgent(t, &fakeProvider{}, Options{Mode: "headless"})
-	headless.OnChoiceChanged(func() {})
-	if got := headless.session().runLua(ctx, `return choice("Color", {"Blue"})`); !strings.Contains(got, "EDENIED") {
-		t.Fatalf("headless choice: %q", got)
-	}
-}
-
-func TestLuaSessionRenameAndImages(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	s, ctx := a.session(), context.Background()
-	if got := s.runLua(ctx, `return session.id, session.mode, session.model, session.provider, session.cwd`); got != strings.Join([]string{s.id, "main", "m", "p", s.dir}, "\n") {
-		t.Fatalf("session: %q", got)
-	}
-	s.runLua(ctx, `session.rename(" new   name ")`)
-	if a.CustomTitle() != "new name" {
-		t.Fatalf("rename: %q", a.CustomTitle())
-	}
-	writeFile(t, filepath.Join(s.dir, "img.png"), string(tinyPNG()))
-	s.runLua(ctx, `read("img.png")`)
-	if got := a.Queue().Take(); len(got) != 1 || got[0].Text != "<notification>view: img.png attached</notification>" || len(got[0].Images) != 1 {
-		t.Fatalf("view input: %+v", got)
-	}
-	if got := s.runLua(ctx, `read("missing.png")`); !strings.Contains(got, "ENOENT") {
-		t.Fatalf("missing image: %q", got)
-	}
-	// cd() moves the next calls into a folder.
-	writeFile(t, filepath.Join(s.dir, "sub", "deep.png"), string(tinyPNG()))
-	s.runLua(ctx, `cd("sub"); read("deep.png")`)
-	if got := a.Queue().Take(); len(got) != 1 || len(got[0].Images) != 1 {
-		t.Fatalf("image from a subfolder: %+v", got)
-	}
 }
 
 func TestReloadRebuildsThePromptOnlyWhenInstructionsChange(t *testing.T) {
@@ -766,7 +689,7 @@ func TestOnlyTheModelIsWrittenToTheConfig(t *testing.T) {
 	if err := a.SelectSession(context.Background(), "p", "picked", "high"); err != nil {
 		t.Fatal(err)
 	}
-	conn, err := config.LoadConnect(config.DefaultPaths(a.Home(), "", "").Connect)
+	conn, err := config.LoadConnect(config.DefaultPaths(a.Home(), "", nil, false).Connect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -910,12 +833,11 @@ func TestSessionRoundTripThroughResume(t *testing.T) {
 func TestLifecycleHooks(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") },
 		status: func(n int) int { return map[bool]int{true: 400}[n == 2] }}
-	conf := `local zel = require("zel")
-local events = {"session_created", "session_resumed", "session_closed", "config_changed", "turn_start", "turn_end", "idle", "model_changed", "error"}
+	conf := `local events = {"session_created", "session_resumed", "session_closed", "config_changed", "turn_start", "turn_end", "idle", "model_changed", "error"}
 return {hooks = {
   { events = events, fn = function(event, d)
       local detail = d.text or d.answer or d.reason or d.model or d.kind or d.file or ""
-      local f = io.open(zel.session.root .. "/hooks.log", "a")
+      local f = io.open("hooks.log", "a")
       f:write(event .. " " .. tostring(detail) .. "\n")
       f:close()
     end },
@@ -946,9 +868,8 @@ return {hooks = {
 	if err := a.Resume(first); err != nil {
 		t.Fatal(err)
 	}
-	// Idle fires once nothing runs any more, here after a task that was waited for.
-	s := a.session()
-	s.runLua(context.Background(), `task.wait(task.spawn("t", function() end), 10)`)
+	// Idle fires once nothing runs any more.
+	a.session().checkIdle()
 	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(read(), "idle \n"); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no idle hook:\n%s", read())
@@ -984,8 +905,8 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 	isolate(t, home)
 	extra := filepath.Join(t.TempDir(), "other.lua")
 	writeFile(t, extra, "return {}\n")
-	writeFile(t, config.DefaultPaths(home, "", "").Connect, fmt.Sprintf(`{"provider":"p","model":"m","providers":{"p":{"base_url":%q}}}`, server.URL))
-	parent, err := New(t.TempDir(), Options{Config: extra})
+	writeFile(t, config.DefaultPaths(home, "", nil, false).Connect, fmt.Sprintf(`{"provider":"p","model":"m","providers":{"p":{"base_url":%q}}}`, server.URL))
+	parent, err := New(t.TempDir(), Options{Configs: []string{extra}, NoDefaultConfigs: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -996,7 +917,7 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 	if parent.ConfigFile() != extra {
 		t.Fatalf("parent config: %v", parent.ConfigFile())
 	}
-	if _, err := os.Stat(config.DefaultPaths(home, "", "").Init); err == nil {
+	if _, err := os.Stat(filepath.Join(home, "init.lua")); err == nil {
 		t.Fatal("--config must not create the default config")
 	}
 	for k, v := range parent.session().baseEnv() {
@@ -1017,36 +938,6 @@ func TestChildUsesTheConfigAndModelOfItsParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	child.Close()
-}
-
-func TestConfigWatchAndBrokenFileAtStart(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("return {settings = {timeout = 'x'}}\n"))
-	if st := a.Settings(); st.Timeout != config.DefaultSettings().Timeout {
-		t.Fatalf("a broken config was applied: %+v", st)
-	}
-	if data, _ := os.ReadFile(a.session().eventsLog()); !strings.Contains(string(data), "config skipped") || !strings.Contains(string(data), "timeout") {
-		t.Fatalf("no notice for the broken file: %s", data)
-	}
-	changed := make(chan struct{}, 1)
-	a.OnConfigChanged(func() {
-		select {
-		case changed <- struct{}{}:
-		default:
-		}
-	})
-	// The watcher takes its first look in the background, so a change made at
-	// once may be part of it: change the file again until it is noticed.
-	for i := 0; ; i++ {
-		writeFile(t, a.ConfigFile(), fmt.Sprintf("return {settings = {env = {WATCH = 'value%d'}}}\n", i))
-		select {
-		case <-changed:
-			return
-		case <-time.After(1500 * time.Millisecond):
-		}
-		if i == 3 {
-			t.Fatal("the config change was not noticed")
-		}
-	}
 }
 
 func TestPromptTokens(t *testing.T) {
@@ -1074,77 +965,6 @@ func TestPromptTokens(t *testing.T) {
 	}
 }
 
-func TestLuaCdSetsTheFolderAndSurvivesResume(t *testing.T) {
-	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
-	a := newTestAgent(t, fp, Options{})
-	s, ctx := a.session(), context.Background()
-	start := s.dir
-	sub := filepath.Join(start, "sub")
-	if err := os.MkdirAll(sub, 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(start, "file.txt"), "x")
-	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
-	pwd := func() string { return strings.TrimSpace(runSh(s, "pwd -P")) }
-
-	s.runLua(ctx, `cd("sub")`)
-	if pwd() != real(sub) {
-		t.Fatalf("pwd = %s", pwd())
-	}
-	// Tasks start in the folder of the next calls too.
-	got := s.runLua(ctx, `return task.wait(task.spawn("pwd", function() return sh("pwd -P").out end), 10)`)
-	if !strings.Contains(got, real(sub)) {
-		t.Fatalf("task pwd: %s", got)
-	}
-	// Failures change nothing.
-	if got := s.runLua(ctx, `cd("nope")`); !strings.Contains(got, "ENOENT") {
-		t.Fatalf("missing: %q", got)
-	}
-	if got := s.runLua(ctx, `cd("../file.txt")`); !strings.Contains(got, "EINVAL") {
-		t.Fatalf("file: %q", got)
-	}
-	if pwd() != real(sub) || s.dir != start {
-		t.Fatalf("changed after errors: %s", pwd())
-	}
-	// Saved and restored by a resume.
-	if _, err := turn(t, a, "hi"); err != nil {
-		t.Fatal(err)
-	}
-	id := a.SessionID()
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	s = a.session()
-	if pwd() != real(start) {
-		t.Fatalf("new session pwd = %s", pwd())
-	}
-	if err := a.Resume(id); err != nil {
-		t.Fatal(err)
-	}
-	s = a.session()
-	if pwd() != real(sub) {
-		t.Fatalf("resumed pwd = %s", pwd())
-	}
-	// No argument goes back to the start folder.
-	s.runLua(ctx, `cd()`)
-	if pwd() != real(start) {
-		t.Fatalf("back: %s", pwd())
-	}
-	// A folder that is gone falls back to the start folder.
-	s.runLua(ctx, `cd("sub")`)
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	os.RemoveAll(sub)
-	if err := a.Resume(id); err != nil {
-		t.Fatal(err)
-	}
-	s = a.session()
-	if pwd() != real(start) {
-		t.Fatalf("gone folder pwd = %s", pwd())
-	}
-}
-
 // Answered questions stay in the chat at their place and come back on resume.
 func TestChoiceAnswersStayInTheChat(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
@@ -1152,7 +972,7 @@ func TestChoiceAnswersStayInTheChat(t *testing.T) {
 	if _, err := turn(t, a, "first"); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.session().runLua(context.Background(), `return choice("Color: which?", {"Blue"})`); got != "c1" {
+	if got := askChoice(a.session(), "Color: which?", "Blue"); got != "c1" {
 		t.Fatalf("ask: %q", got)
 	}
 	if rec, ok := a.AnswerChoice(1, 0); !ok || rec.Kind != "choice" || rec.Text != "Color: which?\x1fBlue" {
@@ -1193,14 +1013,99 @@ func TestChoiceAnswersStayInTheChat(t *testing.T) {
 	}
 }
 
-func TestDeepestChildCannotStartSubagents(t *testing.T) {
-	a := newTestAgentWith(t, &fakeProvider{}, Options{Mode: "headless"}, nil)
-	s := a.session()
-	if !strings.Contains(s.toolDescription(), "zel -p 'prompt'") {
-		t.Fatal("a child below the limit is not told about subagents")
+// askChoice asks a question as the choice op of the socket does: the id of the
+// question, or the error.
+func askChoice(s *session, title string, options ...string) string {
+	id, err := s.ask.ask(s, title, options)
+	if err != nil {
+		return "error: " + err.Error()
 	}
-	s.depth = MaxDepth
-	if strings.Contains(s.toolDescription(), "zel -p '") || strings.Contains(s.toolDescription(), "--resume") {
-		t.Fatalf("the deepest child is told about subagents:\n%s", s.toolDescription())
+	return fmt.Sprintf("c%d", id)
+}
+
+// TestBrokenConfigAtStart: a broken config leaves the defaults and a notice.
+func TestBrokenConfigAtStart(t *testing.T) {
+	a := newTestAgentWith(t, &fakeProvider{}, Options{}, withLocal("return {settings = {timeout = 'x'}}\n"))
+	if st := a.Settings(); st.Timeout != config.DefaultSettings().Timeout {
+		t.Fatalf("a broken config was applied: %+v", st)
+	}
+	if data, _ := os.ReadFile(a.session().eventsLog()); !strings.Contains(string(data), "config skipped") || !strings.Contains(string(data), "timeout") {
+		t.Fatalf("no notice for the broken file: %s", data)
+	}
+	if cfg := NewController(a, func(Event) {}).Config(); cfg == nil || len(cfg.Errors) != 1 {
+		t.Fatalf("snapshot: %+v", cfg)
+	}
+}
+
+func TestCommandsReloadAndPrompt(t *testing.T) {
+	conf := `return {
+  functions = {
+    zed = {description = "` + "`zed(x)`" + ` - last, with its own signature", fn = function() end},
+    abc = {description = "first line\nsecond", fn = function() end},
+  },
+  systems = {one = "SYSTEM-ONE"},
+  commands = {
+    {name = "Say", fn = function() return "said it\n" end},
+    {name = "Fail", fn = function() error("boom", 0) end},
+    {name = "Quiet", fn = function() end},
+  },
+}
+`
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(conf))
+	var mu sync.Mutex
+	var events []Event
+	ctl := NewController(a, func(e Event) { mu.Lock(); events = append(events, e); mu.Unlock() })
+	defer ctl.Close()
+	prompt := a.session().assemblePrompt()
+	want := "## Functions\n`abc` - first line\nsecond\n`zed(x)` - last, with its own signature\n\nSYSTEM-ONE"
+	if !strings.Contains(prompt, want) || !strings.HasPrefix(prompt, "# Zel") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+	cfg := ctl.Config()
+	if cfg == nil || len(cfg.Commands) != 3 || filepath.Base(cfg.Commands[0].Source) != "init.lua" || filepath.Base(cfg.Functions[0].Source) != "init.lua" {
+		t.Fatalf("snapshot: %+v", cfg)
+	}
+	text := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, e := range events {
+			out = append(out, e.Kind+":"+e.Text)
+		}
+		return out
+	}
+	for _, name := range []string{"Say", "Fail", "Quiet"} {
+		if err := ctl.RunCommand(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if codeOf(ctl.RunCommand("Nope")) != CodeNotFound {
+		t.Fatal("an unknown command ran")
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(text()) < 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("command results: %q", text())
+		}
+	}
+	got := text()
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"error:command Fail: boom", "notice:said it"}) {
+		t.Fatalf("command results: %q", got)
+	}
+	// A failed reload keeps the old config and shows the error in the snapshot.
+	writeFile(t, a.ConfigFile(), "return {nope = 1}\n")
+	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg := ctl.Config(); len(cfg.Commands) != 3 || len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], `unknown key "nope"`) {
+		t.Fatalf("snapshot after a failed reload: %+v", cfg)
+	}
+	// A good reload replaces it and clears the error.
+	writeFile(t, a.ConfigFile(), "return {commands = {{name = 'Only', fn = function() end}}}\n")
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := ctl.Config(); len(cfg.Commands) != 1 || len(cfg.Errors) != 0 {
+		t.Fatalf("snapshot after a reload: %+v", cfg)
 	}
 }

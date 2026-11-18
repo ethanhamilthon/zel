@@ -31,26 +31,33 @@ var Events = []string{
 }
 
 // System is one named system prompt entry from systems in Lua config.
-type System struct {
-	Name, Text string
-}
+// Source is the config file that defined it (absolute path).
+type System struct{ Name, Text, Source string }
 
-// Hook is one hook entry from hooks in Lua config.
+// Hook is one hook entry from hooks in Lua config. Source is
+// "<config file>:<line>" of its function.
 type Hook struct {
 	Events []string
 	Async  bool
-	Ref    int    // index in luart's hook table; opaque for config
-	Source string // "init.lua:12" for diagnostics
+	Ref    int // index in luart's hook table; opaque for config
+	Source string
 }
 
-// Function is one custom tool function from functions in Lua config.
-type Function struct {
-	Name, Description string
+// Function is one function of the agent VM from functions in Lua config.
+type Function struct{ Name, Description, Source string }
+
+// Command is one entry of commands in Lua config: a menu item, optionally with
+// a key. Ref is opaque for config (index in luart's table).
+type Command struct {
+	Name, Description, Key, Source string
+	Ref                            int
 }
 
 // Paths are the configuration file locations of a session.
 type Paths struct {
-	Init, Local, Connect string // Local "" = none
+	Files    []string // in load order: the defaults (if kept), then the --config files
+	Required []string // the --config files: a missing one is an error, a missing default is skipped
+	Connect  string
 }
 
 // Config is the snapshot of the config files of a session.
@@ -59,8 +66,10 @@ type Config struct {
 	Settings         Settings
 	Systems          []System
 	Prompts          map[string]string
+	PromptSources    map[string]string
 	Hooks            []Hook
 	Functions        []Function
-	Files            []string // every file read: watched for hot reload
+	Commands         []Command
+	Files            []string // every file read, loads included
 	Warnings, Errors []string
 }

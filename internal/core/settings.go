@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -57,48 +58,34 @@ func (s *session) notify(msg string) {
 	}
 }
 
-// configFile is the config file of this session: --config, else the file of
-// the parent session (ZEL_CONFIG), else ~/.config/zel/init.lua.
-func (s *session) configFile() string {
-	switch {
-	case s.opts.Config != "":
-		return s.opts.Config
-	case s.parent != nil && s.parent.config != "":
-		return s.parent.config
+// explicitConfigs are the --config files of the session: the ones its parent
+// passed on (ZEL_CONFIGS), then its own. noDefaults: the default files are off.
+func (s *session) explicitConfigs() (configs []string, noDefaults bool) {
+	if s.parent != nil {
+		configs, noDefaults = slices.Clone(s.parent.configs), s.parent.noDefaults
 	}
-	return config.DefaultPaths(s.home, s.dir, "").Init
-}
-
-// configFlag is the --config file of the session or of its parent, empty
-// when it uses the default init.lua and zel.lua.
-func (s *session) configFlag() string {
-	if s.opts.Config == "" && s.parent != nil {
-		return s.parent.config
-	}
-	return s.opts.Config
+	return append(configs, s.opts.Configs...), noDefaults || s.opts.NoDefaultConfigs
 }
 
 func (s *session) paths() config.Paths {
-	flag := s.configFlag()
-	p := config.DefaultPaths(s.home, s.dir, flag)
-	if flag == "" && os.Getenv("ZEL_NO_LOCAL") == "1" {
-		p.Local = ""
-	}
-	return p
+	configs, noDefaults := s.explicitConfigs()
+	return config.DefaultPaths(s.home, s.dir, configs, noDefaults)
 }
 
-func (s *session) watchFiles() []string {
-	if cfg := s.conf.get(); cfg != nil && len(cfg.Files) > 0 {
-		return cfg.Files
+// configFile is the main config file of this session: the first of its files
+// (init.lua unless the defaults are off).
+func (s *session) configFile() string {
+	if p := s.paths(); len(p.Files) > 0 {
+		return p.Files[0]
 	}
-	p := s.paths()
-	return []string{p.Init, p.Local, p.Connect}
+	return filepath.Join(s.home, "init.lua")
 }
 
-// ConfigFile is the config file of the session.
+// ConfigFile is the main config file of the session.
 func (a *Runtime) ConfigFile() string { return a.session().path }
 
-// ConfigErrors are the reasons the config file was skipped; the defaults are in use then.
+// ConfigErrors are the reasons the config was not loaded; the defaults or the
+// previous config are in use then.
 func (a *Runtime) ConfigErrors() []string {
 	if cfg := a.session().conf.get(); cfg != nil {
 		return cfg.Errors
@@ -122,9 +109,8 @@ func baseSettings(path string) (config.Settings, error) {
 	return base, nil
 }
 
-// loadSnapshot runs init.lua, zel.lua and their loads in a new config VM.
-// On an error lc is nil and cfg holds the defaults, the error and the files to
-// watch, so a fix is noticed.
+// loadSnapshot runs the config files and their loads in a new config VM.
+// On an error lc is nil and cfg holds the defaults and the error.
 func (s *session) loadSnapshot() (lc *luart.Config, cfg *config.Config) {
 	p := s.paths()
 	base, err := baseSettings(p.Connect)
@@ -134,15 +120,7 @@ func (s *session) loadSnapshot() (lc *luart.Config, cfg *config.Config) {
 	if err == nil {
 		return lc, lc.Data()
 	}
-	files := []string{p.Init, p.Connect}
-	if p.Local != "" {
-		files = append(files, p.Local)
-	}
-	if old := s.conf.get(); old != nil {
-		files = append(files, old.Files...)
-	}
-	slices.Sort(files)
-	return nil, &config.Config{Paths: p, Settings: base, Prompts: map[string]string{}, Files: slices.Compact(files), Errors: []string{err.Error()}}
+	return nil, &config.Config{Paths: p, Settings: base, Prompts: map[string]string{}, Files: existing(p.Files), Errors: []string{err.Error()}}
 }
 
 // loadConfig reads the config into a new snapshot and applies its settings.
@@ -183,16 +161,16 @@ func (s *session) applyConfig(cfg *config.Config) error {
 	return err
 }
 
-// Reload reads the config again for hot reload. If the file is broken, the old
-// snapshot stays and a notice says why; the system prompt is rebuilt when it changed.
+// Reload reads the config files again. If one is broken, the old snapshot
+// stays with the error in its Errors and a notice says why. The system prompt
+// is rebuilt when it changed.
 func (a *Runtime) Reload() error { return a.session().Reload() }
 
 func (s *session) Reload() error {
 	lc, cfg := s.loadSnapshot()
 	if lc == nil && s.conf.get() != nil {
-		// Watch the files of both, so the fix of the broken one is seen too.
 		old := *s.conf.get()
-		old.Files = cfg.Files
+		old.Errors = cfg.Errors
 		s.conf.set(&old)
 		msg := "config has errors; the previous config stays: " + strings.Join(cfg.Errors, "; ")
 		s.fireHooks("config_changed", map[string]any{"ok": false, "error": msg, "file": s.path})
@@ -208,23 +186,36 @@ func (s *session) Reload() error {
 		return err
 	}
 	s.setLuaConfig(lc)
-	s.histMu.RLock()
-	frozen, previous := s.promptFrozen, s.prompt
-	s.histMu.RUnlock()
-	if frozen && s.assemblePrompt() != previous {
-		s.histMu.Lock()
-		s.promptFrozen = false
-		s.histMu.Unlock()
-		if _, err := s.instructions(context.Background()); err != nil {
-			s.histMu.Lock()
-			s.prompt, s.promptFrozen = previous, true
-			s.histMu.Unlock()
-			return err
-		}
+	if err := s.refreshPrompt(); err != nil {
+		return err
 	}
 	s.fireHooks("config_changed", map[string]any{"ok": true, "error": "", "file": s.path})
 	return nil
 }
+
+// refreshPrompt stores a new system prompt in the history when the frozen one
+// differs from what the config gives now.
+func (s *session) refreshPrompt() error {
+	s.histMu.RLock()
+	frozen, previous := s.promptFrozen, s.prompt
+	s.histMu.RUnlock()
+	if !frozen || s.assemblePrompt() == previous {
+		return nil
+	}
+	s.histMu.Lock()
+	s.promptFrozen = false
+	s.histMu.Unlock()
+	if _, err := s.instructions(context.Background()); err != nil {
+		s.histMu.Lock()
+		s.prompt, s.promptFrozen = previous, true
+		s.histMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// Config is the current config snapshot, nil before the first load.
+func (c *Controller) Config() *config.Config { return c.a.session().conf.get() }
 
 // settingsState is the live configuration of an agent. The turn goroutine and the
 // clients share it, so every access goes through mu.

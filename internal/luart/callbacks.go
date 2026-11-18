@@ -2,8 +2,9 @@ package luart
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
+	"strings"
 
 	lua "github.com/yuin/gopher-lua"
 	"zel/internal/config"
@@ -14,57 +15,6 @@ func (c *Config) scoped(parent context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	stop := context.AfterFunc(c.life, cancel)
 	return ctx, func() { stop(); cancel() }
-}
-
-func (v *vm) callConfig(L *lua.LState, name string) int {
-	if L.GetTop() != 1 {
-		raise(L, name, EINVAL, "expected one table argument")
-	}
-	arg := asTable(L, name, L.Get(1))
-	values, err := v.cfg.callFunction(v.ctx, v.out, L, name, arg)
-	if err != nil {
-		raiseErr(L, name, err)
-	}
-	for _, v := range values {
-		L.Push(v)
-	}
-	return len(values)
-}
-
-func (c *Config) callFunction(parent context.Context, out io.Writer, caller *lua.LState, name string, arg *lua.LTable) ([]lua.LValue, error) {
-	ctx, cancel := c.scoped(parent)
-	defer cancel()
-	release, err := c.acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	incoming := newCopier(caller, c.v.L)
-	incoming.dataOnly = true
-	value, err := incoming.value(arg, "the argument")
-	if err != nil {
-		return nil, fmt.Errorf("EINVAL: %w", err)
-	}
-	defer c.v.use(ctx, out)()
-	L := c.v.L
-	L.Push(c.funcs[name])
-	L.Push(value)
-	if err := L.PCall(1, lua.MultRet, nil); err != nil {
-		return nil, fmt.Errorf("%s", errorMessage(err))
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	outgoing := newCopier(L, caller)
-	outgoing.dataOnly = true
-	result := make([]lua.LValue, L.GetTop())
-	for i := range result {
-		result[i], err = outgoing.value(L.Get(i+1), "a return value")
-		if err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
 }
 
 type HookResult struct {
@@ -89,10 +39,10 @@ func (c *Config) RunHook(parent context.Context, h config.Hook, event string, da
 	}
 	fn := c.hooks[h.Ref]
 	if h.Async {
-		child := newVM(c.v.env, c, false)
-		copy, err := cloneClosure(c.v, child, fn)
+		child := c.freshVM()
+		copy, err := newCopier(c.v.L, child.L).copyFunction(fn)
 		if err != nil {
-			child.L.Close()
+			child.close()
 			release()
 			finish()
 			return HookResult{}, fmt.Errorf("%s: %w", h.Source, err)
@@ -102,7 +52,7 @@ func (c *Config) RunHook(parent context.Context, h config.Hook, event string, da
 		c.asyncMu.Lock()
 		if err := c.life.Err(); err != nil {
 			c.asyncMu.Unlock()
-			child.L.Close()
+			child.close()
 			release()
 			finish()
 			return HookResult{}, err
@@ -113,7 +63,7 @@ func (c *Config) RunHook(parent context.Context, h config.Hook, event string, da
 		go func() {
 			defer c.async.Done()
 			defer finish()
-			defer child.L.Close()
+			defer child.close()
 			if _, err := child.invokeHook(ctx, copy, event, input); err != nil {
 				c.v.env.Log("hook", fmt.Sprintf("%s %s: %s", event, h.Source, errorMessage(err)))
 			}
@@ -144,7 +94,7 @@ func (c *Config) RunHook(parent context.Context, h config.Hook, event string, da
 }
 
 func (v *vm) invokeHook(ctx context.Context, fn *lua.LFunction, event string, data lua.LValue) (HookResult, error) {
-	defer v.use(ctx, io.Discard)()
+	defer v.use(ctx)()
 	L := v.L
 	L.Push(fn)
 	L.Push(lua.LString(event))
@@ -168,4 +118,56 @@ func (v *vm) invokeHook(ctx context.Context, fn *lua.LFunction, event string, da
 		}
 	}
 	return HookResult{}, nil
+}
+
+// freshVM is a VM for an async hook or a command: the standard library, the
+// package.path and the settings.env of the config, and nothing else.
+func (c *Config) freshVM() *vm {
+	v := newVM(c.env, c.pkgPath)
+	v.logPrint()
+	v.settingsEnv = c.settingsEnv
+	return v
+}
+
+// RunCommand runs a command of the config in a fresh VM with a copy of its fn,
+// without a timeout (ctx ends it). It returns the first returned value when it
+// is a string.
+func (c *Config) RunCommand(parent context.Context, cmd config.Command) (string, error) {
+	ctx, stop := c.scoped(parent)
+	defer stop()
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	if cmd.Ref < 0 || cmd.Ref >= len(c.cmds) {
+		release()
+		return "", fmt.Errorf("invalid command reference %d", cmd.Ref)
+	}
+	child := c.freshVM()
+	defer child.close()
+	fn, err := newCopier(c.v.L, child.L).copyFunction(c.cmds[cmd.Ref])
+	release()
+	if err != nil {
+		return "", fmt.Errorf("commands.%s: %w", cmd.Name, err)
+	}
+	c.asyncMu.Lock()
+	if err := c.life.Err(); err != nil {
+		c.asyncMu.Unlock()
+		return "", err
+	}
+	c.async.Add(1)
+	c.asyncMu.Unlock()
+	defer c.async.Done()
+	defer child.use(ctx)()
+	child.L.Push(fn)
+	if err := child.L.PCall(0, 1, nil); err != nil {
+		return "", errors.New(errorMessage(err))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if s, ok := child.L.Get(-1).(lua.LString); ok {
+		return strings.TrimSpace(string(s)), nil
+	}
+	return "", nil
 }

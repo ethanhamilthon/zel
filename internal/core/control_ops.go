@@ -189,7 +189,6 @@ func (c *Controller) selectModel(provider, model, effort string) error {
 	return nil
 }
 
-// ActiveTasks lists the running background tasks for the chat rows.
 // PendingChoice is the question the agent asks with choice(), nil when there is none.
 func (c *Controller) PendingChoice() *Choice { return c.a.PendingChoice() }
 
@@ -200,13 +199,8 @@ func (c *Controller) AnswerChoiceText(id int, text string) (Record, bool) {
 	return c.a.AnswerChoiceText(id, text)
 }
 
-func (c *Controller) ActiveTasks() (list []ActiveTask) {
-	c.view(func() { list = c.a.ActiveTasks() })
-	return list
-}
-
 // Trace returns everything the session has done: the system prompt, the messages,
-// the tool traffic the chat hides, the tasks and the events log.
+// the tool traffic the chat hides and the events log.
 func (c *Controller) Trace() []TraceEntry {
 	var history []TraceEntry
 	var slow func() []TraceEntry
@@ -224,7 +218,7 @@ func (c *Controller) LogEvent(kind, text string) {
 func (c *Controller) Info() (info Info, err error) {
 	session := c.a.session()
 	s := session.Settings()
-	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Tasks: session.RunningTasks(), Context: session.ContextTokens()}
+	info = Info{Session: session.id, Title: cmp.Or(session.CustomTitle(), session.DefaultTitle()), Project: session.project, Provider: s.Provider, Model: s.Model, Effort: s.Effort, Config: session.path, Messages: session.UserMessages(), Context: session.ContextTokens()}
 	info.Usage, info.Requests = session.SessionUsage()
 	info.Subagents = session.Subagents()
 	return info, nil

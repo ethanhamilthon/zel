@@ -9,19 +9,21 @@ import (
 // copier moves a Lua function with everything it captured from one state into
 // another, by value: numbers, strings, booleans and nil as they are, tables
 // deeply (keeping shared references and cycles), Lua functions recursively
-// with fresh upvalues. Go functions (sh, string.format, plugin functions...)
+// with fresh upvalues. Go functions (string.format, io.open...)
 // are found by their global name in the source and taken from the target.
 // Anything else (userdata, coroutines, channels) cannot be copied.
 type copier struct {
-	src, dst       *lua.LState
-	srcAPI, dstAPI *lua.LTable
-	dataOnly       bool
-	depth          int
-	tables         map[*lua.LTable]*lua.LTable
-	fns            map[*lua.LFunction]*lua.LFunction
-	uvs            map[*lua.Upvalue]*lua.Upvalue
-	gfuncs         map[*lua.LFunction]*lua.LFunction
+	src, dst *lua.LState
+	depth    int
+	tables   map[*lua.LTable]*lua.LTable
+	fns      map[*lua.LFunction]*lua.LFunction
+	uvs      map[*lua.Upvalue]*lua.Upvalue
+	gfuncs   map[*lua.LFunction]*lua.LFunction
 }
+
+// stdlibNames are the global library tables: a copied function that holds one
+// (`local string = string`) gets the table of the target, not a copy.
+var stdlibNames = []string{"string", "table", "math", "os", "io", "coroutine", "debug", "package"}
 
 func newCopier(src, dst *lua.LState) *copier {
 	return &copier{src: src, dst: dst, tables: map[*lua.LTable]*lua.LTable{},
@@ -48,10 +50,16 @@ func (c *copier) value(v lua.LValue, what string) (lua.LValue, error) {
 		return v, nil
 	case *lua.LTable:
 		return c.table(x, what)
-	case *lua.LFunction:
-		if c.dataOnly {
-			break
+	case *lua.LUserData:
+		// io.stdin, io.stdout and io.stderr are the only userdata that cross.
+		if f, ok := x.Value.(*file); ok && f.std {
+			if io, ok := c.dst.GetGlobal("io").(*lua.LTable); ok {
+				if std, ok := io.RawGetString(f.name).(*lua.LUserData); ok {
+					return std, nil
+				}
+			}
 		}
+	case *lua.LFunction:
 		if x.IsG {
 			return c.goFunction(x, what)
 		}
@@ -61,16 +69,13 @@ func (c *copier) value(v lua.LValue, what string) (lua.LValue, error) {
 }
 
 func (c *copier) table(t *lua.LTable, what string) (lua.LValue, error) {
-	if !c.dataOnly {
-		if t == c.src.G.Global || t == c.src.Env {
-			return c.dst.G.Global, nil
-		}
-		if c.srcAPI != nil && t == c.srcAPI {
-			return c.dstAPI, nil
-		}
-		for _, k := range []string{"session", "task"} {
-			if c.srcAPI != nil && t == c.srcAPI.RawGetString(k) {
-				return c.dstAPI.RawGetString(k), nil
+	if t == c.src.G.Global || t == c.src.Env {
+		return c.dst.G.Global, nil
+	}
+	for _, name := range stdlibNames {
+		if src, ok := c.src.GetGlobal(name).(*lua.LTable); ok && src == t {
+			if dst, ok := c.dst.GetGlobal(name).(*lua.LTable); ok {
+				return dst, nil
 			}
 		}
 	}
@@ -97,7 +102,7 @@ func (c *copier) table(t *lua.LTable, what string) (lua.LValue, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mt, ok := t.Metatable.(*lua.LTable); ok && !c.dataOnly {
+	if mt, ok := t.Metatable.(*lua.LTable); ok {
 		cmt, err := c.value(mt, "the metatable of "+what)
 		if err != nil {
 			return nil, err
@@ -144,8 +149,7 @@ func (c *copier) function(f *lua.LFunction, what string) (lua.LValue, error) {
 	return out, nil
 }
 
-// Match native functions by their corresponding standard-library or host
-// binding, never by copying a Go closure that references the old VM.
+// Match native functions by their corresponding standard-library binding, never by copying a Go closure that references the old VM.
 func (c *copier) goFunction(f *lua.LFunction, what string) (lua.LValue, error) {
 	if c.gfuncs == nil {
 		c.gfuncs = map[*lua.LFunction]*lua.LFunction{}
@@ -175,18 +179,9 @@ func (c *copier) goFunction(f *lua.LFunction, what string) (lua.LValue, error) {
 			})
 		}
 		match(c.src.G.Global, c.dst.G.Global)
-		if c.srcAPI != nil {
-			match(c.srcAPI, c.dstAPI)
-		}
 	}
 	if bound := c.gfuncs[f]; bound != nil {
 		return bound, nil
 	}
 	return nil, fmt.Errorf("cannot copy %s (a native function without a corresponding binding)", what)
-}
-
-func cloneClosure(src, dst *vm, fn *lua.LFunction) (*lua.LFunction, error) {
-	c := newCopier(src.L, dst.L)
-	c.srcAPI, c.dstAPI = src.api, dst.api
-	return c.copyFunction(fn)
 }

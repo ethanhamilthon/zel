@@ -14,7 +14,7 @@ import (
 // The packages keep to the dependency graph of ARCHITECTURE.md.
 func TestProductionPackageBoundaries(t *testing.T) {
 	allowed := map[string][]string{
-		"entities": {}, "config": {}, "store": {}, "edit": {}, "ipc": {},
+		"entities": {}, "config": {"defaults"}, "defaults": {}, "store": {}, "edit": {}, "ipc": {},
 		"shell": {"entities"}, "provider": {"entities"},
 		"luart": {"config", "shell", "edit"},
 		"tui":   {"core"},

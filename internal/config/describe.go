@@ -16,6 +16,14 @@ func clip(s string, max int) string {
 	return string(r[:max-1]) + "…"
 }
 
+// from is the " (file)" suffix of an entry with a source file.
+func from(source string) string {
+	if source == "" {
+		return ""
+	}
+	return " (" + DisplayPath(source) + ")"
+}
+
 // Describe renders the configuration for `zel config`: the files, problems,
 // every setting, and the names of env variables, systems, prompts, functions
 // and hooks. Secrets are never shown.
@@ -25,9 +33,12 @@ func Describe(c *Config) string {
 	}
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	p("Config: %s", DisplayPath(c.Paths.Init))
-	if c.Paths.Local != "" {
-		p("Local:  %s", DisplayPath(c.Paths.Local))
+	p("Files:")
+	for _, f := range c.Files {
+		p("  %s", DisplayPath(f))
+	}
+	if len(c.Files) == 0 {
+		p("  (none)")
 	}
 	if c.Paths.Connect != "" {
 		p("Connect: %s", DisplayPath(c.Paths.Connect))
@@ -93,21 +104,20 @@ func Describe(c *Config) string {
 		p("Systems:")
 		for _, sys := range c.Systems {
 			first, _, _ := strings.Cut(strings.TrimSpace(sys.Text), "\n")
-			p("  %s: %s", sys.Name, clip(first, 60))
+			p("  %s: %s%s", sys.Name, clip(first, 60), from(sys.Source))
 		}
 	}
 	if len(c.Prompts) > 0 {
-		names := slices.Sorted(maps.Keys(c.Prompts))
-		for i, n := range names {
-			names[i] = "#" + n
+		p("Prompts:")
+		for _, n := range slices.Sorted(maps.Keys(c.Prompts)) {
+			p("  #%s%s", n, from(c.PromptSources[n]))
 		}
-		p("Prompts: %s", strings.Join(names, " "))
 	}
 	if len(c.Functions) > 0 {
 		p("Functions:")
 		for _, fn := range c.Functions {
 			first, _, _ := strings.Cut(strings.TrimSpace(fn.Description), "\n")
-			p("  %s: %s", fn.Name, clip(first, 60))
+			p("  %s: %s%s", fn.Name, clip(first, 60), from(fn.Source))
 		}
 	}
 	if len(c.Hooks) > 0 {
@@ -118,6 +128,16 @@ func Describe(c *Config) string {
 				flags = " [async]"
 			}
 			p("  %s (%s)%s", h.Source, strings.Join(h.Events, ", "), flags)
+		}
+	}
+	if len(c.Commands) > 0 {
+		p("Commands:")
+		for _, cmd := range c.Commands {
+			key := ""
+			if cmd.Key != "" {
+				key = " [" + cmd.Key + "]"
+			}
+			p("  %s%s%s", cmd.Name, key, from(cmd.Source))
 		}
 	}
 	return b.String()

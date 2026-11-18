@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,15 +47,6 @@ func (s *session) openSession(id string) error {
 		return fail(CodeNotFound, "ENOENT: %s is not a zel -p session of this session", id)
 	}
 	s.id, s.created = id, v.Created
-	if v.BashCwd != "" {
-		if info, err := os.Stat(v.BashCwd); err == nil && info.IsDir() {
-			s.dirMu.Lock()
-			s.workDirPath = v.BashCwd
-			s.dirMu.Unlock()
-		} else {
-			defer s.notify("Folder " + v.BashCwd + " (cd) is gone: calls start in " + s.dir)
-		}
-	}
 	s.histMu.Lock()
 	s.title = v.Title
 	s.stored = true
@@ -74,6 +64,11 @@ func (s *session) openSession(id string) error {
 	s.choices = choices
 	s.histMu.Unlock()
 	if _, err := s.instructions(context.Background()); err != nil {
+		s.release()
+		return err
+	}
+	// The config may have changed since the session was saved.
+	if err := s.refreshPrompt(); err != nil {
 		s.release()
 		return err
 	}
@@ -156,7 +151,7 @@ func (s *session) Save() error {
 	first := s.firstUserLine()
 	s.histMu.RUnlock()
 	v := store.Session{ID: s.id, Project: s.project, Title: title, First: first, Provider: sel.Provider, Model: sel.Model, Effort: sel.Effort,
-		Mode: s.mode(), Depth: s.depth, Created: s.created, BashCwd: s.workDirSet()}
+		Mode: s.mode(), Depth: s.depth, Created: s.created}
 	if s.parent != nil {
 		v.Parent = s.parent.session
 	}

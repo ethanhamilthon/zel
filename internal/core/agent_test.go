@@ -1,11 +1,9 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +24,7 @@ import (
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return luaReply("c1", `print("hi")`)
+			return luaReply("c1", `return "hi"`)
 		}
 		return textReply("done")
 	}}
@@ -39,7 +36,7 @@ func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	for _, r := range a.Records() {
 		kinds = append(kinds, r.Kind+":"+strings.TrimSpace(r.Text))
 	}
-	if got := strings.Join(kinds, "|"); got != `user:go|code:print("hi")|output:hi|assistant:done` {
+	if got := strings.Join(kinds, "|"); got != `user:go|code:return "hi"|output:hi|assistant:done` {
 		t.Fatalf("records = %s", got)
 	}
 	if final := a.FinalText(); final != "done" {
@@ -376,7 +373,7 @@ func TestSteeringWaitsForTheRunningCallAndSkipsRest(t *testing.T) {
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
 				`{"type":"function_call","call_id":"c1","name":"lua","arguments":%q},`+
 				`{"type":"function_call","call_id":"c2","name":"lua","arguments":%q}]}}`,
-				args("print('early'); sh('touch started; sleep 1'); print('late')"), args("sh('touch second')")))
+				args("sh('touch started; sleep 1'); return 'early', 'late'"), args("sh('touch second')")))
 		}
 		return textReply("ok")
 	}}
@@ -436,56 +433,6 @@ func TestOnlyCompleteCommandsArePublished(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("command events: %d", count)
-	}
-}
-
-func TestTaskStopAndSessionClose(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if err := a.Save(); err != nil { // a saved session keeps its task records
-		t.Fatal(err)
-	}
-	if _, err := startTask(a, "sleep 30"); err != nil {
-		t.Fatal(err)
-	}
-	if a.RunningTasks() != 1 {
-		t.Fatal("task not running")
-	}
-	j, err := a.session().tasks.find("t1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	j.Stop()
-	if got := awaitInput(t, a); !strings.HasPrefix(got[0].Text, "<notification>t1 stopped") {
-		t.Fatalf("result %+v", got)
-	}
-	if _, err := startTask(a, "sleep 30"); err != nil {
-		t.Fatal(err)
-	}
-	old, start := a.SessionID(), time.Now()
-	if err := a.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	if time.Since(start) > 5*time.Second || a.RunningTasks() != 0 || len(a.Queue().Take()) != 0 {
-		t.Fatal("session change did not stop the task quietly")
-	}
-	if list, err := a.store.Tasks(a.project, old); err != nil || len(list) != 2 || list[0].Status != "stopped" || list[1].Status != "stopped" {
-		t.Fatalf("tasks %+v %v", list, err)
-	}
-}
-
-func TestTailOfHugeLog(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "log")
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Truncate(1 << 30); err != nil {
-		t.Fatal(err)
-	}
-	file.WriteAt([]byte("\nlast line\n"), 1<<30)
-	file.Close()
-	if got := tailLines(path, 40); !strings.HasSuffix(got, "\nlast line") || len(got) > 256<<10 {
-		t.Fatalf("tail %d bytes: %q", len(got), got[max(0, len(got)-60):])
 	}
 }
 
@@ -551,7 +498,7 @@ func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
 // writeConfig writes the provider of a test into the config of home. Keys the
 // file already has stay, so a test can bring its own model.
 func writeConfig(home string, s Settings) error {
-	path := config.DefaultPaths(home, "", "").Connect
+	path := config.DefaultPaths(home, "", nil, false).Connect
 	conn, err := config.LoadConnect(path)
 	if err == nil && len(conn.Providers) > 0 {
 		return nil
@@ -598,8 +545,6 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Tests reload by hand; a hot reload in the background would race with them.
-	a.OnConfigChanged(func() {})
 	t.Cleanup(a.Close)
 	return a
 }
@@ -609,7 +554,7 @@ func newTestAgentWith(t *testing.T, fp *fakeProvider, opts Options, pre func(hom
 func isolate(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("ZEL_HOME", home)
-	for _, name := range []string{"ZEL_MODE", "ZEL_CUSTOM_MODE", "ZEL_SESSION_ID", "ZEL_SOCKET", "ZEL_TOKEN", "ZEL_DEPTH", "ZEL_CONFIG", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT"} {
+	for _, name := range []string{"ZEL_MODE", "ZEL_CUSTOM_MODE", "ZEL_SESSION_ID", "ZEL_SOCKET", "ZEL_TOKEN", "ZEL_DEPTH", "ZEL_CONFIGS", "ZEL_NO_DEFAULT_CONFIGS", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT"} {
 		t.Setenv(name, "")
 	}
 }
@@ -707,62 +652,6 @@ func TestWithdrawIdentifiedSteering(t *testing.T) {
 	}
 }
 
-func TestTaskLogIsBoundedAndDrained(t *testing.T) {
-	var data bytes.Buffer
-	w := &taskLog{file: &data}
-	chunk := bytes.Repeat([]byte("x"), 65536)
-	for i := 0; i < 256; i++ {
-		if n, err := w.Write(chunk); n != len(chunk) || err != nil {
-			t.Fatalf("write=%d err=%v", n, err)
-		}
-	}
-	if data.Len() != taskLogLimit+len(taskLogTruncated) || !strings.HasSuffix(data.String(), taskLogTruncated) {
-		t.Fatalf("log size=%d", data.Len())
-	}
-}
-
-func TestTaskAdmissionReservesCompletionCapacity(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	for i := 0; i < maxQueued; i++ {
-		a.Queue().PushNotice(Input{Text: "completion", Notice: true})
-	}
-	if _, err := startTask(a, "true"); err == nil || !strings.Contains(err.Error(), "unresolved task") {
-		t.Fatalf("admission: %v", err)
-	}
-	for i := 0; i < maxQueued; i++ {
-		if !a.Queue().Push(Input{Text: "composer"}) {
-			t.Fatalf("composer slot %d rejected", i)
-		}
-	}
-	if a.Queue().Push(Input{Text: "overflow"}) {
-		t.Fatal("composer limit not enforced")
-	}
-}
-
-func TestTaskCompletionPersistenceFailureIsReported(t *testing.T) {
-	a := newTestAgent(t, &fakeProvider{}, Options{})
-	if _, err := startTask(a, "sleep 0.2"); err != nil {
-		t.Fatal(err)
-	}
-	// A directory in place of tasks.jsonl makes recording the end fail.
-	s := a.session()
-	file := filepath.Join(s.sessionDir(), "tasks.jsonl")
-	if err := os.Remove(file); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(file, 0700); err != nil {
-		t.Fatal(err)
-	}
-	s.tasks.wg.Wait()
-	inputs := a.Queue().Take()
-	if len(inputs) != 1 || inputs[0].Text != "<notification>t1 finished</notification>" {
-		t.Fatalf("completion: %+v", inputs)
-	}
-	if data, _ := os.ReadFile(s.eventsLog()); !strings.Contains(string(data), "could not be persisted") || !strings.Contains(string(data), "tasks.jsonl") {
-		t.Fatalf("persistence failure not reported: %s", data)
-	}
-}
-
 func TestImagesLiveInMemoryOnly(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
 	s := a.session()
@@ -834,7 +723,7 @@ func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				return sse(events...)
 			}}
 			a := newTestAgent(t, fp, Options{})
-			connPath := config.DefaultPaths(a.Home(), "", "").Connect
+			connPath := config.DefaultPaths(a.Home(), "", nil, false).Connect
 			conn, err := config.LoadConnect(connPath)
 			if err != nil {
 				t.Fatal(err)
@@ -925,14 +814,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	h := newHarness(t, &fakeModel{gate: gate})
 	h.send("first")
 	h.inFlight(1)
-	if _, err := startTask(h.a, "echo notice A"); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); h.a.RunningTasks() > 0; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("task result did not arrive")
-		}
-	}
+	h.a.Queue().PushNotice(notification("notice A"))
 	h.send("steer B")
 	close(gate)
 	h.settle()
@@ -940,7 +822,7 @@ func TestNotificationKeepsOrderWithSteering(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("%d requests, want 2", len(reqs))
 	}
-	a, b := strings.Index(reqs[1], "t1 finished"), strings.Index(reqs[1], "steer B")
+	a, b := strings.Index(reqs[1], "notice A"), strings.Index(reqs[1], "steer B")
 	if a < 0 || b < a {
 		t.Fatalf("notification and steering out of order: A=%d B=%d", a, b)
 	}
@@ -1374,13 +1256,4 @@ func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	s := &session{acts: &activities{}}
 	s.readItems(items)
 	return s.Records(), nil
-}
-
-// startTask runs a shell command as a background task of the current session.
-func startTask(a *Runtime, command string) (string, error) {
-	out := a.session().runLua(context.Background(), "return task.spawn('test', function() sh("+strconv.Quote(command)+") end)")
-	if strings.HasPrefix(out, "error: ") {
-		return "", errors.New(out)
-	}
-	return out, nil
 }

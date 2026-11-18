@@ -1,16 +1,14 @@
 package config
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestParseSettings(t *testing.T) {
@@ -146,22 +144,25 @@ func TestDefaultPathsAndEnsureHome(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "zelhome")
 	cwd := filepath.Join(t.TempDir(), "proj")
 
-	p := DefaultPaths(home, cwd, "")
-	if p.Init != filepath.Join(home, "init.lua") ||
-		p.Local != filepath.Join(cwd, "zel.lua") ||
-		p.Connect != filepath.Join(home, "connect.json") {
+	p := DefaultPaths(home, cwd, nil, false)
+	if !slices.Equal(p.Files, []string{filepath.Join(home, "init.lua"), filepath.Join(cwd, "zel.lua")}) ||
+		p.Connect != filepath.Join(home, "connect.json") || len(p.Required) != 0 {
 		t.Fatalf("unexpected DefaultPaths: %+v", p)
 	}
-
-	pFlag := DefaultPaths(home, cwd, "custom.lua")
-	if pFlag.Init != filepath.Join(cwd, "custom.lua") || pFlag.Local != "" || pFlag.Connect != filepath.Join(home, "connect.json") {
-		t.Fatalf("unexpected DefaultPaths with flag: %+v", pFlag)
+	p = DefaultPaths(home, cwd, []string{"custom.lua", "/abs/b.lua"}, false)
+	want := []string{filepath.Join(home, "init.lua"), filepath.Join(cwd, "zel.lua"), filepath.Join(cwd, "custom.lua"), "/abs/b.lua"}
+	if !slices.Equal(p.Files, want) || !slices.Equal(p.Required, want[2:]) {
+		t.Fatalf("unexpected DefaultPaths with configs: %+v", p)
+	}
+	p = DefaultPaths(home, cwd, []string{"custom.lua"}, true)
+	if !slices.Equal(p.Files, []string{filepath.Join(cwd, "custom.lua")}) {
+		t.Fatalf("unexpected DefaultPaths without defaults: %+v", p)
 	}
 
 	if err := EnsureHome(home); err != nil {
 		t.Fatalf("EnsureHome: %v", err)
 	}
-	for _, name := range []string{"init.lua", "connect.json", ".gitignore"} {
+	for _, name := range []string{"init.lua", "connect.json", ".gitignore", "defaults"} {
 		if _, err := os.Stat(filepath.Join(home, name)); err != nil {
 			t.Errorf("missing %s: %v", name, err)
 		}
@@ -169,8 +170,14 @@ func TestDefaultPathsAndEnsureHome(t *testing.T) {
 	if _, err := LoadConnect(filepath.Join(home, "connect.json")); err != nil {
 		t.Errorf("default connect.json invalid: %v", err)
 	}
-	// Existing files are not overwritten.
+	// Existing files and the defaults folder are not touched.
 	if err := os.WriteFile(filepath.Join(home, "init.lua"), []byte("-- custom\nreturn {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(home, "defaults")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "defaults"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := EnsureHome(home); err != nil {
@@ -180,46 +187,16 @@ func TestDefaultPathsAndEnsureHome(t *testing.T) {
 	if !strings.Contains(string(data), "-- custom") {
 		t.Fatalf("EnsureHome overwrote init.lua")
 	}
+	if list, _ := os.ReadDir(filepath.Join(home, "defaults")); len(list) != 0 {
+		t.Fatalf("EnsureHome refilled an existing defaults folder")
+	}
 }
 
-func TestWatchDynamicFiles(t *testing.T) {
-	oldInt, oldSettle := watchInterval, watchSettle
-	watchInterval, watchSettle = 10*time.Millisecond, 25*time.Millisecond
-	defer func() { watchInterval, watchSettle = oldInt, oldSettle }()
-
-	dir := t.TempDir()
-	f1 := filepath.Join(dir, "init.lua")
-	f2 := filepath.Join(dir, "extra.lua")
-	_ = os.WriteFile(f1, []byte("return {}"), 0600)
-
-	var list atomic.Value
-	list.Store([]string{f1})
-	var calls atomic.Int32
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	defer func() {
-		cancel()
-		<-done
-	}()
-	go func() {
-		defer close(done)
-		Watch(ctx, func() []string { return list.Load().([]string) }, func() { calls.Add(1) })
-	}()
-
-	time.Sleep(60 * time.Millisecond)
-	if calls.Load() != 0 {
-		t.Fatalf("unexpected initial call")
-	}
-
-	_ = os.WriteFile(f2, []byte("return {}"), 0600)
-	list.Store([]string{f1, f2})
-	deadline := time.Now().Add(time.Second)
-	for calls.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("expected 1 watch call after adding file, got %d", calls.Load())
+func TestKeys(t *testing.T) {
+	for key, ok := range map[string]bool{"ctrl+x": true, "alt+g": true, "ctrl+X": false, "alt+": false, "f5": false, "ctrl+ab": false} {
+		if ValidKey(key) != ok {
+			t.Errorf("ValidKey(%q) != %v", key, ok)
+		}
 	}
 }
 
@@ -232,18 +209,20 @@ func TestDescribeAndValidate(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	cfg := &Config{
-		Paths:     Paths{Init: "/tmp/init.lua", Local: "/tmp/zel.lua", Connect: "/tmp/connect.json"},
+		Paths:     Paths{Files: []string{"/tmp/init.lua", "/tmp/zel.lua"}, Connect: "/tmp/connect.json"},
+		Files:     []string{"/tmp/init.lua", "/tmp/zel.lua", "/tmp/mod.lua"},
 		Settings:  s,
 		Systems:   []System{{Name: "style", Text: "Reply short."}},
 		Prompts:   map[string]string{"review": "Review."},
-		Functions: []Function{{Name: "ping", Description: "Ping host"}},
+		Functions: []Function{{Name: "ping", Description: "Ping host", Source: "/tmp/init.lua"}},
+		Commands:  []Command{{Name: "Commit", Key: "alt+g", Source: "/tmp/zel.lua"}},
 		Hooks:     []Hook{{Events: []string{"idle"}, Async: true, Source: "init.lua:10"}},
 	}
 	out := Describe(cfg)
 	if strings.Contains(out, "sk-secret") || strings.Contains(out, "supersecret") {
 		t.Fatalf("Describe leaked secret:\n%s", out)
 	}
-	for _, want := range []string{"settings.timeout", "settings.output", "settings.show_code", "settings.show_prompt", "colors.trace.lua", "#review", "ping: Ping host", "init.lua:10 (idle) [async]"} {
+	for _, want := range []string{"settings.timeout", "settings.output", "settings.show_code", "settings.show_prompt", "colors.trace.lua", "#review", "ping: Ping host (/tmp/init.lua)", "Commit [alt+g] (/tmp/zel.lua)", "/tmp/mod.lua", "init.lua:10 (idle) [async]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Describe missing %q:\n%s", want, out)
 		}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-	"zel/internal/config"
 	"zel/internal/entities"
 
 	"zel/internal/core"
@@ -22,7 +22,7 @@ func testApp(t *testing.T) *app {
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	init := "return {settings = {editor = 'perl -pi -e s/draft/EDITED/'}, prompts = {plan = 'expanded'}}\n"
-	if err := os.WriteFile(config.DefaultPaths(home, dir, "").Init, []byte(init), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "init.lua"), []byte(init), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})
