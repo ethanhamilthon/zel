@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1033,5 +1034,78 @@ func TestBrokenConfigAtStart(t *testing.T) {
 	}
 	if cfg := NewController(a, func(Event) {}).Config(); cfg == nil || len(cfg.Errors) != 1 {
 		t.Fatalf("snapshot: %+v", cfg)
+	}
+}
+
+func TestCommandsReloadAndPrompt(t *testing.T) {
+	conf := `return {
+  functions = {
+    zed = {description = "` + "`zed(x)`" + ` - last, with its own signature", fn = function() end},
+    abc = {description = "first line\nsecond", fn = function() end},
+  },
+  systems = {one = "SYSTEM-ONE"},
+  commands = {
+    {name = "Say", fn = function() return "said it\n" end},
+    {name = "Fail", fn = function() error("boom", 0) end},
+    {name = "Quiet", fn = function() end},
+  },
+}
+`
+	a := newTestAgentWith(t, okProvider(), Options{}, withLocal(conf))
+	var mu sync.Mutex
+	var events []Event
+	ctl := NewController(a, func(e Event) { mu.Lock(); events = append(events, e); mu.Unlock() })
+	defer ctl.Close()
+	prompt := a.session().assemblePrompt()
+	want := "## Functions\n`abc` - first line\nsecond\n`zed(x)` - last, with its own signature\n\nSYSTEM-ONE"
+	if !strings.Contains(prompt, want) || !strings.HasPrefix(prompt, "# Zel") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+	cfg := ctl.Config()
+	if cfg == nil || len(cfg.Commands) != 3 || filepath.Base(cfg.Commands[0].Source) != "init.lua" || filepath.Base(cfg.Functions[0].Source) != "init.lua" {
+		t.Fatalf("snapshot: %+v", cfg)
+	}
+	text := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, e := range events {
+			out = append(out, e.Kind+":"+e.Text)
+		}
+		return out
+	}
+	for _, name := range []string{"Say", "Fail", "Quiet"} {
+		if err := ctl.RunCommand(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if codeOf(ctl.RunCommand("Nope")) != CodeNotFound {
+		t.Fatal("an unknown command ran")
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(text()) < 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("command results: %q", text())
+		}
+	}
+	got := text()
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"error:command Fail: boom", "notice:said it"}) {
+		t.Fatalf("command results: %q", got)
+	}
+	// A failed reload keeps the old config and shows the error in the snapshot.
+	writeFile(t, a.ConfigFile(), "return {nope = 1}\n")
+	if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "previous config stays") {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg := ctl.Config(); len(cfg.Commands) != 3 || len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], `unknown key "nope"`) {
+		t.Fatalf("snapshot after a failed reload: %+v", cfg)
+	}
+	// A good reload replaces it and clears the error.
+	writeFile(t, a.ConfigFile(), "return {commands = {{name = 'Only', fn = function() end}}}\n")
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := ctl.Config(); len(cfg.Commands) != 1 || len(cfg.Errors) != 0 {
+		t.Fatalf("snapshot after a reload: %+v", cfg)
 	}
 }

@@ -90,6 +90,10 @@ func TestNoHostAPI(t *testing.T) {
 	if got != "\nfile" {
 		t.Fatalf("%q", got)
 	}
+	// os.getenv sees the session environment first.
+	if got := run(t, a, `return os.getenv("TEST_ENV"), os.getenv("ZEL_SESSION_ID"), os.getenv("NOPE_NOT_SET")`); got != "base\ns1" {
+		t.Fatalf("%q", got)
+	}
 }
 
 func TestIOFiles(t *testing.T) {
