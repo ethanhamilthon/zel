@@ -26,6 +26,12 @@ Breaking release. Defaults move from Go host functions to plain Lua.
   first line when `show_code`); `zel status new` indicators show above it as
   `◐ 6s · text`; `zel print` lines show in `dark_gray` with no header; the menu
   now closes with `keys.menu` instead of hard-coded `Ctrl+K`.
+- Fixed 400 errors on Responses API replay after switching models or providers
+  by dropping prior reasoning items and converting earlier model outputs to
+  portable history items.
+- Fixed `sh` (`zel exec`) cancellation when a Lua call is interrupted or times
+  out: a supervisor worker monitors the launcher via a lifeline pipe and kills
+  the foreground command's process group if the launcher dies.
 
 ## 0.11.0
 

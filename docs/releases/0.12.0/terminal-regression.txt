@@ -1,0 +1,125 @@
+PASS provider-less TUI exits instead of waiting
+PASS provider-less TUI gives a diagnostic
+PASS provider-less TUI fails without contacting a provider
+PASS first-run config directory contains init, connect and defaults
+PASS startup model picker loads from the loopback provider
+PASS Esc from startup Models returns to the main menu
+PASS Esc closes the main menu
+PASS empty composer starts at the corner
+PASS typed text has no left padding
+PASS answer streams into the chat
+PASS one empty line between answer and composer
+PASS working line appears during Lua
+PASS working code stays on one clipped line
+PASS working timer uses accent and code uses dark gray
+PASS Ctrl+D stops the running call
+PASS @ lists files with spaces
+PASS file completions: blank line, no padding, selection arrow
+PASS # lists the configured prompt
+PASS prompt token sends a turn
+PASS provider sees expanded prompt and project system rule
+PASS chat shows the prompt token, not its expansion by default
+PASS / on empty input opens the main menu
+PASS main menu selection arrow and current items
+PASS model picker lists the local provider models
+PASS model picker opens effort selection
+PASS model selection persists to connect.json
+PASS model selection preserves provider and API key reference
+PASS composer/model session quits cleanly
+PASS startup model picker loads from the loopback provider
+PASS Esc from startup Models returns to the main menu
+PASS Esc closes the main menu
+PASS rebound menu no longer opens with Ctrl+K
+PASS Alt+K opens the rebound menu
+PASS menu lists commands with their key hints
+PASS Ctrl+K does not close the rebound menu
+PASS Alt+K closes the rebound menu
+PASS opens menu for Echo fixture
+PASS Enter runs the selected command and prints its result
+PASS running a menu command does not call the provider
+PASS opens menu for Fail fixture
+PASS command error is shown in chat
+PASS command error uses error color
+PASS opens menu for Config
+PASS Config opens with reload hint
+PASS Config shows load files, overrides and system source
+PASS Config shows function description
+PASS Config shows command binding and source
+PASS Config shows prompt and async hook sources
+PASS turn with original config
+PASS command hotkey works in chat and file edits do not auto-reload
+PASS edited show_prompt does not apply without reload
+PASS opens menu for Config
+PASS Ctrl+R in Config reloads the edited config
+PASS show_prompt reveals existing prompt text after reload
+PASS hotkey runs the new command closure after reload
+PASS turn after reload reaches provider
+PASS reload rebuilds provider instructions
+PASS opens menu for Config
+PASS failed reload reports a config error
+PASS reload error names the broken file and syntax error
+PASS failed reload keeps the previous command
+PASS async config_changed hook sees both results in order
+PASS Config and commands session quits cleanly
+PASS startup model picker loads from the loopback provider
+PASS Esc from startup Models returns to the main menu
+PASS Esc closes the main menu
+PASS default session() can query the live session
+PASS session exposes live cwd, mode and model
+PASS status ('new', 'indicator-initial') succeeds for explicit session
+PASS status new returns an indicator ID
+PASS idle indicator is visible
+PASS status ('-i', 'i1', 'indicator-updated') succeeds for explicit session
+PASS status update redraws the indicator
+PASS explicit Lua call status is visible even with show_code disabled
+PASS indicator and call status are separate lines with a blank separator
+PASS call status replaces Lua code
+PASS steer ('--file', 'fixture.png', '-') succeeds for explicit session
+PASS active steer stays queued while Lua is running
+PASS active steer is delivered when Lua finishes
+PASS active steer follows the tool result and carries its image
+PASS call status clears without clearing the independent indicator
+PASS status ('-i', 'i1', '--done') succeeds for explicit session
+PASS status --done removes the indicator
+PASS print ('-',) succeeds for explicit session
+PASS print reads stdin and renders multiple lines
+PASS print has no header and uses dark gray
+PASS print does not start a model turn
+PASS steer ('steer-marker-idle',) succeeds for explicit session
+PASS idle steer wakes a session without keyboard input
+PASS print is never sent to the provider
+PASS choice ('Pick a letter', 'A', 'B') succeeds for explicit session
+PASS choice returns an ID without waiting for the answer
+PASS choice opens a picker
+PASS choice answer wakes the model
+PASS choice answer contains the ID, question and selected B
+PASS rename ('acceptance-resume',) succeeds for explicit session
+PASS Tracing opens for live session
+PASS Tracing includes local print records
+PASS live session quits cleanly
+PASS startup model picker loads from the loopback provider
+PASS Esc from startup Models returns to the main menu
+PASS Esc closes the main menu
+PASS session picker lists the renamed session
+PASS print history survives resume through the session picker
+PASS resumed session quits cleanly
+PASS startup model picker loads from the loopback provider
+PASS Esc from startup Models returns to the main menu
+PASS Esc closes the main menu
+PASS first tracing turn answered
+PASS second tracing turn has two Lua calls
+PASS provider gets both returns and Lua errors
+PASS Tracing shows per-turn headings
+PASS All view includes hook entries
+PASS PgUp reaches the first turn
+PASS Tab filters tracing to Lua
+PASS Lua view contains calls but not hooks
+PASS Enter opens the latest Lua entry
+PASS Lua entry includes error output and request tokens
+PASS Left opens the previous Lua entry
+PASS previous entry shows returned value
+PASS Esc goes back to the filtered Lua list
+PASS Ctrl+H toggles hook rows
+PASS hook rows are hidden after toggle
+PASS Tracing session quits cleanly
+124 passed, 0 failed

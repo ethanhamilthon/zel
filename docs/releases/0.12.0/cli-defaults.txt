@@ -1,0 +1,10 @@
+1: ('-p', 'defaults') -> 0
+Fixture finished.
+zel: session 20261118T114437.655398000Z-4b1aa0bb77015ead
+
+2: ('exec', '--timeout', '1', '--', 'bash', '-c', 'printf started; sleep 10') -> 0
+{"ok":false,"code":124,"out":"started","timed_out":true,"ms":1001}
+
+3: ('print', 'no session') -> 1
+zel print: EFAIL: no session (set ZEL_SESSION_ID or use -s ID)
+

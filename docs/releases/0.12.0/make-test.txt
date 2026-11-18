@@ -1,0 +1,15 @@
+go vet ./...
+go test -race ./...
+?   	zel	[no test files]
+ok  	zel/docs	1.830s
+ok  	zel/internal/cli	4.457s
+ok  	zel/internal/config	1.710s
+ok  	zel/internal/core	18.214s
+ok  	zel/internal/defaults	5.144s
+?   	zel/internal/entities	[no test files]
+ok  	zel/internal/ipc	1.891s
+ok  	zel/internal/luart	2.187s
+ok  	zel/internal/provider	2.664s
+ok  	zel/internal/shell	16.223s
+ok  	zel/internal/store	1.463s
+ok  	zel/internal/tui	2.125s
