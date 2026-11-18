@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,7 +75,7 @@ func LoadConfig(ctx context.Context, env Env, paths config.Paths, base config.Se
 	defer cancel()
 	life, stop := context.WithCancel(context.Background())
 	c := &Config{
-		data: config.Config{Paths: paths, Settings: base, Prompts: map[string]string{}, PromptSources: map[string]string{}},
+		data: config.Config{Paths: paths, Settings: base, Prompts: map[string]string{}, PromptSources: map[string]string{}, SettingSources: map[string]string{}},
 		env:  env, token: make(chan struct{}, 1), life: life, cancel: stop, funcs: map[string]*lua.LFunction{},
 	}
 	c.pkgPath = packagePath(paths, nil)
@@ -296,6 +297,21 @@ func (c *Config) replaced(path, what, old string) {
 	c.data.Warnings = append(c.data.Warnings, fmt.Sprintf("%s: %s replaces a definition from %s", config.DisplayPath(path), what, config.DisplayPath(old)))
 }
 
+// Settings tables merge by leaf (e.g. env.A), not by replacing the whole table.
+func (c *Config) recordSettings(path, prefix string, settings map[string]any) {
+	for _, key := range slices.Sorted(maps.Keys(settings)) {
+		name := prefix + key
+		if nested, ok := settings[key].(map[string]any); ok {
+			c.recordSettings(path, name+".", nested)
+			continue
+		}
+		if old, ok := c.data.SettingSources[name]; ok {
+			c.replaced(path, "settings."+name, old)
+		}
+		c.data.SettingSources[name] = path
+	}
+}
+
 func (c *Config) merge(path string, value lua.LValue, nested bool) ([]string, error) {
 	f, err := fields(value, "settings", "systems", "prompts", "functions", "hooks", "commands", "loads")
 	if err != nil {
@@ -310,6 +326,7 @@ func (c *Config) merge(path string, value lua.LValue, nested bool) ([]string, er
 		if err != nil {
 			return nil, err
 		}
+		c.recordSettings(path, "", raw)
 	}
 	for _, section := range []string{"systems", "prompts", "functions"} {
 		value := f[section]

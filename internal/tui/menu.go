@@ -372,6 +372,10 @@ func (m *app) menuKey(k *tcell.EventKey) {
 		m.formKey(k)
 		return
 	}
+	if mu.page == "config" && keyName(k) == "ctrl+r" {
+		m.reloadConfig()
+		return
+	}
 	if shortcut(k, m.ctl.Settings().Keys) == "menu" {
 		m.menu = nil
 		m.updateCompletions()
@@ -394,11 +398,6 @@ func (m *app) menuKey(k *tcell.EventKey) {
 			m.openMenu(parent)
 		}
 		return
-	case tcell.KeyCtrlR:
-		if mu.page == "config" {
-			m.reloadConfig()
-			return
-		}
 	case tcell.KeyUp:
 		if mu.body != "" && len(mu.list.items) == 0 {
 			mu.offset = max(0, mu.offset-1)

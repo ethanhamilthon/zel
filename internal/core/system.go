@@ -28,28 +28,33 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 		return previous, nil
 	}
 	prompt := s.assemblePrompt()
+	return prompt, s.storePrompt(prompt, s.saveHistory)
+}
+
+func (s *session) storePrompt(prompt string, save func() error) error {
 	s.histMu.Lock()
 	s.History = append(s.History, raw(map[string]string{"type": "instructions", "text": prompt}))
 	s.histMu.Unlock()
-	if err := s.saveHistory(); err != nil {
+	if err := save(); err != nil {
 		s.histMu.Lock()
 		s.History = s.History[:len(s.History)-1]
 		s.histMu.Unlock()
-		return "", err
+		return err
 	}
 	s.histMu.Lock()
 	s.prompt, s.promptFrozen = prompt, true
 	s.histMu.Unlock()
-	return prompt, nil
+	return nil
 }
 
 // assemblePrompt renders the system prompt: the static text about Zel and its
 // CLI (prompt/zel.md), the functions of the config, one line each sorted by
 // name, then the systems of the configs in file order. It is frozen in the
 // history until the config changes.
-func (s *session) assemblePrompt() string {
+func (s *session) assemblePrompt() string { return assemblePrompt(s.conf.get()) }
+
+func assemblePrompt(cfg *config.Config) string {
 	parts := []string{strings.TrimSpace(zelPrompt)}
-	cfg := s.conf.get()
 	if cfg == nil {
 		return parts[0]
 	}

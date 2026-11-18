@@ -237,6 +237,9 @@ func TestSocketSteerWakesIdleAndPrintIsLocal(t *testing.T) {
 			}
 		}
 	}
+	if r := sock(t, a, "view", map[string]string{}); r.OK || !strings.Contains(r.Error, `unknown op "view"`) {
+		t.Fatalf("legacy view op: %+v", r)
+	}
 	const private = "local-only output\nsecond line"
 	if r := sock(t, a, "print", map[string]string{"text": private}); !r.OK {
 		t.Fatal(r)
@@ -248,7 +251,7 @@ func TestSocketSteerWakesIdleAndPrintIsLocal(t *testing.T) {
 		t.Fatalf("print woke the model (%d requests)", got)
 	}
 
-	// An invalid attachment is rejected atomically, without consuming a slot.
+	// An invalid image is rejected atomically, without consuming a slot.
 	if r := sockIn(t, a, t.TempDir(), "steer", map[string]any{"files": []string{"missing.gif"}}); r.Code != 3 {
 		t.Fatal(r)
 	}
@@ -1265,7 +1268,7 @@ func TestCommandsReloadAndPrompt(t *testing.T) {
 	}
 	got := text()
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"error:command Fail: boom", "print:said it"}) {
+	if !slices.Equal(got, []string{"command_error:command Fail: boom", "print:said it"}) {
 		t.Fatalf("command results: %q", got)
 	}
 	// A failed reload keeps the old config and shows the error in the snapshot.
@@ -1283,5 +1286,112 @@ func TestCommandsReloadAndPrompt(t *testing.T) {
 	}
 	if cfg := ctl.Config(); len(cfg.Commands) != 1 || len(cfg.Errors) != 0 {
 		t.Fatalf("snapshot after a reload: %+v", cfg)
+	}
+}
+func TestFailedReloadKeepsLiveStateAndReportsToOldHooks(t *testing.T) {
+	const original = `return {
+  settings = {timeout = 17}, systems = {rule = 'OLD-RULE'},
+  commands = {{name = 'Keep', fn = function() return 'old command' end}},
+  hooks = {{events = {'config_changed'}, fn = function(_, d)
+    local f = assert(io.open('reload.log', 'a'))
+    f:write(tostring(d.ok), ':', d.error, '\n')
+    f:close()
+  end}},
+}`
+	for _, tc := range []struct{ name, cause string }{
+		{"invalid config Lua", "unknown key"},
+		{"invalid provider", "needs an HTTP(S) base_url"},
+		{"invalid default selection", `selected provider "unknown" is not configured`},
+		{"prompt save failure", "could not save history"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestAgentWith(t, okProvider(), Options{}, withLocal(original))
+			s := a.session()
+			if err := a.ConfigureSession(t.Context(), "p", "pinned", "high"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := turn(t, a, "freeze the prompt"); err != nil {
+				t.Fatal(err)
+			}
+			oldSettings, oldClient := s.snapshot()
+			oldSel, oldLua, oldAgent := s.cfg.sel, s.luaConfig(), s.luaAgent()
+			oldPrompt := s.prompt
+			connPath := s.paths().Connect
+			conn, err := os.ReadFile(connPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, a.ConfigFile(), `return {settings = {timeout = 31}, systems = {rule = 'NEW-RULE'}}`)
+			switch tc.name {
+			case "invalid config Lua":
+				writeFile(t, a.ConfigFile(), "return {unrecognized = true}")
+			case "invalid provider":
+				writeFile(t, connPath, `{"provider":"p","model":"new","providers":{"p":{"base_url":"broken"}}}`)
+			case "invalid default selection":
+				updated, err := config.LoadConnect(connPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				updated.Provider = "unknown"
+				data, err := json.Marshal(updated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, connPath, string(data))
+			case "prompt save failure":
+				// Make the history append fail even when running with elevated privileges.
+				path := filepath.Join(s.sessionDir(), "session.jsonl")
+				if err := os.Rename(path, path+".bak"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := os.Remove(path); err != nil {
+						t.Error(err)
+					}
+					if err := os.Rename(path+".bak", path); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			events := make(chan Event, 8)
+			ctl := NewController(a, func(e Event) { events <- e })
+			defer ctl.Close()
+			ctl.Reload()
+			select {
+			case e := <-events:
+				if e.Kind != "config_reloaded" || !strings.Contains(e.Error, tc.cause) {
+					t.Fatalf("reload event: %+v", e)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no reload error event")
+			}
+			cfg := ctl.Config()
+			if len(cfg.Errors) != 1 || !strings.Contains(cfg.Errors[0], tc.cause) || cfg.Settings.Timeout != 17 ||
+				len(cfg.Commands) != 1 || cfg.Commands[0].Name != "Keep" {
+				t.Fatalf("config snapshot: %+v", cfg)
+			}
+			st, client := s.snapshot()
+			if client != oldClient || st.Model != oldSettings.Model || st.Effort != oldSettings.Effort || st.Timeout != oldSettings.Timeout ||
+				s.cfg.sel != oldSel || s.luaConfig() != oldLua || s.luaAgent() != oldAgent || s.prompt != oldPrompt || instructionItems(a) != 1 {
+				t.Fatalf("failed reload changed live state: %+v, pin %+v, prompt %q", st, s.cfg.sel, s.prompt)
+			}
+			log, err := os.ReadFile(filepath.Join(s.dir, "reload.log"))
+			if err != nil || !strings.HasPrefix(string(log), "false:") || !strings.Contains(string(log), tc.cause) {
+				t.Fatalf("old config_changed hook logged %q: %v", log, err)
+			}
+			writeFile(t, connPath, string(conn))
+			writeFile(t, a.ConfigFile(), original)
+			ctl.Reload()
+			if cfg := ctl.Config(); len(cfg.Errors) != 0 || a.Settings().Model != "pinned" {
+				t.Fatalf("recovery: errors=%v model=%q", cfg.Errors, a.Settings().Model)
+			}
+			log, err = os.ReadFile(filepath.Join(s.dir, "reload.log"))
+			if err != nil || !strings.HasSuffix(string(log), "\ntrue:\n") {
+				t.Fatalf("successful config_changed hook logged %q: %v", log, err)
+			}
+		})
 	}
 }

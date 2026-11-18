@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gdamore/tcell/v2"
 
 	"zel/internal/core"
 
@@ -283,37 +284,46 @@ func (m *app) turnSteps() int {
 	return count
 }
 
-// workingRow is the working indicator, one line: the star, the time, the steps
-// and the queue in the accent color, then what is running in dark gray, cut
-// with "..." to fit.
+// workingRow shows elapsed time, call status or the first line of code,
+// call count, and queued input, in that order.
 func workingRow(status core.Status, callStatus string, steps int, showCode bool, width int) row {
 	stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
-	parts := []string{stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)] + " " + formatDuration(time.Since(status.Started))}
+	elapsed := time.Since(status.Started)
+	var r row
+	add := func(text string, st tcell.Style) {
+		if width <= 0 {
+			return
+		}
+		if len(r) > 0 {
+			text = " · " + text
+		}
+		truncated := ansi.Truncate(text, width, "...")
+		n := textWidth(truncated)
+		r = append(r, span{truncated, n, st})
+		width -= n
+		if truncated != text {
+			width = 0
+		}
+	}
+	accent := style(accentColor)
+	add(stars[int(max(0, elapsed)/(80*time.Millisecond))%len(stars)]+" "+formatDuration(elapsed), accent)
 	if status.Cancelling {
-		parts = append(parts, "cancelling")
+		add("cancelling", accent)
 	} else {
-		parts = append(parts, formatSteps(steps))
+		text := callStatus
+		if text == "" && showCode {
+			text = status.Activity
+		}
+		if line, _, _ := strings.Cut(text, "\n"); line != "" {
+			add(cleanInput(strings.ReplaceAll(line, "\t", " ")), style(darkGray))
+		}
+		add(formatSteps(steps), accent)
 	}
 	switch queued := len(status.Queued); {
 	case queued == 1:
-		parts = append(parts, "queued")
+		add("queued", accent)
 	case queued > 1:
-		parts = append(parts, fmt.Sprintf("%d queued", queued))
-	}
-	head := ansi.Truncate(strings.Join(parts, " · "), width, "...")
-	r := row{{head, textWidth(head), style(accentColor)}}
-	if !status.Cancelling && (callStatus != "" || showCode) {
-		var text string
-		if callStatus != "" {
-			text, _, _ = strings.Cut(callStatus, "\n")
-		} else {
-			text = cmp.Or(activityLine(status, time.Now()), "thinking...")
-		}
-		text = strings.ReplaceAll(text, "\t", " ")
-		if room := width - textWidth(head) - 3; room > 0 {
-			activity := ansi.Truncate(" · "+cleanInput(text), room+3, "...")
-			r = append(r, span{activity, textWidth(activity), style(darkGray)})
-		}
+		add(fmt.Sprintf("%d queued", queued), accent)
 	}
 	return r
 }
@@ -330,19 +340,6 @@ func indicatorRow(ind core.Indicator, width int) row {
 		r = append(r, span{name, textWidth(name), style(darkGray)})
 	}
 	return r
-}
-
-// activityStep is how long each line of a multi-line command stays in the indicator.
-const activityStep = 150 * time.Millisecond
-
-// activityLine is the row of the activity to show now: a running multi-line
-// command cycles through its lines, anything else shows its first line.
-func activityLine(status core.Status, now time.Time) string {
-	lines := strings.Split(status.Activity, "\n")
-	if !status.Live || len(lines) < 2 {
-		return lines[0]
-	}
-	return lines[int(max(0, now.Sub(status.LiveSince))/activityStep)%len(lines)]
 }
 
 var promptBlock = regexp.MustCompile(`(?s)<prompt name="([A-Za-z0-9_-]+)">\n.*?\n</prompt>`)

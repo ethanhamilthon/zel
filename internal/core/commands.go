@@ -15,15 +15,15 @@ func (c *Controller) RunCommand(name string) error {
 	var cmd config.Command
 	var found bool
 	s := c.a.session()
-	if cfg := s.conf.get(); cfg != nil {
-		for _, x := range cfg.Commands {
+	lc := s.luaConfig()
+	if lc != nil {
+		for _, x := range lc.Data().Commands {
 			if x.Name == name {
 				cmd, found = x, true
 			}
 		}
 	}
-	lc := s.luaConfig()
-	if !found || lc == nil {
+	if !found {
 		return fail(CodeNotFound, "ENOENT: no command %q", name)
 	}
 	go func() {
@@ -32,7 +32,7 @@ func (c *Controller) RunCommand(name string) error {
 			switch {
 			case s.hookCtx.Err() != nil:
 			case err != nil:
-				c.emit(Event{Kind: "error", Text: fmt.Sprintf("command %s: %s", name, strings.TrimSpace(err.Error()))})
+				c.emit(Event{Kind: "command_error", Text: fmt.Sprintf("command %s: %s", name, strings.TrimSpace(err.Error()))})
 			case out != "":
 				c.printLine(out)
 			}

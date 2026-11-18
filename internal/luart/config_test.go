@@ -49,7 +49,7 @@ return {
 	// The default zel.lua of the start folder does not exist: skipped.
 	local := filepath.Join(root, "zel.lua")
 	extra := fixture(t, root, "b.lua", `
-return {systems = {c = "C"}, settings = {env = {SHARED = "b"}, show_prompt = true}, prompts = {review = "new"},
+return {systems = {c = "C"}, settings = {timeout = 17, env = {SHARED = "b"}, show_prompt = true}, prompts = {review = "new"},
  functions = {over = {description = "new", fn = function() return "new" end}},
  hooks = {{events = {"message", "idle"}, async = true, fn = function() print("async ran") end}},
  commands = {{name = "Commit", description = "commit v2", fn = function() end}, {name = "Other", key = "ctrl+o", fn = function() end}}}`)
@@ -61,7 +61,7 @@ return {systems = {c = "C"}, settings = {env = {SHARED = "b"}, show_prompt = tru
 	}
 	defer c.Close()
 	d := c.Data()
-	if d.Settings.Timeout != 12 || !d.Settings.ShowPrompt || !reflect.DeepEqual(d.Settings.Env, map[string]string{"A": "a", "B": "b", "SHARED": "b"}) {
+	if d.Settings.Timeout != 17 || !d.Settings.ShowPrompt || !reflect.DeepEqual(d.Settings.Env, map[string]string{"A": "a", "B": "b", "SHARED": "b"}) {
 		t.Fatalf("settings: %+v", d.Settings)
 	}
 	if want := []string{init, filepath.Join(root, "conf/layers/extra.lua"), extra}; !reflect.DeepEqual(d.Files, want) {
@@ -84,9 +84,18 @@ return {systems = {c = "C"}, settings = {env = {SHARED = "b"}, show_prompt = tru
 	if !reflect.DeepEqual(fns, []string{"greet:`greet(name)` - says hi@init.lua", "over:new@b.lua"}) {
 		t.Fatalf("functions %v", fns)
 	}
-	if len(d.Warnings) != 4 || !strings.Contains(d.Warnings[0], "systems.a replaces a definition from") || !strings.Contains(strings.Join(d.Warnings, "\n"), "functions.over replaces a definition from "+init) ||
+	if len(d.Warnings) != 6 || !strings.Contains(d.Warnings[0], "systems.a replaces a definition from") || !strings.Contains(strings.Join(d.Warnings, "\n"), "functions.over replaces a definition from "+init) ||
 		!strings.Contains(strings.Join(d.Warnings, "\n"), "commands.Commit replaces") {
 		t.Fatalf("warnings %q", d.Warnings)
+	}
+	for _, setting := range []string{"timeout", "env.SHARED"} {
+		want := extra + ": settings." + setting + " replaces a definition from " + init
+		if d.SettingSources[setting] != extra || !strings.Contains(strings.Join(d.Warnings, "\n"), want) {
+			t.Fatalf("missing provenance for %s: %v, %q", setting, d.SettingSources, d.Warnings)
+		}
+	}
+	if d.SettingSources["env.A"] != init {
+		t.Fatalf("non-overwritten setting lost its provenance: %v", d.SettingSources)
 	}
 	if len(d.Commands) != 2 || d.Commands[0].Name != "Commit" || d.Commands[0].Description != "commit v2" || d.Commands[0].Key != "" || d.Commands[1].Key != "ctrl+o" {
 		t.Fatalf("commands %+v", d.Commands)

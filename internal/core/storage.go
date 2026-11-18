@@ -142,11 +142,21 @@ func (s *session) Save() error {
 	defer s.saveMu.Unlock()
 	// A saved session pins the model it runs with, so a later default does not change it.
 	s.cfg.mu.Lock()
-	if s.cfg.sel.Model == "" && s.cfg.s.Model != "" {
-		s.cfg.sel = selection{s.cfg.s.Provider, s.cfg.s.Model, s.cfg.s.Effort}
-	}
+	s.cfg.sel = pinnedSelection(s.cfg.sel, s.cfg.s)
 	sel := s.cfg.sel
 	s.cfg.mu.Unlock()
+	return s.saveLocked(sel)
+}
+
+func pinnedSelection(sel selection, st Settings) selection {
+	if sel.Model == "" && st.Model != "" {
+		return selection{st.Provider, st.Model, st.Effort}
+	}
+	return sel
+}
+
+// saveLocked persists using sel. The caller holds saveMu.
+func (s *session) saveLocked(sel selection) error {
 	s.histMu.RLock()
 	saved, total := s.saved, len(s.History)
 	metaVersion := s.metaVersion
