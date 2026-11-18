@@ -4,8 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"os"
-	"path/filepath"
-	"strings"
+	"slices"
 	"time"
 )
 
@@ -15,48 +14,36 @@ var (
 	watchSettle   = 300 * time.Millisecond
 )
 
-type fileStamp struct {
-	exists bool
-	sum    [sha256.Size]byte
-}
-
-// treeStamp includes the supported snippets, including additions and removals.
-func treeStamp(path string) fileStamp {
+func filesStamp(paths []string) [sha256.Size]byte {
+	sorted := slices.Clone(paths)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
 	h := sha256.New()
-	paths := []string{path}
-	for _, dir := range []string{"hooks", "prompts", "systems"} {
-		want := ".md"
-		if dir == "hooks" {
-			want = ".yaml"
+	for _, p := range sorted {
+		if p == "" {
+			continue
 		}
-		entries, _ := os.ReadDir(filepath.Join(filepath.Dir(path), dir))
-		for _, e := range entries {
-			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") && filepath.Ext(e.Name()) == want {
-				paths = append(paths, filepath.Join(filepath.Dir(path), dir, e.Name()))
-			}
-		}
-	}
-	st := fileStamp{}
-	for _, p := range paths {
+		h.Write([]byte(p))
 		data, err := os.ReadFile(p)
-		if err == nil {
-			st.exists = true
-			h.Write([]byte(p))
+		if err != nil {
 			h.Write([]byte{0})
-			h.Write(data)
-			h.Write([]byte{0})
+			continue
 		}
+		h.Write([]byte{1})
+		h.Write(data)
+		h.Write([]byte{0})
 	}
-	copy(st.sum[:], h.Sum(nil))
-	return st
+	var sum [sha256.Size]byte
+	copy(sum[:], h.Sum(nil))
+	return sum
 }
 
-// Watch polls the file until ctx ends and calls fn once after its content
-// changed (or it appeared or disappeared) and then stayed unchanged for
-// watchSettle. Touching the file without changing its content does not count.
-func Watch(ctx context.Context, path string, fn func()) {
-	seen := treeStamp(path)
-	fired := seen // the state fn was last called for
+// Watch polls the files returned by files() until ctx ends and calls onChange
+// once after their content changed (or a file appeared or disappeared) and then
+// stayed unchanged for watchSettle.
+func Watch(ctx context.Context, files func() []string, onChange func()) {
+	seen := filesStamp(files())
+	fired := seen
 	var changed time.Time
 	t := time.NewTicker(watchInterval)
 	defer t.Stop()
@@ -66,15 +53,15 @@ func Watch(ctx context.Context, path string, fn func()) {
 			return
 		case <-t.C:
 		}
-		if st := treeStamp(path); st != seen {
+		if st := filesStamp(files()); st != seen {
 			seen, changed = st, time.Now()
 		}
 		if time.Since(changed) < watchSettle {
 			continue
 		}
-		if seen.exists != fired.exists || seen.sum != fired.sum {
+		if seen != fired {
 			fired = seen
-			fn()
+			onChange()
 		}
 	}
 }

@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -10,40 +12,41 @@ var DefaultKeys = map[string]string{
 	"info": "ctrl+i", "trace": "ctrl+t", "editor": "ctrl+e", "stop": "ctrl+d", "quit": "ctrl+q", "redraw": "ctrl+l",
 }
 
-// Key names are deliberately limited to unambiguous modified letters.
-func (p *parser) keyBindings(v any) error {
-	table, err := asTable(v, "keys")
-	if err != nil {
-		return err
+// parseKeys reads keys on top of base. Key names are deliberately limited to
+// unambiguous modified letters.
+func parseKeys(v any, base map[string]string) (map[string]string, error) {
+	table, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("keys: must be a table")
 	}
-	keys := map[string]string{}
-	for action, key := range DefaultKeys {
-		keys[action] = key
+	keys := maps.Clone(DefaultKeys)
+	if base != nil {
+		keys = maps.Clone(base)
 	}
-	for action, value := range table {
+	for _, action := range slices.Sorted(maps.Keys(table)) {
 		if _, ok := keys[action]; !ok {
-			return fmt.Errorf("keys: unknown action %q", action)
+			return nil, fmt.Errorf("keys: unknown action %q", action)
 		}
-		key, ok := value.(string)
+		key, ok := table[action].(string)
 		if !ok {
-			return fmt.Errorf("keys.%s: must be a string", action)
+			return nil, fmt.Errorf("keys.%s: must be a string", action)
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
 		if key != "" && !(len(key) == 6 && strings.HasPrefix(key, "ctrl+") && key[5] >= 'a' && key[5] <= 'z') && !(len(key) == 5 && strings.HasPrefix(key, "alt+") && key[4] >= 'a' && key[4] <= 'z') {
-			return fmt.Errorf("keys.%s: use ctrl+LETTER, alt+LETTER or an empty string", action)
+			return nil, fmt.Errorf("keys.%s: use ctrl+LETTER, alt+LETTER or an empty string", action)
 		}
 		keys[action] = key
 	}
 	used := map[string]string{}
-	for action, key := range keys {
+	for _, action := range slices.Sorted(maps.Keys(keys)) {
+		key := keys[action]
 		if key == "" {
 			continue
 		}
 		if prev, ok := used[key]; ok {
-			return fmt.Errorf("keys: %s and %s both use %s", prev, action, key)
+			return nil, fmt.Errorf("keys: %s and %s both use %s", prev, action, key)
 		}
 		used[key] = action
 	}
-	p.cfg.Settings.Keys = keys
-	return nil
+	return keys, nil
 }

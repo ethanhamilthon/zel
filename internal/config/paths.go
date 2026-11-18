@@ -78,33 +78,86 @@ func StateHome(cwd string) (string, error) {
 	return filepath.Join(home, ".zel"), nil
 }
 
-// File is the config file of a Zel home.
-func File(home string) string { return filepath.Join(home, "settings.yaml") }
+// DefaultPaths returns the config file paths for a session. When configFlag is
+// set, it replaces init.lua and local zel.lua is disabled.
+func DefaultPaths(home, cwd string, configFlag string) Paths {
+	connect := filepath.Join(home, "connect.json")
+	if configFlag != "" {
+		p, err := ResolvePath(configFlag)
+		if err != nil {
+			p = configFlag
+		}
+		if !filepath.IsAbs(p) && cwd != "" {
+			p = filepath.Join(cwd, p)
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		return Paths{Init: p, Local: "", Connect: connect}
+	}
+	local := ""
+	if cwd != "" {
+		local = filepath.Join(cwd, "zel.lua")
+	}
+	return Paths{
+		Init:    filepath.Join(home, "init.lua"),
+		Local:   local,
+		Connect: connect,
+	}
+}
 
-const defaultConfig = `# Zel settings. Edits apply by themselves. Reference: zel docs config
-# Snippets live beside this file: hooks/*.yaml, prompts/*.md, systems/*.md.
-# keys binds UI actions, e.g. menu: alt+k; see zel docs config.
-#
-# model: openai/gpt-5        # PROVIDER/MODEL
-#
-# provider:
-#   openai:
-#     base_url: https://api.openai.com/v1
-#     api_key: ${{ echo $OPENAI_API_KEY }}
+const defaultInitLua = `-- Zel configuration. Edits apply by themselves. Reference: zel docs config
+-- Project-local overrides live in ./zel.lua.
+-- Providers and active model selection live in connect.json.
+--
+-- local zel = require("zel")
+--
+-- return {
+--   settings = {
+--     compaction = 400000,
+--     timeout = 30,
+--     output = 8000,
+--     show_code = true,
+--     show_prompt = false,
+--     trace_hooks = true,
+--     editor = "nvim",
+--     -- colors = { accent = "#c3e88d", trace = { lua = "#a0a0a0" } },
+--     -- keys = { menu = "ctrl+k" },
+--     -- env = { EDITOR = "true" },
+--   },
+--   systems = {
+--     -- style = "Reply short.",
+--   },
+--   prompts = {
+--     -- review = "Review the diff of the current branch.",
+--   },
+--   hooks = {
+--     -- { events = {"idle"}, async = true, fn = function() end },
+--   },
+-- }
+return {}
 `
 
-// EnsureHome creates the Zel home with the default settings.yaml and a
-// .gitignore that keeps secrets out of git. Existing files stay.
+const defaultConnectJSON = `{
+  "provider": "",
+  "model": "",
+  "effort": "medium",
+  "providers": {}
+}
+`
+
+// EnsureHome creates the Zel home with default init.lua, connect.json and
+// .gitignore. Existing files stay untouched.
 func EnsureHome(home string) error {
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return err
 	}
-	for _, dir := range []string{"hooks", "prompts", "systems"} {
-		if err := os.MkdirAll(filepath.Join(home, dir), 0700); err != nil {
-			return err
-		}
+	files := map[string]string{
+		"init.lua":     defaultInitLua,
+		"connect.json": defaultConnectJSON,
+		".gitignore":   ".env\n",
 	}
-	for name, text := range map[string]string{"settings.yaml": defaultConfig, ".gitignore": ".env\n"} {
+	for name, text := range files {
 		f, err := os.OpenFile(filepath.Join(home, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if errors.Is(err, os.ErrExist) {
 			continue

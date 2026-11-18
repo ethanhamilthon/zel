@@ -8,13 +8,30 @@ import (
 	"strings"
 )
 
-// Describe renders the configuration for `zel config`: the file, problems,
-// every setting, and the names of env variables, instructions, hooks and
-// completions. Secrets are never shown.
-func (c *Config) Describe() string {
+func clip(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
+}
+
+// Describe renders the configuration for `zel config`: the files, problems,
+// every setting, and the names of env variables, systems, prompts, functions
+// and hooks. Secrets are never shown.
+func Describe(c *Config) string {
+	if c == nil {
+		return ""
+	}
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	p("Config: %s", DisplayPath(c.Path))
+	p("Config: %s", DisplayPath(c.Paths.Init))
+	if c.Paths.Local != "" {
+		p("Local:  %s", DisplayPath(c.Paths.Local))
+	}
+	if c.Paths.Connect != "" {
+		p("Connect: %s", DisplayPath(c.Paths.Connect))
+	}
 	for _, list := range []struct {
 		title string
 		items []string
@@ -33,10 +50,11 @@ func (c *Config) Describe() string {
 		{"model", strconv.Quote(strings.TrimPrefix(s.Provider+"/"+s.Model, "/"))},
 		{"effort", strconv.Quote(s.Effort)},
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
-		{"settings.show_bash", strconv.FormatBool(s.ShowBash)},
+		{"settings.timeout", strconv.Itoa(s.Timeout)},
+		{"settings.output", strconv.Itoa(s.Output)},
+		{"settings.show_code", strconv.FormatBool(s.ShowCode)},
+		{"settings.show_prompt", strconv.FormatBool(s.ShowPrompt)},
 		{"settings.trace_hooks", strconv.FormatBool(s.TraceHooks)},
-		{"settings.bash_timeout", strconv.Itoa(s.BashTimeout)},
-		{"settings.bash_output", strconv.Itoa(s.BashOutput)},
 		{"settings.editor", strconv.Quote(s.Editor)},
 	} {
 		p("  %-26s = %s", row[0], row[1])
@@ -64,53 +82,46 @@ func (c *Config) Describe() string {
 			if api == "" {
 				api = APIResponses
 			}
-			p("  %s: base_url=%s api=%s api_key=%s%s", name, pr.BaseURL, api, key, modes(pr.Modes, nil))
+			p("  %s: base_url=%s api=%s api_key=%s", name, pr.BaseURL, api, key)
 		}
 	}
 	if len(s.Env) > 0 {
 		p("Env: %s", strings.Join(slices.Sorted(maps.Keys(s.Env)), ", "))
 	}
 
-	if len(c.Instructions) > 0 {
+	if len(c.Systems) > 0 {
 		p("Systems:")
-		for _, in := range c.Instructions {
-			first, _, _ := strings.Cut(strings.TrimSpace(in.Text), "\n")
-			p("  %s: %s%s", in.Name, clip(first, 60), modes(in.Modes, []string{ModeMain}))
+		for _, sys := range c.Systems {
+			first, _, _ := strings.Cut(strings.TrimSpace(sys.Text), "\n")
+			p("  %s: %s", sys.Name, clip(first, 60))
+		}
+	}
+	if len(c.Prompts) > 0 {
+		names := slices.Sorted(maps.Keys(c.Prompts))
+		for i, n := range names {
+			names[i] = "#" + n
+		}
+		p("Prompts: %s", strings.Join(names, " "))
+	}
+	if len(c.Functions) > 0 {
+		p("Functions:")
+		for _, fn := range c.Functions {
+			first, _, _ := strings.Cut(strings.TrimSpace(fn.Description), "\n")
+			p("  %s: %s", fn.Name, clip(first, 60))
 		}
 	}
 	if len(c.Hooks) > 0 {
 		p("Hooks:")
-		for _, ev := range Events {
-			for _, h := range c.Hooks[ev] {
-				flags := modes(h.Modes, []string{ModeMain})
-				if h.Match != "" {
-					flags += " match=" + strconv.Quote(h.Match)
-				}
-				if h.Timeout > 0 {
-					flags += " timeout=" + h.Timeout.String()
-				}
-				if h.Async {
-					flags += " async"
-				}
-				first, _, _ := strings.Cut(strings.TrimSpace(h.Run), "\n")
-				p("  %s (%s): %s%s", h.Name, ev, clip(first, 50), flags)
+		for _, h := range c.Hooks {
+			flags := ""
+			if h.Async {
+				flags = " [async]"
 			}
+			p("  %s (%s)%s", h.Source, strings.Join(h.Events, ", "), flags)
 		}
-	}
-	if len(c.Completions) > 0 {
-		names := slices.Sorted(maps.Keys(c.Completions))
-		for i, n := range names {
-			names[i] = "#" + n + modes(c.Completions[n].Modes, []string{ModeMain})
-		}
-		p("Completions: %s", strings.Join(names, " "))
 	}
 	return b.String()
 }
 
-// modes shows the modes of an entry when they differ from the default.
-func modes(list, def []string) string {
-	if slices.Equal(list, def) {
-		return ""
-	}
-	return " [" + strings.Join(list, ", ") + "]"
-}
+// Describe renders the configuration for `zel config`.
+func (c *Config) Describe() string { return Describe(c) }
