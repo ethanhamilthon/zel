@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // PortableItem projects another model's output into ordinary conversation
@@ -30,21 +31,24 @@ func PortableItem(item json.RawMessage) json.RawMessage {
 }
 
 func portableMessage(content json.RawMessage) json.RawMessage {
-	var parts []json.RawMessage
-	if json.Unmarshal(content, &parts) == nil {
-		for i, part := range parts {
-			var p struct{ Type, Text, Refusal string }
-			_ = json.Unmarshal(part, &p)
-			switch p.Type {
-			case "input_text", "output_text":
-				parts[i] = raw(map[string]any{"type": "output_text", "text": p.Text, "annotations": []any{}})
-			case "refusal":
-				parts[i] = raw(map[string]string{"type": "refusal", "refusal": p.Refusal})
+	// Easy input accepts a string, not output_text or refusal parts.
+	var text string
+	if json.Unmarshal(content, &text) != nil {
+		var parts []struct{ Type, Text, Refusal string }
+		if json.Unmarshal(content, &parts) == nil {
+			var texts []string
+			for _, part := range parts {
+				switch part.Type {
+				case "input_text", "output_text":
+					texts = append(texts, part.Text)
+				case "refusal":
+					texts = append(texts, part.Refusal)
+				}
 			}
+			text = strings.Join(texts, "\n")
 		}
-		content = raw(parts)
 	}
-	return raw(map[string]json.RawMessage{"role": json.RawMessage(`"assistant"`), "content": content})
+	return raw(map[string]string{"role": "assistant", "content": text})
 }
 
 // Responses output is not always valid Responses input. Strict endpoints
