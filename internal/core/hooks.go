@@ -62,7 +62,12 @@ func (s *session) runHooks(ctx context.Context, event string, input map[string]a
 			break
 		}
 		started := time.Now()
-		r, err := lc.RunHook(ctx, h, event, res.input)
+		hookCtx := ctx
+		if h.Async {
+			// An async hook outlives the caller; the end of the session stops it.
+			hookCtx = s.hookCtx
+		}
+		r, err := lc.RunHook(hookCtx, h, event, res.input)
 		s.logHook(event, h, started, r, err)
 		switch {
 		case err != nil || h.Async:

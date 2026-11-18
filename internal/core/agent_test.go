@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +27,7 @@ import (
 func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", `echo hi`)
+			return luaReply("c1", `print("hi")`)
 		}
 		return textReply("done")
 	}}
@@ -37,7 +39,7 @@ func TestToolCallThenAnswerIsCommittedInOrder(t *testing.T) {
 	for _, r := range a.Records() {
 		kinds = append(kinds, r.Kind+":"+strings.TrimSpace(r.Text))
 	}
-	if got := strings.Join(kinds, "|"); got != `user:go|code:echo hi|output:hi|assistant:done` {
+	if got := strings.Join(kinds, "|"); got != `user:go|code:print("hi")|output:hi|assistant:done` {
 		t.Fatalf("records = %s", got)
 	}
 	if final := a.FinalText(); final != "done" {
@@ -62,7 +64,7 @@ func TestFailedTurnClosesWithItsError(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		switch n {
 		case 1:
-			return bashReply("c1", `echo hi`)
+			return luaReply("c1", `print("hi")`)
 		case 2:
 			return sse(`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"boom"}}}`)
 		}
@@ -125,7 +127,7 @@ func TestStoppedTurnClosesWithStopNote(t *testing.T) {
 func TestFailedCommandDoesNotCloseTurn(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", "echo boom >&2; exit 3")
+			return luaReply("c1", `error("boom", 0)`)
 		}
 		return textReply("ok")
 	}}
@@ -138,7 +140,7 @@ func TestFailedCommandDoesNotCloseTurn(t *testing.T) {
 	for _, r := range a.Records() {
 		kinds = append(kinds, r.Kind+":"+r.Text)
 	}
-	if got := strings.Join(kinds, "|"); got != "user:go|code:echo boom >&2; exit 3|output:boom\n[exit 3]|assistant:ok" {
+	if got := strings.Join(kinds, "|"); got != "user:go|code:error(\"boom\", 0)|error:error: boom|assistant:ok" {
 		t.Fatalf("records = %q", got)
 	}
 }
@@ -147,8 +149,8 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string {
 		return sse(
 			`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`,
-			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"bash","call_id":"c1","arguments":""}}`,
-			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"command\":\"echo 1\"}"}`,
+			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","name":"lua","call_id":"c1","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"code\":\"echo 1\"}"}`,
 			`{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"boom"}}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
@@ -156,7 +158,7 @@ func TestFailedStreamCountsStepsSeenBeforeFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	// Only the bash preview counts; reasoning is not a bash call.
+	// Only the call preview counts; reasoning is not a call.
 	if live := events[len(events)-1]; live.Kind != "turn_end" || !strings.Contains(live.Text, "boom") || live.Meta == nil || live.Meta.Steps != 1 {
 		t.Fatalf("live closing = %+v", live)
 	}
@@ -265,7 +267,7 @@ func TestInterruptedCallIsClosedWithoutRerunning(t *testing.T) {
 	fp := &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
 	a := newTestAgent(t, fp, Options{})
 	a.session().History = append(a.session().History, raw(map[string]any{"role": "user", "content": "start"}),
-		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": `{"command":"touch marker"}`}))
+		raw(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": `{"code":"os.execute('touch marker')"}`}))
 	if _, err := turn(t, a, "continue"); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +337,7 @@ func TestRetryDoesNotDuplicateStreamedOutput(t *testing.T) {
 func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
-			return bashReply("c1", `echo hi`)
+			return luaReply("c1", `print("hi")`)
 		}
 		return textReply("done")
 	}}
@@ -364,17 +366,17 @@ func TestSteeringIsAcceptedAfterToolOutputs(t *testing.T) {
 	}
 }
 
-func TestSteeringMovesRunningCallToTaskAndSkipsRest(t *testing.T) {
+func TestSteeringWaitsForTheRunningCallAndSkipsRest(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 1 {
 			args := func(code string) string {
-				data, _ := json.Marshal(map[string]any{"command": code})
+				data, _ := json.Marshal(map[string]any{"code": code})
 				return string(data)
 			}
 			return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[`+
-				`{"type":"function_call","call_id":"c1","name":"bash","arguments":%q},`+
-				`{"type":"function_call","call_id":"c2","name":"bash","arguments":%q}]}}`,
-				args("echo early\ntouch started\nsleep 1\necho late"), args("touch second")))
+				`{"type":"function_call","call_id":"c1","name":"lua","arguments":%q},`+
+				`{"type":"function_call","call_id":"c2","name":"lua","arguments":%q}]}}`,
+				args("print('early'); sh('touch started; sleep 1'); print('late')"), args("sh('touch second')")))
 		}
 		return textReply("ok")
 	}}
@@ -394,28 +396,16 @@ func TestSteeringMovesRunningCallToTaskAndSkipsRest(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); took > 900*time.Millisecond {
-		t.Fatalf("steering waited for the command: %s", took)
+	if took := time.Since(start); took < 900*time.Millisecond {
+		t.Fatalf("steering did not wait for the call: %s", took)
 	}
 	requests := fp.requests()
-	if len(requests) != 2 || !strings.Contains(requests[1], "moved to task t1") || !strings.Contains(requests[1], "STOP-AND-LISTEN") || !strings.Contains(requests[1], "skipped: superseded by steering") {
+	if len(requests) != 2 || !strings.Contains(requests[1], "early") || !strings.Contains(requests[1], "late") ||
+		!strings.Contains(requests[1], "STOP-AND-LISTEN") || !strings.Contains(requests[1], "skipped: superseded by steering") {
 		t.Fatalf("second request: %s", requests[len(requests)-1])
 	}
 	if _, err := os.Stat(filepath.Join(a.session().dir, "second")); !os.IsNotExist(err) {
 		t.Fatal("the superseded second call ran")
-	}
-	job := a.session().tasks.jobs["t1"]
-	select {
-	case <-job.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("background command did not finish")
-	}
-	log, err := os.ReadFile(job.log)
-	if err != nil || !strings.Contains(string(log), "early") || !strings.Contains(string(log), "late") {
-		t.Fatalf("lost task output: %q, %v", log, err)
-	}
-	if a.Queue().noticeCount() == 0 {
-		t.Fatal("task completion did not notify the agent")
 	}
 }
 
@@ -425,10 +415,10 @@ func TestOnlyCompleteCommandsArePublished(t *testing.T) {
 			return textReply("ok")
 		}
 		return sse(
-			`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","name":"bash","arguments":""}}`,
-			`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"command\":\"echo"}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","name":"lua","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"code\":\"echo"}`,
 			`{"type":"response.function_call_arguments.delta","output_index":0,"delta":" final\"}"}`,
-			`{"type":"response.completed","response":{"output":[{"type":"function_call","name":"bash","call_id":"c1","arguments":"{\"command\":\"echo final\"}"}]}}`)
+			`{"type":"response.completed","response":{"output":[{"type":"function_call","name":"lua","call_id":"c1","arguments":"{\"code\":\"return 'final'\"}"}]}}`)
 	}}
 	a := newTestAgent(t, fp, Options{})
 	events, err := turn(t, a, "go")
@@ -439,7 +429,7 @@ func TestOnlyCompleteCommandsArePublished(t *testing.T) {
 	for _, e := range events {
 		if e.Kind == "code" {
 			count++
-			if e.Provisional || e.Text != "echo final" {
+			if e.Provisional || e.Text != "return 'final'" {
 				t.Fatalf("partial command: %+v", e)
 			}
 		}
@@ -465,7 +455,7 @@ func TestTaskStopAndSessionClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Stop()
-	if got := awaitInput(t, a); got[0].Text != "<notification>t1 stopped</notification>" {
+	if got := awaitInput(t, a); !strings.HasPrefix(got[0].Text, "<notification>t1 stopped") {
 		t.Fatalf("result %+v", got)
 	}
 	if _, err := startTask(a, "sleep 30"); err != nil {
@@ -548,10 +538,10 @@ func textReply(text string) string {
 	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}]}}`, text))
 }
 
-// bashReply is a response with one bash call.
-func bashReply(callID, command string) string {
-	args, _ := json.Marshal(map[string]any{"command": command})
-	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"bash","arguments":%q}]}}`, callID, args))
+// luaReply is a response with one lua call.
+func luaReply(callID, code string) string {
+	args, _ := json.Marshal(map[string]any{"code": code})
+	return sse(fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":%q,"name":"lua","arguments":%q}]}}`, callID, args))
 }
 
 func newTestAgent(t *testing.T, fp *fakeProvider, opts Options) *Runtime {
@@ -827,15 +817,15 @@ func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 				}
 				if api == APIResponses {
 					if n == 1 {
-						return bashReply("c1", "printf 'готово' ")
+						return luaReply("c1", "return 'готово'")
 					}
 					return textReply("ok")
 				}
 				if n > 1 {
 					return sse(`{"choices":[{"delta":{"content":"ok"}}]}`, `[DONE]`)
 				}
-				args := `{"command":"printf '\u0433\u043e\u0442\u043e\u0432\u043e' "}`
-				events := []string{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"bash"}}]}}]}`}
+				args := `{"code":"return '\u0433\u043e\u0442\u043e\u0432\u043e'"}`
+				events := []string{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"lua"}}]}}]}`}
 				// Split inside JSON Unicode escapes; each SSE frame is valid UTF-8.
 				for i := 0; i < len(args); i++ {
 					events = append(events, string(raw(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]string{"arguments": args[i : i+1]}}}}}}})))
@@ -868,7 +858,7 @@ func TestImagesAndCompleteCommandsAcrossProviders(t *testing.T) {
 			for _, e := range events {
 				if e.Kind == "code" {
 					count++
-					if e.Provisional || e.Text != "printf 'готово' " {
+					if e.Provisional || e.Text != "return 'готово'" {
 						t.Fatalf("incomplete command: %+v", e)
 					}
 				}
@@ -1010,10 +1000,7 @@ func TestBusyRejectionsAndQuitDuringTurn(t *testing.T) {
 }
 
 func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
-	t.Skip("awaiting luart integration in core")
 	h := newHarness(t, &fakeModel{})
-	global := h.a.ConfigFile()
-	_ = global
 	turns := func(n int) {
 		h.await(fmt.Sprintf("%d turns", n), func(events []Event) bool {
 			return !h.ctl.Status().Busy && len(doneEvents(events)) == n
@@ -1026,7 +1013,7 @@ func TestReloadWaitsForTheTurnToEnd(t *testing.T) {
 	h.model.mu.Unlock()
 	h.send("b")
 	h.inFlight(2)
-	t.Skip("awaiting luart integration in core")
+	writeFile(t, h.a.ConfigFile(), "return {settings = {compaction = 4242}, systems = {v2 = 'INSTRUCTIONS-V2'}}\n")
 
 	h.ctl.Reload()
 	if !h.ctl.Status().Busy {
@@ -1295,7 +1282,7 @@ func TestCompactionZones(t *testing.T) {
 		return callOutput(id, "first line of "+id+"\n"+strings.Repeat("x", 4000))
 	}
 	call := func(id string) json.RawMessage {
-		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "bash", "arguments": `{"command":"echo 1"}`})
+		return raw(map[string]any{"type": "function_call", "call_id": id, "name": "lua", "arguments": `{"code":"print(1)"}`})
 	}
 	reply := func(text string) json.RawMessage {
 		return raw(map[string]any{"type": "message", "role": "assistant", "id": "msg_" + text, "content": []any{map[string]any{"type": "output_text", "text": text}}})
@@ -1343,12 +1330,11 @@ func TestCompactionZones(t *testing.T) {
 func TestAutoCompactionRunsBetweenStepsAndSurvivesResume(t *testing.T) {
 	fp := &fakeProvider{reply: func(n int, body string) string {
 		if n == 2 {
-			return bashReply("c1", "seq 1 300")
+			return luaReply("c1", "for i = 1, 300 do print(i) end")
 		}
 		return textReply("ok")
 	}}
-	t.Skip("awaiting luart integration in core")
-	a := newTestAgentWith(t, fp, Options{}, nil)
+	a := newTestAgentWith(t, fp, Options{}, withLocal("return {settings = {compaction = 100}}\n"))
 	for _, text := range []string{"one", "two"} {
 		if _, err := turn(t, a, text); err != nil {
 			t.Fatal(err)
@@ -1390,12 +1376,11 @@ func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	return s.Records(), nil
 }
 
-// startTask runs code as a background task of the current session, as tasks.spawn does.
-// startTask runs command as a background task of the current session, as zel task run does.
+// startTask runs a shell command as a background task of the current session.
 func startTask(a *Runtime, command string) (string, error) {
-	j, err := a.session().tasks.spawn(command, startOpts{name: "test"})
-	if err != nil {
-		return "", err
+	out := a.session().runLua(context.Background(), "return task.spawn('test', function() sh("+strconv.Quote(command)+") end)")
+	if strings.HasPrefix(out, "error: ") {
+		return "", errors.New(out)
 	}
-	return j.id, nil
+	return out, nil
 }

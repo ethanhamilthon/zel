@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +21,10 @@ func testApp(t *testing.T) *app {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	_ = config.DefaultPaths(home, dir, "")
+	init := "return {settings = {editor = 'perl -pi -e s/draft/EDITED/'}, prompts = {plan = 'expanded'}}\n"
+	if err := os.WriteFile(config.DefaultPaths(home, dir, "").Init, []byte(init), 0600); err != nil {
+		t.Fatal(err)
+	}
 	a, err := core.New(dir, core.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +86,7 @@ func TestEnterPathTokenAndTabDirectory(t *testing.T) {
 	}
 }
 
-func TestBashCountAndCompletionPreview(t *testing.T) {
+func TestLuaCallCountAndCompletionPreview(t *testing.T) {
 	m := testApp(t)
 	for i := 0; i < 15; i++ {
 		m.records = append(m.records, core.Record{Kind: "code", Text: "true"}, core.Record{Kind: "output", Text: "ok"})
@@ -91,7 +95,11 @@ func TestBashCountAndCompletionPreview(t *testing.T) {
 	if n := m.turnSteps(); n != 15 {
 		t.Fatalf("lua calls = %d", n)
 	}
-	t.Skip("completion preview awaiting luart integration in core")
+	m.input.set("#pl")
+	m.updateCompletions()
+	if len(m.completions.items) != 1 || m.completions.items[0].detail == "" {
+		t.Fatal("no preview")
+	}
 }
 
 func TestRussianAndConfiguredShortcuts(t *testing.T) {
@@ -157,7 +165,6 @@ func TestChatStateAndChoicePersistence(t *testing.T) {
 	}
 }
 func TestCompletionAndStaleAsyncResults(t *testing.T) {
-	t.Skip("awaiting luart integration in core")
 	m := testApp(t)
 	m.input.set("#pl")
 	m.updateCompletions()
@@ -651,7 +658,6 @@ func rowText(r row) string {
 }
 
 func TestCtrlEEditsTheInputInTheEditor(t *testing.T) {
-	t.Skip("awaiting luart integration in core")
 	m := testApp(t)
 	m.input.set("my draft")
 	m.key(tcell.NewEventKey(tcell.KeyCtrlE, 0, 0))
