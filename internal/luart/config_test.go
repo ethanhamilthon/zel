@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	lua "github.com/yuin/gopher-lua"
 	"zel/internal/config"
 )
 
@@ -159,6 +160,10 @@ func TestConfigErrors(t *testing.T) {
 		"bad function":  {`return {functions = {f = {description = "d", fn = function() end, x = 1}}}`, `unknown key "x"`},
 		"go function":   {`return {functions = {f = {description = "d", fn = print}}}`, "fn must be a Lua function"},
 		"builtin":       {`return {functions = {string = {description = "d", fn = function() end}}}`, "collides with a built-in"},
+		"builtin os":    {`return {functions = {os = {description = "d", fn = function() end}}}`, "collides with a built-in"},
+		"builtin io":    {`return {functions = {io = {description = "d", fn = function() end}}}`, "collides with a built-in"},
+		"builtin print": {`return {functions = {print = {description = "d", fn = function() end}}}`, "collides with a built-in"},
+		"builtin _G":    {`return {functions = {_G = {description = "d", fn = function() end}}}`, "collides with a built-in"},
 		"bad key":       {`return {commands = {{name = "A", key = "f5", fn = function() end}}}`, "ctrl+LETTER"},
 		"key clash":     {`return {commands = {{name = "A", key = "ctrl+k", fn = function() end}}}`, "already used by keys.menu"},
 		"command clash": {`return {commands = {{name = "A", key = "alt+a", fn = function() end}, {name = "B", key = "alt+a", fn = function() end}}}`, "already used by commands.A"},
@@ -243,5 +248,33 @@ return {
 	out, err := c.RunCommand(t.Context(), c.Data().Commands[0])
 	if err != nil || out != "cmd-ok:"+want {
 		t.Fatalf("command: %q %v", out, err)
+	}
+}
+
+func TestCopyFunctionsPreservesPrivateBuiltinsAndConfigVM(t *testing.T) {
+	env := newEnv(t)
+	init := fixture(t, env.info.Root, "init.lua", `return {
+  functions = {
+    tool_fn = { description = "tool", fn = function() return "tool" end },
+  },
+  hooks = {
+    { events = {"message"}, fn = function() return type(tool_fn) end },
+  },
+}`)
+	c := loadFixture(t, env, init)
+
+	// Config VM hooks behavior is unchanged: functions are not injected as globals in Config VM.
+	res, err := c.RunHook(t.Context(), c.Data().Hooks[0], "message", map[string]any{})
+	if err != nil || !res.HasText || res.Text != "nil" {
+		t.Fatalf("hook should not see functions as globals: %+v %v", res, err)
+	}
+
+	// Defense-in-depth: copyFunctions refuses to override a private built-in on the target VM.
+	v := newVM(env, "")
+	defer v.close()
+	v.initREPL()
+	v.L.SetGlobal("tool_fn", v.L.NewFunction(func(L *lua.LState) int { return 0 }))
+	if err := c.copyFunctions(t.Context(), v); err == nil || !strings.Contains(err.Error(), "collides with a built-in") {
+		t.Fatalf("expected built-in collision error, got %v", err)
 	}
 }

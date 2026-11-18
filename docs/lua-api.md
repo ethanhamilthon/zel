@@ -103,11 +103,11 @@ session() -> table            -- `zel session --json`
 rename(name)                  -- `zel rename`
 ```
 
-Custom functions in `functions` are installed as globals in the session VM's
-REPL environment while keeping their private standard library environment (`io`,
-`os`, etc.). When the session VM starts, all `fn` values from `functions` are
-copied from the config VM in one pass, so shared upvalues (such as `defaults`'
-`cwd`) stay shared.
+Custom functions in `functions` are installed as globals in both the session
+VM's REPL environment and their private global environment (so they can call
+sibling tools while keeping `io`, `os`, etc. out of the REPL). When the session
+VM starts, all `fn` values from `functions` are copied from the config VM in one
+pass, so shared upvalues (such as `defaults`' `cwd`) stay shared.
 
 ### The `zel` CLI
 
