@@ -98,8 +98,10 @@ environment, `-s ID` picks another live session. A `zel -p` child becomes a
 child of that session (headless, depth + 1, at most 3) and reports
 `child.start`/`child.end` for the parent's lifecycle/idle tracking, and
 `child.usage` (model, context, spend) after each model response for the parent's
-Info page. Children are separate processes in the process group of the `zel exec`
-that started them, so a killed call takes them down.
+Info page. `zel exec` supervises the foreground command in a separate process
+group. If the Lua call kills the outer `zel exec`, a lifeline pipe closes and
+the supervisor kills the foreground command's group. Once the foreground
+command exits normally, intentional background jobs can outlive the call.
 
 `zel status` sets the working line text of the running call; `zel status new`
 creates an indicator line with its own timer (`Controller.Indicators`).
