@@ -10,20 +10,18 @@ or `zel config`.
 | Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
 | `entities` | Shared input, images, tool calls, records, usage, model choices and domain events | None |
-| `config` | Config data: settings (parsed from the Lua `settings` table), `connect.json` with `$VAR` expansion and the write of `provider`/`model`/`effort`, paths, the default home files, file watching, `zel config` text | None |
+| `config` | Config data: settings (parsed from the Lua `settings` table), `connect.json` with `$VAR` expansion and the write of `provider`/`model`/`effort`, paths, the default home files (`EnsureHome`), the config snapshot types, `zel config` text | `defaults` |
 | `provider` | Typed requests, Responses/Chat Completions adapters, model catalog, normalized streaming, structured errors and retry | `entities` |
-| `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list, `tasks.jsonl`, task logs and `choices.jsonl` (answered questions) | None |
+| `store` | Session folders: append-only `session.jsonl`, `meta.json` for the list and `choices.jsonl` (answered questions) | None |
 | `shell` | `bash -c` in a process group, cancellation, bounded output and image capture | `entities` |
 | `ipc` | The session socket of `zel -p` children: one JSON request and response per connection, token check, cancellation when the client hangs up | None |
-| `edit` | Exact-text edits, all or none | None |
-| `luart` | The Lua runtime (gopher-lua): the agent VM, task VMs, the config VM that runs `init.lua`/`zel.lua` and their loads, the API (`sh`, files, `grep`, `task.*`, `choice`, ...), config functions, hook calls and the lua tool text | `config`, `shell`, `edit`, `docs` |
-| `core` | Runtime assembly, sessions, controller, queues, the model/tool loop, the lua tool host, tasks, hooks, prompts, choice queue, zel -p children, hot reload, persistence and application events | Backend packages |
-| `cli` | Argument parsing, headless runs, `update`, `docs`, `models`, `config` | `core`, `config` |
-| `tui` | Display state, composer, menus, input events and rendering | `core` only |
+| `defaults` | The embedded Lua defaults (`defaults/*.lua`: `sh`, `read`, `write`, `edit`, `grep`, ...) and the default `init.lua` | None |
+| `luart` | The Lua runtime (gopher-lua): the config VM that runs the config files and their loads, the session VM (Lua standard library plus the config `functions`, copied in one pass so shared upvalues stay shared), hook and command calls, the result rule of a lua call | `config`, `shell` |
+| `core` | Runtime assembly, sessions, controller, queues, the model/tool loop, the lua tool host, hooks, commands, the prompt, the session socket, indicators, print lines, choice queue, zel -p children, reload, persistence and application events | Backend packages |
+| `cli` | Argument parsing, headless runs, `update`, `docs`, `models`, `config` | `core`, `config`, `defaults` |
+| `tui` | Display state, composer, menus, input events and rendering | `core`, `config` |
 
-The frontend imports only `core`: it uses the controller for runtime operations,
-and `core` exposes the shared domain and configuration types it needs as aliases,
-not copies. Backend packages never point back to `core`. A production
+The frontend imports `core` and the data types of `config`: it uses the controller for runtime operations. Backend packages never point back to `core`. A production
 import-boundary test (`docs/docs_test.go`) protects this dependency graph.
 
 ## Ownership and events
@@ -54,51 +52,64 @@ stays silent for five minutes ends as a retryable failure.
 
 ## Config
 
-A session reads three files: `~/.config/zel/init.lua` (or the `--config`
-file; a `zel -p` child takes its parent's from `ZEL_CONFIG`), `zel.lua` of the
-folder it started in (not with `--config`), and `~/.config/zel/connect.json`.
+A session reads the config files in order: `~/.config/zel/init.lua` (or
+`$ZEL_HOME/init.lua`), then `zel.lua` of the folder it started in, then every
+`--config FILE` (`--no-default-configs` drops the first two; a `zel -p` child
+gets the explicit files in `ZEL_CONFIGS` and the flag as
+`ZEL_NO_DEFAULT_CONFIGS`), and `connect.json` next to `init.lua`.
 `config.LoadConnect` gives the providers and the selected model;
 `luart.LoadConfig` runs the Lua files and their `loads` in a new config VM,
-merges what they return (settings deep, later names replace earlier ones,
-hooks concatenated) and keeps the VM for the snapshot's functions and hooks.
-The snapshot is a `config.Config`: settings, systems, prompts, hooks by
-reference, functions and the files read. The only write is the model
-selection, `config.SaveSelection`, which rewrites `provider`, `model` and
-`effort` of connect.json and keeps the rest.
-In the main session `config.Watch` hashes the files of the snapshot; a change
-goes through the controller, which applies it between turns: a new config VM,
-and a fresh agent VM with its functions. A config with errors keeps the old
-snapshot. `config.EnsureHome` creates `~/.config/zel` with a commented
-`init.lua`, a `connect.json` skeleton and a `.gitignore`; sessions and runtime
-sockets live in `~/.zel/sessions/`. No migration from older layouts is attempted.
+merges what they return (settings deep, later names replace earlier ones with a
+warning, hooks concatenated in file order) and keeps the VM for the functions,
+hooks and commands. The snapshot is a `config.Config`: settings, systems,
+prompts, hooks and commands by reference, functions, the files read, and the
+source file of each entry. The only write is the model selection,
+`config.SaveSelection`, which rewrites `provider`, `model` and `effort` of
+connect.json and keeps the rest.
+
+Nothing watches the files. The config loads at start, on a new session, on
+resume and on Ctrl+R in the Config screen; the controller applies a reload
+between turns: a new config VM, a fresh session VM and a rebuilt system prompt.
+A config with errors keeps the old snapshot and the error shows in Config.
+`config.EnsureHome` creates `~/.config/zel` with `init.lua`, `defaults/` (from
+`internal/defaults`), a `connect.json` skeleton and a `.gitignore`; existing
+files are never touched, `zel defaults --reset` rewrites `defaults/`. Sessions
+and runtime sockets live in `~/.zel/sessions/`.
 
 ## The lua tool and the socket
 
-The model sees one tool, `lua`, whose description is built by
-`luart.ToolDescription` for the session mode, with the timeout and the config
-functions. `provider` normalizes its transport (free-form custom tool on
-Responses, JSON `{code}` elsewhere) so history always holds a function call
-with `{"code": ...}`. `core.runLua` runs it in the session's agent VM with
-`lua_before`/`lua_after` hooks around it and the `settings.timeout` and
-`settings.output` limits; `core.luaEnv` is the host the runtime calls for the
-session cwd, environment, images, choice, rename, models and tasks. The agent
-VM keeps its globals between calls and is replaced after a timeout or a config
-reload. Tasks are Lua functions copied with their upvalues into fresh VMs;
-`core.tasks` owns their logs, states and notifications.
+The model sees one tool, `lua`, described by `internal/core/prompt/lua_tool.md`
+with the timeout. The system prompt is `internal/core/prompt/zel.md`, then one
+line per config function, then the config `systems`; it is stored in the history
+and rebuilt on a new session, on resume and on reload. `provider` normalizes the
+tool transport (free-form custom tool on Responses, JSON `{code}` elsewhere) so
+history always holds a function call with `{"code": ...}`. `core.runLua` runs it
+in the session VM with `lua_before`/`lua_after` hooks around it and the
+`settings.timeout` and `settings.output` limits. The VM has no host API: files,
+`sh` and the rest are Lua in `defaults/`, reaching Zel through the `zel` CLI.
+It keeps its globals between calls and is replaced after a timeout or a reload.
 
 Every session (main or headless) listens on `~/.zel/sessions/run/<hash>.sock`
 (the hash is of the session ID; a very long home falls back to the temp folder)
-with a random token. Only `zel -p` children use it: one started by `sh()` finds
-the socket in its environment, becomes a child (headless, depth + 1, at most 3)
-and reports `child.start`/`child.end` for the parent's lifecycle/idle
-tracking, and `child.usage` (model, context, spend) after each model response
-for the parent's Info page. Children are separate processes in the process
-group of the `sh()` that started them, so a killed call or task takes them down.
+with a random token, also written to a 0600 file in the session folder. The
+`zel` subcommands `steer`, `status`, `choice`, `print`, `session` and `rename`
+use it (`zel exec` does not); a command run inside a call finds the socket in its
+environment, `-s ID` picks another live session. A `zel -p` child becomes a
+child of that session (headless, depth + 1, at most 3) and reports
+`child.start`/`child.end` for the parent's lifecycle/idle tracking, and
+`child.usage` (model, context, spend) after each model response for the parent's
+Info page. Children are separate processes in the process group of the `zel exec`
+that started them, so a killed call takes them down.
+
+`zel status` sets the working line text of the running call; `zel status new`
+creates an indicator line with its own timer (`Controller.Indicators`).
+`zel print` and the output of a config command are `print` records: kept in the
+session history, shown in the chat, never sent to the model.
 
 Hooks are Lua functions of the config: sync ones run in the config VM, async
 ones in a fresh VM with copies of their upvalues. A returned string is the
-event's text, `false, reason` blocks the blockable events. The system prompt
-is stored in the history and rebuilt only when the systems change.
+event's text, `false, reason` blocks the blockable events. Commands are config
+functions run asynchronously from the menu or their key.
 
 ## History, images, and rendering
 
@@ -106,7 +117,7 @@ History items are immutable after append. The session caches their display
 records, type/role and token estimates; compaction caches transformed zones.
 Saves prepare only dirty suffixes and leave unchanged metadata files alone.
 
-Images exist only in memory: `read()` of an image makes a preview, the session sends it
+Images exist only in memory: `read()` of an image runs `zel steer --file`, the session sends it
 with the next request, and `withoutImages` turns it into a text placeholder in
 the saved history. Nothing is written to an attachments folder.
 

@@ -62,14 +62,14 @@ func (input Input) Display() string {
 }
 
 type TraceEntry struct {
-	Kind     string // system, user, agent, thinking, bash, output, error, notice, hook, task, event
-	Text     string // a bash entry: the command
-	Output   string // a bash entry: what the call returned, empty while it runs
+	Kind     string // system, user, agent, thinking, lua, output, error, notice, hook, print, event
+	Text     string // a lua entry: the code
+	Output   string // a lua entry: what the call returned, empty while it runs
 	Status   string // a failure: "exit N", "timeout", "cancelled" or "error"; empty otherwise
 	At       time.Time
 	Turn     int           // the turn the entry belongs to, 1 for the first message; 0 before it
-	Duration time.Duration // a bash or hook run
-	Request  *TraceRequest // the model response a thinking, agent or bash entry came from
+	Duration time.Duration // a lua or hook run
+	Request  *TraceRequest // the model response a thinking, agent or lua entry came from
 	First    bool          // the first entry of its Request
 }
 
@@ -213,11 +213,9 @@ func RecordsForItem(item json.RawMessage) []Record {
 }
 
 // IsNotice reports whether a user-role message is a notification rather
-// than something the user typed. The other prefixes come from sessions saved
-// before 0.5.2.
+// than something the user typed.
 func IsNotice(text string) bool {
-	return strings.HasPrefix(text, "<notification>") || strings.HasPrefix(text, "<task-result ") ||
-		strings.HasPrefix(text, "<agent-result ") || strings.HasPrefix(text, "<view>")
+	return strings.HasPrefix(text, "<notification>")
 }
 
 type ToolCall struct {

@@ -29,10 +29,10 @@ import (
 )
 
 // noSession clears what a surrounding zel session puts in the environment, so
-// a test run from an agent's bash is not taken for a child of that session.
+// a test run from an agent's lua call is not taken for a child of that session.
 func noSession(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"ZEL_SOCKET", "ZEL_TOKEN", "ZEL_SESSION_ID", "ZEL_TASK", "ZEL_CONFIG", "ZEL_MODE",
+	for _, k := range []string{"ZEL_SOCKET", "ZEL_TOKEN", "ZEL_SESSION_ID", "ZEL_CONFIGS", "ZEL_NO_DEFAULT_CONFIGS", "ZEL_MODE",
 		"ZEL_DEPTH", "ZEL_PARENT", "ZEL_PROVIDER", "ZEL_MODEL", "ZEL_EFFORT", "ZEL_FREEFORM"} {
 		t.Setenv(k, "")
 	}

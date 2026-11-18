@@ -50,7 +50,6 @@ type Session struct {
 	Provider, Model, Effort   string
 	Parent, Mode              string
 	Depth                     int
-	BashCwd                   string // zel cd; empty = the session folder
 	Created, Updated          time.Time
 }
 
@@ -74,7 +73,6 @@ type line struct {
 	Model    string          `json:"model,omitempty"`
 	Effort   string          `json:"effort,omitempty"`
 	Title    *string         `json:"title,omitempty"`
-	Dir      *string         `json:"dir,omitempty"` // cd lines: the bash folder
 	Seq      *int            `json:"seq,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`
 	Meta     json.RawMessage `json:"meta,omitempty"`
@@ -127,10 +125,6 @@ func (s *Store) Load(project, id string) (Session, []Item, error) {
 				case "title":
 					if l.Title != nil {
 						v.Title = *l.Title
-					}
-				case "cd":
-					if l.Dir != nil {
-						v.BashCwd = *l.Dir
 					}
 				case "model":
 					v.Provider, v.Model, v.Effort = l.Provider, l.Model, l.Effort
@@ -204,10 +198,6 @@ func (s *Store) Append(v Session, items []Item, saved, total int) error {
 	if v.Title != prev.Title {
 		title := v.Title
 		_ = enc.Encode(line{T: "title", Title: &title})
-	}
-	if v.BashCwd != prev.BashCwd {
-		dir := v.BashCwd
-		_ = enc.Encode(line{T: "cd", Dir: &dir})
 	}
 	if v.Model != "" && (v.Provider != prev.Provider || v.Model != prev.Model || v.Effort != prev.Effort) {
 		_ = enc.Encode(line{T: "model", Provider: v.Provider, Model: v.Model, Effort: v.Effort})

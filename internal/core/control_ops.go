@@ -205,7 +205,7 @@ func (c *Controller) Trace() []TraceEntry {
 	var history []TraceEntry
 	var slow func() []TraceEntry
 	history, slow = c.a.session().traceSources()
-	// The task rows and the events log are read without the controller lock.
+	// The events log is read without the controller lock.
 	return mergeTrace(history, slow())
 }
 

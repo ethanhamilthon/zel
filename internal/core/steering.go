@@ -51,8 +51,8 @@ func inputEvent(input Input) TurnEvent {
 }
 
 // notification is the one format of everything that wakes the agent besides
-// the user: finished tasks and agents, hook output and view() images. The
-// text stays short ("t1 finished"); the agent fetches details itself.
+// the user: finished agents, hook output, answers of choices and `zel steer`
+// text. The text stays short; the agent fetches details itself.
 func notification(text string) Input {
 	return Input{Text: "<notification>" + strings.TrimSpace(text) + "</notification>", Notice: true}
 }
@@ -107,8 +107,7 @@ const maxQueued = 64
 
 func (a *Runtime) Queue() *Steering { return a.session().queue }
 
-// PushNotice is reserved for completions of admitted tasks; admission bounds
-// pending notices plus running tasks, so final results never need to be dropped.
+// PushNotice queues a notification, bypassing the limit of user inputs.
 func (s *Steering) PushNotice(input Input) {
 	input.SentAt = time.Now()
 	s.mu.Lock()

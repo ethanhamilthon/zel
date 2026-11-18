@@ -49,7 +49,7 @@ func TestContextProjectionInvalidation(t *testing.T) {
 	}
 }
 
-// The trace pairs a bash call with its output, numbers the turns and the model
+// The trace pairs a lua call with its output, numbers the turns and the model
 // requests, reads failures and puts logged events in the turn they happened in.
 func TestTraceEntries(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -172,7 +172,7 @@ func withLocal(text string) func(home, dir string) {
 	}
 }
 
-// withSh is withLocal with sh() of the (stub) defaults and body as more keys of the config table.
+// withSh is withLocal with sh() of the defaults and body as more keys of the config table.
 func withSh(body string) func(home, dir string) {
 	return withLocal("local d = require('defaults')\nreturn {functions = {sh = d.sh}, " + body + "}\n")
 }
@@ -184,7 +184,7 @@ func sock(t *testing.T, a *Runtime, op string, args any) ipc.Response {
 	return sockAs(t, s.socketPath(), s.token, op, args)
 }
 
-// sockIn is sock from the folder cwd, like a zel command run by a bash call there.
+// sockIn is sock from the folder cwd, like a zel command run by a lua call there.
 func sockIn(t *testing.T, a *Runtime, cwd, op string, args any) ipc.Response {
 	t.Helper()
 	s := a.session()
@@ -848,7 +848,7 @@ func TestChildrenAreTrackedHiddenAndResumedOnlyByTheirParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A zel -p run by the parent's bash finds it through the environment.
+	// A zel -p run by the parent's lua call finds it through the environment.
 	t.Setenv("ZEL_SOCKET", ps.socketPath())
 	t.Setenv("ZEL_TOKEN", ps.token)
 	t.Setenv("ZEL_SESSION_ID", ps.id)

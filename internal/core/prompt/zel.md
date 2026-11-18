@@ -9,7 +9,7 @@ The standard library (`io`, `os`, `string`, ...) is open. There is no sandbox: c
 Your Lua code talks to Zel by running `zel` commands, e.g. with `io.popen` or `sh` if you have it.
 They act on the current session (`$ZEL_SESSION_ID`); `-s ID` picks another one.
 
-- `zel exec [--timeout S] [--cwd DIR] -- CMD...` - runs a command in its own process group, prints JSON `{code, out, timed_out, ms}`; `out` is stdout+stderr, stdin is passed through.
+- `zel exec [--timeout S] [--cwd DIR] [--env K=V]... -- CMD...` - runs a command in its own process group, prints JSON `{code, out, timed_out, ms}`; `out` is stdout+stderr, stdin is passed through.
 - `zel status TEXT` - the text of the working line: what you are doing right now.
 - `zel status new TEXT` - a separate indicator with its own timer, prints its ID. `zel status -i ID TEXT` updates it, `zel status -i ID --done` removes it. It stays until `--done`.
 - `zel steer [--file PATH]... TEXT` - sends text (and images with `--file`) to the session. When the session is idle, it starts a new turn. Use it to report the end of background work and to look at an image.
@@ -23,7 +23,7 @@ They act on the current session (`$ZEL_SESSION_ID`); `-s ID` picks another one.
 
 ## Background work
 
-The VM has no background tasks. Start a shell command with `&` and redirect its output: it lives on after the call ends.
+The VM has no job control. Start a shell command with `&` and redirect its output: it lives on after the call ends.
 Show it with `zel status new` and report its end with `zel steer`:
 
 ```sh

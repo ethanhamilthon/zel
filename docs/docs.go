@@ -66,7 +66,7 @@ func Topics() []Topic {
 	return append(list, examples)
 }
 
-// Index is what docs() returns without a topic.
+// Index is what `zel docs` prints without a topic.
 func Index() string {
 	var b strings.Builder
 	b.WriteString("zel docs. Run zel docs TOPIC for one of:\n")

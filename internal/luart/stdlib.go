@@ -76,7 +76,7 @@ func (p *procs) close() {
 	p.killAll()
 }
 
-// start launches script in bash. in/out select the pipes: a pipe end is
+// start launches script in the shell. in/out select the pipes: a pipe end is
 // returned for each requested direction; the others are /dev/null.
 func (v *vm) start(script string, wantIn, wantOut bool) (*child, io.WriteCloser, io.ReadCloser, error) {
 	p := v.procs

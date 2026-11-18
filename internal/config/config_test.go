@@ -71,7 +71,7 @@ func TestParseSettingsErrors(t *testing.T) {
 		{"zero timeout", map[string]any{"timeout": float64(0)}},
 		{"small output", map[string]any{"output": float64(500)}},
 		{"bad color", map[string]any{"colors": map[string]any{"accent": "red"}}},
-		{"old trace.bash", map[string]any{"colors": map[string]any{"trace": map[string]any{"bash": "#112233"}}}},
+		{"unknown trace color", map[string]any{"colors": map[string]any{"trace": map[string]any{"nope": "#112233"}}}},
 		{"duplicate key", map[string]any{"keys": map[string]any{"menu": "ctrl+m"}}},
 		{"bad env name", map[string]any{"env": map[string]any{"1BAD": "x"}}},
 	}

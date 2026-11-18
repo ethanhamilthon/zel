@@ -68,7 +68,7 @@ func (s *session) reapChildrenLocked() {
 		if !run.Ended.IsZero() {
 			continue
 		}
-		// A child killed with its lua call or task never says child.end.
+		// A child killed with its lua call never says child.end.
 		if pid := s.childPIDs[id]; pid > 0 && syscall.Kill(pid, 0) == syscall.ESRCH {
 			run.Ended = time.Now()
 			s.children[id] = run

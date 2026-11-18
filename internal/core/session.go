@@ -145,8 +145,8 @@ func (a *Runtime) changeSession(id string) error {
 	return nil
 }
 
-// baseEnv is the environment of what sh() runs in the session: agent calls,
-// tasks, hooks and the config. API keys are never exported.
+// baseEnv is the environment of what the session runs: lua calls,
+// hooks, commands and the config. API keys are never exported.
 func (s *session) baseEnv() map[string]string {
 	env := map[string]string{
 		"ZEL_SESSION_ID": s.id,

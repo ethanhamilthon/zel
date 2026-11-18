@@ -22,7 +22,7 @@ func applyTheme(c core.Colors) {
 	notice := color("trace.notice")
 	traceColors = map[string]lipgloss.Color{
 		"system": color("trace.system"), "user": color("trace.user"), "assistant": color("trace.agent"), "agent": color("trace.agent"),
-		"lua": color("trace.lua"), "notice": notice, "compaction": notice, "task": notice,
+		"lua": color("trace.lua"), "notice": notice, "compaction": notice,
 		"output": color("trace.output"), "error": color("trace.error"),
 	}
 	a := accentColor

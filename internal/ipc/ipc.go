@@ -22,12 +22,11 @@ import (
 // Version of the request format.
 const Version = 1
 
-// Request is one call. Task is ZEL_TASK of the caller, empty outside a task.
+// Request is one call.
 type Request struct {
 	V     int             `json:"v"`
 	Token string          `json:"token"`
 	Op    string          `json:"op"`
-	Task  string          `json:"task,omitempty"`
 	Cwd   string          `json:"cwd,omitempty"`
 	Args  json.RawMessage `json:"args,omitempty"`
 }
@@ -134,7 +133,7 @@ func (s *Server) serve(conn net.Conn) {
 		writeResponse(conn, Response{Code: 2, Error: fmt.Sprintf("EINVAL: request version %d, this zel speaks %d", req.V, Version)})
 		return
 	}
-	// The call is cancelled when the client hangs up (its bash call was killed).
+	// The call is cancelled when the client hangs up (its call was killed).
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	go func() {
