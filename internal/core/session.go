@@ -136,6 +136,7 @@ func (a *Runtime) changeSession(id string) error {
 	a.mu.Lock()
 	a.cur = next
 	a.mu.Unlock()
+	a.indicators.clearCall()
 	if id == "" {
 		next.sessionCreated()
 	} else {

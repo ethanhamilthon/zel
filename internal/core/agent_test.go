@@ -1465,7 +1465,7 @@ func storedRecords(t *testing.T, a *Runtime) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &session{acts: &activities{}}
+	s := &session{}
 	s.readItems(items)
 	return s.Records(), nil
 }

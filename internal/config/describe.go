@@ -63,7 +63,6 @@ func Describe(c *Config) string {
 		{"settings.compaction", strconv.Itoa(s.CompactionThreshold)},
 		{"settings.timeout", strconv.Itoa(s.Timeout)},
 		{"settings.output", strconv.Itoa(s.Output)},
-		{"settings.show_code", strconv.FormatBool(s.ShowCode)},
 		{"settings.show_prompt", strconv.FormatBool(s.ShowPrompt)},
 		{"settings.trace_hooks", strconv.FormatBool(s.TraceHooks)},
 		{"settings.editor", strconv.Quote(s.Editor)},

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.1
+
+- The working line never shows the code of a call any more. It shows the
+  elapsed time, the last `zel status` text, the call count, and queued input.
+- The `zel status` text stays until the next `zel status` arrives (also in the
+  next calls and turns) or a new/resumed session starts. A session without any
+  status shows no status text.
+- `settings.show_code` is removed. Configs that still set it load as before;
+  the value is ignored. It no longer appears in the `Config` screen.
+
 ## 0.12.0
 
 Breaking release. Defaults move from Go host functions to plain Lua.

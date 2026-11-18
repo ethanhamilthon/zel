@@ -103,7 +103,8 @@ group. If the Lua call kills the outer `zel exec`, a lifeline pipe closes and
 the supervisor kills the foreground command's group. Once the foreground
 command exits normally, intentional background jobs can outlive the call.
 
-`zel status` sets the working line text of the running call; `zel status new`
+`zel status` sets the working line text (kept until the next status or a new
+session; the line never shows code); `zel status new`
 creates an indicator line with its own timer (`Controller.Indicators`).
 `zel print` and the output of a config command are `print` records: kept in the
 session history, shown in the chat, never sent to the model.

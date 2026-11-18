@@ -63,8 +63,6 @@ func (c *Controller) Status() (s Status) {
 			s.Busy, s.Cancelling = true, c.active.cancelled
 			s.Started = c.active.started
 			s.Queued = c.a.Queue().Pending()
-			live, since := c.a.LiveActivity()
-			s.Activity, s.Live, s.LiveSince = cmp.Or(live, c.a.LastActivity()), live != "", since
 		}
 	})
 	return s
@@ -96,11 +94,11 @@ func (c *Controller) Sessions() (sessions []SessionSummary, err error) {
 }
 
 // Appearance is an immutable, map-free snapshot for the hot UI path.
-func (c *Controller) Appearance() (config.Colors, bool) {
+func (c *Controller) Appearance() config.Colors {
 	s := c.a.session()
 	s.cfg.mu.Lock()
 	defer s.cfg.mu.Unlock()
-	return s.cfg.s.Colors, s.cfg.s.ShowCode
+	return s.cfg.s.Colors
 }
 
 // ShowPrompt reports whether the chat shows the full text of #prompt blocks.
@@ -165,7 +163,6 @@ func (c *Controller) closeLocked() error {
 
 func (c *Controller) beginLocked() *operation {
 	ctx, cancel := context.WithCancel(context.Background())
-	c.a.ResetActivity()
 	c.active = &operation{ctx: ctx, cancel: cancel, started: time.Now()}
 	c.idle = make(chan struct{})
 	return c.active

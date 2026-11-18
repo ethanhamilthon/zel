@@ -112,7 +112,6 @@ type session struct {
 	choices      []store.Choice // answered questions shown in the chat, by history position
 	ask          *chooser       // the questions of choice() the UI shows
 	depth        int            // zel -p nesting depth: 0 for a session you started
-	acts         *activities    // foreground host operations in progress
 	queue        *Steering
 	slots        *imageSlots
 	life         *lifecycle
@@ -214,7 +213,6 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		slots:   &imageSlots{},
 		queue:   &Steering{wake: wake},
 		conf:    &confHolder{notice: notice},
-		acts:    &activities{},
 
 		printWake:  &a.printWake,
 		indicators: &a.indicators,

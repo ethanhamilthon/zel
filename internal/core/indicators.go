@@ -35,18 +35,26 @@ func (c *Controller) CallStatus() string {
 	return state.callText
 }
 
+// beginCallStatus marks a Lua call as running, so `zel status` is accepted.
+// The status text outlives the call: it stays until the next status arrives
+// or the session changes.
 func (s *session) beginCallStatus() func() {
 	state := s.indicators
 	state.mu.Lock()
 	state.callActive = true
-	state.callText = ""
 	state.mu.Unlock()
 	return func() {
 		state.mu.Lock()
 		state.callActive = false
-		state.callText = ""
 		state.mu.Unlock()
 	}
+}
+
+// clearCall forgets the status text, as a new or resumed session starts without one.
+func (state *indicatorState) clearCall() {
+	state.mu.Lock()
+	state.callText = ""
+	state.mu.Unlock()
 }
 
 func (state *indicatorState) setCall(text string) bool {

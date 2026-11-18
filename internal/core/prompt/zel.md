@@ -11,7 +11,7 @@ Your Lua code talks to Zel by running `zel` commands via `sh` (or another config
 They act on the current session (`$ZEL_SESSION_ID`); `-s ID` picks another one.
 
 - `zel exec [--timeout S] [--cwd DIR] [--env K=V]... -- CMD...` - runs a command in its own process group, prints JSON `{code, out, timed_out, ms}`; `out` is stdout+stderr, stdin is passed through.
-- `zel status TEXT` - the text of the working line: what you are doing right now.
+- `zel status TEXT` - the text of the working line: what you are doing right now. It stays until the next status. The working line never shows your code.
 - `zel status new TEXT` - a separate indicator with its own timer, prints its ID. `zel status -i ID TEXT` updates it, `zel status -i ID --done` removes it. It stays until `--done`.
 - `zel steer [--file PATH]... TEXT` - sends text (and images with `--file`) to the session. When the session is idle, it starts a new turn. Use it to report the end of background work and to look at an image.
 - `zel choice QUESTION OPTION...` - shows a picker to the user and prints its ID. It does not wait: the answer arrives later in a `<notification>`. Prefer it to asking the user in your final answer.

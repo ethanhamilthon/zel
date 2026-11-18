@@ -32,6 +32,8 @@ def respond(body):
         return [lua('return (function() ' + GATE + '; return "' + 'x' * 150 + '" end)()', 'plain')]
     if latest == 'active-status':
         return [lua('fixture_status("fixture-call-status"); ' + GATE + '; return "released"', 'held')]
+    if latest == 'second-status':
+        return [lua('fixture_status("fixture-second-status"); ' + GATE + '; return \"released\"', 'held2')]
     if latest == 'trace-check':
         return [lua('return "traced"', 'trace1'), lua('error("trace failure", 0)', 'trace2')]
     return [message('Hello from the fake provider.')]
@@ -99,12 +101,9 @@ def composer_and_models(f):
     t.until(lambda: any(r.startswith(tuple(STARS)) for r in t.rows()), 'working line appears during Lua')
     row = next(i for i, r in enumerate(t.rows()) if r.startswith(tuple(STARS)))
     text = t.rows()[row]
-    f.check('return (function()' in text and text.endswith('...') and len(text) <= t.COLS,
-            'working code stays on one clipped line', text)
-    if 'return ' in text:
-        f.check(t.screen.buffer[row][2].fg == 'ff3b30' and
-                t.screen.buffer[row][text.index('return ')].fg == '606060',
-                'working timer uses accent and code uses dark gray', text)
+    f.check(re.fullmatch(r'[✶✸✹✺] \d+s · 1 call', text) is not None,
+            'working line shows only the time and the call count: no code, no status', text)
+    f.check(t.screen.buffer[row][2].fg == 'ff3b30', 'working timer uses accent', text)
     t.shot('03-working')
     t.send('\x04')
     t.until(lambda: not any(r.startswith(tuple(STARS)) for r in t.rows()), 'Ctrl+D stops the running call')
@@ -269,7 +268,7 @@ def status_and_steer(f):
 
     f.configure()
     (f.cwd / 'zel.lua').write_text('''return {
-  settings = {show_code = false, colors = {accent = "#ff3b30", dark_gray = "#606060"}},
+  settings = {colors = {accent = "#ff3b30", dark_gray = "#606060"}},
   functions = {
     fixture_gate = {description = "Wait for fixture release", fn = function()
       os.execute("while [ ! -f release-turn ]; do sleep .05; done")
@@ -293,7 +292,7 @@ def status_and_steer(f):
     cmd('status', '-i', indicator, 'indicator-updated')
     t.wait('indicator-updated', 'status update redraws the indicator')
     t.send('active-status\r')
-    t.wait('fixture-call-status', 'explicit Lua call status is visible even with show_code disabled')
+    t.wait('fixture-call-status', 'Lua call status is visible in the working line')
     rows = t.rows()
     i = next(y for y, row in enumerate(rows) if 'indicator-updated' in row)
     w = next(y for y, row in enumerate(rows) if 'fixture-call-status' in row)
@@ -318,7 +317,7 @@ def status_and_steer(f):
             isinstance(parts, list) and any(p.get('type') == 'input_image' for p in parts),
             'active steer follows the tool result and carries its image', items[-4:])
     f.check('fixture-call-status' not in t.view() and 'indicator-updated' in t.view(),
-            'call status clears without clearing the independent indicator', t.view())
+            'idle chat shows no working line, the independent indicator stays', t.view())
     cmd('status', '-i', indicator, '--done')
     t.until(lambda: 'indicator-updated' not in t.view(), 'status --done removes the indicator')
 
@@ -363,6 +362,81 @@ def status_and_steer(f):
     resumed.wait('fixture-print-two', 'print history survives resume through the session picker')
     resumed.shot('01-print-history')
     f.check(resumed.close() == 0, 'resumed session quits cleanly')
+
+
+def status_persistence(f):
+    f.configure()
+    (f.cwd / 'zel.lua').write_text('''return {
+  settings = {colors = {accent = "#ff3b30", dark_gray = "#606060"}},
+  functions = {
+    fixture_gate = {description = "Wait for fixture release", fn = function()
+      os.execute("while [ ! -f release-turn ]; do sleep .05; done")
+    end},
+    fixture_status = {description = "Set fixture call status", fn = function(text)
+      os.execute("zel status '" .. tostring(text):gsub("'", "'\\\\''") .. "'")
+    end},
+  },
+}''')
+    release = f.cwd / 'release-turn'
+
+    def working(t):
+        return next((r for r in t.rows() if r.startswith(tuple(STARS))), None)
+
+    def stop(t):
+        t.send('\x04')
+        t.until(lambda: working(t) is None, 'Ctrl+D stops the running call')
+
+    t = boot(f, 'persist')
+    t.send('plain-working\r')
+    t.until(lambda: working(t) is not None, 'working line appears')
+    row = working(t)
+    f.check(re.fullmatch(r'[✶✸✹✺] \d+s · 1 call', row) is not None and 'return' not in row,
+            'a session without any status shows the time and calls only, no code', row)
+    t.shot('01-no-status')
+    stop(t)
+
+    t.send('active-status\r')
+    t.until(lambda: working(t) is not None and 'fixture-call-status' in working(t), 'first status shows')
+    row = working(t)
+    f.check(re.fullmatch(r'[✶✸✹✺] \d+s · fixture-call-status · 1 call', row) is not None,
+            'working line order: time, status, calls', row)
+    t.shot('02-first-status')
+    release.touch()
+    t.wait('Finished held.', 'the call with a status finishes')
+    release.unlink()
+
+    t.send('plain-working\r')
+    t.until(lambda: working(t) is not None, 'working line appears in the next turn')
+    row = working(t)
+    f.check(re.fullmatch(r'[✶✸✹✺] \d+s · fixture-call-status · 1 call', row) is not None,
+            'the status stays in the next turn and the new call does not show its code', row)
+    t.shot('03-status-persists')
+    stop(t)
+
+    t.send('second-status\r')
+    t.until(lambda: working(t) is not None and 'fixture-second-status' in working(t), 'second status shows')
+    row = working(t)
+    f.check('fixture-call-status' not in row and re.search(r'· fixture-second-status · 1 call$', row) is not None,
+            'a new status replaces the old one', row)
+    t.shot('04-second-status')
+    release.touch()
+    t.wait('Finished held2.', 'the call with the second status finishes')
+    release.unlink()
+
+    t.send('\x0e')
+    t.wait('second-model', 'Ctrl+N starts a new session with the model picker')
+    t.send(ESC)
+    t.wait('Open a past session', 'Esc from the new session Models returns to the main menu')
+    t.send(ESC)
+    t.until(lambda: 'Open a past session' not in t.view(), 'Esc closes the main menu')
+    t.send('plain-working\r')
+    t.until(lambda: working(t) is not None, 'working line appears in the new session')
+    row = working(t)
+    f.check(re.fullmatch(r'[✶✸✹✺] \d+s · 1 call', row) is not None,
+            'a new session starts without a status', row)
+    t.shot('05-new-session')
+    stop(t)
+    f.check(t.close() == 0, 'status persistence session quits cleanly')
 
 
 def tracing(f):
@@ -411,4 +485,5 @@ def tracing(f):
 
 if __name__ == '__main__':
     raise SystemExit(suite('terminal-checks.log', [no_provider, composer_and_models,
-                          config_and_commands, status_and_steer, tracing], respond))
+                          config_and_commands, status_and_steer, status_persistence,
+                          tracing], respond))

@@ -311,9 +311,20 @@ func TestSocketIndicatorsAndChoice(t *testing.T) {
 		t.Fatalf("indicators: %+v", before)
 	}
 	end()
-	if ctl.CallStatus() != "" {
-		t.Fatal("call status survived the call")
+	if ctl.CallStatus() != "working" {
+		t.Fatalf("call status must stay after the call: %q", ctl.CallStatus())
 	}
+	if r := call("status", "late"); r.Code != 1 || ctl.CallStatus() != "working" {
+		t.Fatalf("a status outside a call must be refused: %+v %q", r, ctl.CallStatus())
+	}
+	end = a.session().beginCallStatus()
+	if ctl.CallStatus() != "working" {
+		t.Fatalf("a new call must not reset the status: %q", ctl.CallStatus())
+	}
+	if r := call("status", "next"); !r.OK || ctl.CallStatus() != "next" {
+		t.Fatalf("the newest status replaces the old one: %+v %q", r, ctl.CallStatus())
+	}
+	end()
 	if r := sock(t, a, "status.update", map[string]string{"id": first.Out, "text": "updated"}); !r.OK {
 		t.Fatal(r)
 	}
@@ -346,6 +357,9 @@ func TestSocketIndicatorsAndChoice(t *testing.T) {
 	}
 	if next := ctl.Indicators(); len(next) != 1 || next[0].ID != second.Out {
 		t.Fatal(next)
+	}
+	if ctl.CallStatus() != "" {
+		t.Fatalf("a new session must start without a status: %q", ctl.CallStatus())
 	}
 }
 
@@ -676,7 +690,7 @@ return {hooks = {
 		}
 	}
 	read := make(chan struct{})
-	go func() { _ = ctl.Status(); _ = ctl.Settings(); _, _ = ctl.Appearance(); _, _ = ctl.Info(); close(read) }()
+	go func() { _ = ctl.Status(); _ = ctl.Settings(); _ = ctl.Appearance(); _, _ = ctl.Info(); close(read) }()
 	select {
 	case <-read:
 	case <-time.After(500 * time.Millisecond):

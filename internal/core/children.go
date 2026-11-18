@@ -51,7 +51,6 @@ type SubagentRun struct {
 	Model    string
 	Effort   string
 	Command  string
-	Activity string
 	Context  int64 // estimated context tokens, as the child last reported
 	Usage    Usage // the child's spend so far
 	Requests int   // its model requests with usage
@@ -114,7 +113,7 @@ func (s *session) Subagents() []SubagentRun {
 				if err != nil {
 					continue
 				}
-				tmp := &session{acts: &activities{}}
+				tmp := &session{}
 				tmp.readItems(items)
 				usage, reqs := tmp.SessionUsage()
 				run := SubagentRun{

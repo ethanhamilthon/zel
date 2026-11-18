@@ -40,7 +40,7 @@ type Settings struct {
 	Provider, Model, Effort string
 	CompactionThreshold     int
 	Timeout, Output         int // s per lua call; bytes, 0 = no cut
-	ShowCode, ShowPrompt    bool
+	ShowPrompt              bool
 	TraceHooks              bool
 	Editor                  string
 	Colors                  Colors
@@ -55,7 +55,6 @@ func DefaultSettings() Settings {
 		CompactionThreshold: CompactionThreshold,
 		Timeout:             Timeout,
 		Output:              Output,
-		ShowCode:            true,
 		ShowPrompt:          false,
 		TraceHooks:          true,
 		Editor:              Editor,
@@ -108,11 +107,10 @@ func ParseSettings(raw map[string]any, base Settings) (Settings, error) {
 			}
 			st.Output = n
 		case "show_code":
-			b, ok := v.(bool)
-			if !ok {
+			// Gone since 0.12.1: the working line never shows code. Old configs still load.
+			if _, ok := v.(bool); !ok {
 				return base, fmt.Errorf("%s: must be true or false", where)
 			}
-			st.ShowCode = b
 		case "show_prompt":
 			b, ok := v.(bool)
 			if !ok {

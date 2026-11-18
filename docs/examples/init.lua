@@ -5,7 +5,6 @@ return {
   settings = {
     compaction = 400000,
     timeout = 30,
-    show_code = true,
     show_prompt = false,
     trace_hooks = true,
     editor = "nvim",

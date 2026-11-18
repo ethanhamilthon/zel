@@ -67,7 +67,4 @@ type Status struct {
 	Started    time.Time
 	Queued     []Input
 	Session    string
-	Activity   string    // foreground host operation of the turn, one row per line; "" before the first
-	Live       bool      // Activity is still running, not only the last one of the turn
-	LiveSince  time.Time // when the running Activity began
 }

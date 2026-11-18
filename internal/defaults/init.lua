@@ -26,7 +26,6 @@ return {
   --   compaction = 400000,
   --   timeout = 30,
   --   output = 8000,
-  --   show_code = true,
   --   show_prompt = false,
   --   trace_hooks = true,
   --   editor = "nvim",

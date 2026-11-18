@@ -51,9 +51,10 @@ and talk to Zel through the `zel` CLI (`exec`, `steer`, `status`, `choice`,
 - Steering: when you type while a call runs, the call runs to its end. Calls
   of the same model response that have not started are returned as
   `[skipped: superseded by steering]`. Your text follows the tool results.
-- Working line: shows elapsed time, the `zel status` text of the running call
-  (or the code's first line when `settings.show_code` is `true`), calls, and
-  queued input. `zel status new` indicators appear above the working line as
+- Working line: shows elapsed time, the last `zel status` text, calls, and
+  queued input. It never shows the code of a call. The status stays until the
+  next `zel status` or a new/resumed session; before the first one the line
+  has no status. `zel status new` indicators appear above the working line as
   `◐ 6s · text`. `zel print` lines appear in `dark_gray` with no header.
 - `settings.trace_hooks` (default `true`) shows the hook runs in Tracing.
   `Ctrl+H` in Tracing toggles them until zel quits.
@@ -119,7 +120,8 @@ Subcommands act on `$ZEL_SESSION_ID` (`-s ID` selects another live session):
   group; waits at most 100 ms after exit for pipes so `&` jobs do not block.
 - `zel steer [-s ID] [--file PATH]... [TEXT|-]`: sends steering text/images.
   During a turn it follows the tool results; when idle it starts a new turn.
-- `zel status [-s ID] TEXT`: sets the working line status for the running call.
+- `zel status [-s ID] TEXT`: sets the working line status while a Lua call runs.
+  It stays after the call ends, until the next status or a new session.
 - `zel status new TEXT`: creates an indicator line above the working line and
   prints its ID; `zel status -i ID TEXT` updates it; `zel status -i ID --done`
   removes it.
@@ -155,7 +157,6 @@ return {
     compaction = 400000,   -- tokens, 0 = off
     timeout = 30,          -- seconds per lua call
     output = 8000,         -- bytes of one call the agent gets, 0 = no cut
-    show_code = true,      -- working line falls back to code when no zel status
     show_prompt = false,   -- chat shows #name instead of expanded prompt text
     trace_hooks = true,    -- Tracing opens with hook runs shown
     editor = "nvim",       -- Ctrl+E opens composer text in it

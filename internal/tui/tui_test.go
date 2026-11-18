@@ -635,26 +635,22 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 func abs(n int) int { return max(n, -n) }
 
 func TestWorkingRowColorsAndSingleLine(t *testing.T) {
-	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Live: true,
-		LiveSince: time.Now().Add(-200 * time.Millisecond), Activity: "go test ./...\nsecond line",
+	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second),
 		Queued: []core.Input{{Text: "next"}}}
-	r := workingRow(status, "", 2, true, 60)
+	r := workingRow(status, "go test ./...\nsecond line", 2, 60)
 	text := rowText(r)
 	if !strings.Contains(text, " · go test ./... · 2 calls · queued") || strings.Contains(text, "second line") {
-		t.Fatalf("wrong working line order or fallback: %q", text)
+		t.Fatalf("wrong working line order or first-line cut: %q", text)
 	}
-	if narrow := workingRow(status, "", 2, true, 15); rowWidth(narrow) > 15 || !strings.HasSuffix(rowText(narrow), "...") {
+	if narrow := workingRow(status, "go test ./...", 2, 15); rowWidth(narrow) > 15 || !strings.HasSuffix(rowText(narrow), "...") {
 		t.Fatalf("not truncated to width: %q", rowText(narrow))
 	}
 	fg := func(c span) tcell.Color { f, _, _ := c.style.Decompose(); return f }
 	if len(r) != 4 || fg(r[0]) != tcell.GetColor(string(accentColor)) || fg(r[1]) != tcell.GetColor(string(darkGray)) {
 		t.Fatalf("the star and the time are accent, what runs is dark gray: %+v", r)
 	}
-	if hidden := rowText(workingRow(status, "", 2, false, 40)); strings.Contains(hidden, "go test") {
-		t.Fatalf("show_code = false must hide the command: %q", hidden)
-	}
-	if explicit := rowText(workingRow(status, "read main.go\nsecond status line", 2, false, 60)); !strings.Contains(explicit, " · read main.go · 2 calls · queued") {
-		t.Fatalf("callStatus must show even when show_code = false: %q", explicit)
+	if empty := rowText(workingRow(status, "", 2, 60)); strings.Count(empty, " · ") != 2 || !strings.Contains(empty, " · 2 calls · queued") {
+		t.Fatalf("without a status only the time, the calls and the queue show: %q", empty)
 	}
 	indRow := indicatorRow(core.Indicator{ID: "i1", Text: "make test", Started: time.Now().Add(-6 * time.Second)}, 40)
 	indTxt := rowText(indRow)

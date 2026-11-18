@@ -14,31 +14,6 @@ import (
 	"zel/internal/luart"
 )
 
-// Bounds of the working indicator label: the indicator cuts lines to its width
-// and cycles through them, so longer ones are not needed.
-const (
-	labelLines    = 100
-	labelLineRune = 200
-)
-
-// codeLabel is what the working indicator shows for a call: the code as is,
-// its lines without empty ones and -- comments, one per row.
-func codeLabel(command string) string {
-	var lines []string
-	for _, l := range strings.Split(command, "\n") {
-		if l = strings.TrimSpace(l); l == "" || strings.HasPrefix(l, "--") {
-			continue
-		}
-		if r := []rune(l); len(r) > labelLineRune {
-			l = string(r[:labelLineRune-1]) + "…"
-		}
-		if lines = append(lines, l); len(lines) == labelLines {
-			break
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 // openOutputFile creates the next outputs/b<N>.txt of the session folder.
 func (s *session) openOutputFile() (*os.File, error) {
 	s.outputMu.Lock()
@@ -104,9 +79,7 @@ func (s *session) runLua(ctx context.Context, code string) string {
 	if agent == nil {
 		return "error: lua: ECANCELED: the session has ended"
 	}
-	end := s.beginActivity(codeLabel(config.Redact(s.Settings(), code)))
 	r := agent.Run(ctx, code, time.Duration(s.Settings().Timeout)*time.Second)
-	end()
 	out := r.Out
 	if s.hasHooks("lua_after") {
 		res := s.runHooks(ctx, "lua_after", map[string]any{"code": code, "out": out, "ok": r.OK,

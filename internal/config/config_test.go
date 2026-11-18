@@ -32,7 +32,7 @@ func TestParseSettings(t *testing.T) {
 		t.Fatalf("ParseSettings: %v", err)
 	}
 	if s.CompactionThreshold != 100000 || s.Timeout != 45 || s.Output != 0 ||
-		s.ShowCode || !s.ShowPrompt || s.TraceHooks || s.Editor != "code -w" {
+		!s.ShowPrompt || s.TraceHooks || s.Editor != "code -w" {
 		t.Fatalf("unexpected settings: %+v", s)
 	}
 	if s.Colors.Get("accent") != "#112233" || s.Colors.Get("trace.lua") != "#010203" {
@@ -222,7 +222,7 @@ func TestDescribeAndValidate(t *testing.T) {
 	if strings.Contains(out, "sk-secret") || strings.Contains(out, "supersecret") {
 		t.Fatalf("Describe leaked secret:\n%s", out)
 	}
-	for _, want := range []string{"settings.timeout", "settings.output", "settings.show_code", "settings.show_prompt", "colors.trace.lua", "#review", "ping: Ping host (/tmp/init.lua)", "Commit [alt+g] (/tmp/zel.lua)", "/tmp/mod.lua", "init.lua:10 (idle) [async]"} {
+	for _, want := range []string{"settings.timeout", "settings.output", "settings.show_prompt", "colors.trace.lua", "#review", "ping: Ping host (/tmp/init.lua)", "Commit [alt+g] (/tmp/zel.lua)", "/tmp/mod.lua", "init.lua:10 (idle) [async]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Describe missing %q:\n%s", want, out)
 		}

@@ -23,8 +23,7 @@ func (m *app) draw() {
 		return
 	}
 	m.dirty = false
-	colors, _ := m.ctl.Appearance()
-	applyTheme(colors)
+	applyTheme(m.ctl.Appearance())
 	linkBase = m.cwd
 	m.screen.SetStyle(style(agentColor))
 	m.screen.Fill(' ', style(agentColor))
@@ -46,8 +45,7 @@ func (m *app) draw() {
 		if len(indicators) > 0 {
 			indicators = append(indicators, row{}) // one line between the indicators and the working line
 		}
-		_, showCode := m.ctl.Appearance()
-		indicators = append(indicators, workingRow(status, m.callStatus, m.turnSteps(), showCode, width))
+		indicators = append(indicators, workingRow(status, m.callStatus, m.turnSteps(), width))
 	}
 	if m.promptCancel != nil {
 		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)
@@ -133,7 +131,7 @@ func (m *app) line(y int, text string, width int, color lipgloss.Color) {
 	}
 }
 func (m *app) historyRows(width int) {
-	colors, _ := m.ctl.Appearance()
+	colors := m.ctl.Appearance()
 	full := m.ctl.ShowPrompt()
 	changed := len(m.cache) != len(m.records)
 	if len(m.cache) > len(m.records) {
@@ -284,9 +282,9 @@ func (m *app) turnSteps() int {
 	return count
 }
 
-// workingRow shows elapsed time, call status or the first line of code,
-// call count, and queued input, in that order.
-func workingRow(status core.Status, callStatus string, steps int, showCode bool, width int) row {
+// workingRow shows elapsed time, the last `zel status` text, call count, and
+// queued input, in that order. It never shows the code of a call.
+func workingRow(status core.Status, callStatus string, steps int, width int) row {
 	stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
 	elapsed := time.Since(status.Started)
 	var r row
@@ -310,11 +308,7 @@ func workingRow(status core.Status, callStatus string, steps int, showCode bool,
 	if status.Cancelling {
 		add("cancelling", accent)
 	} else {
-		text := callStatus
-		if text == "" && showCode {
-			text = status.Activity
-		}
-		if line, _, _ := strings.Cut(text, "\n"); line != "" {
+		if line, _, _ := strings.Cut(callStatus, "\n"); line != "" {
 			add(cleanInput(strings.ReplaceAll(line, "\t", " ")), style(darkGray))
 		}
 		add(formatSteps(steps), accent)
