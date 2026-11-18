@@ -144,7 +144,7 @@ colors:
   accent: "${{ fail }}#123456"
   user: "#111111"
   trace:
-    bash: "#010203"
+    lua: "#010203"
 provider:
   openai:
     base_url: "https://api.openai.com/v1"
@@ -187,7 +187,7 @@ completion:
 	wantColors := DefaultColors()
 	wantColors.Set("accent", "#123456")
 	wantColors.Set("user", "#111111")
-	wantColors.Set("trace.bash", "#010203")
+	wantColors.Set("trace.lua", "#010203")
 	if s.Colors != wantColors {
 		t.Fatalf("colors: %v", s.Colors)
 	}
@@ -215,7 +215,7 @@ completion:
 	}
 	desc := cfg.Describe()
 	for _, part := range []string{"model", "m1", "api_key=set", "Env: KEY, OTHER", "#fix", "#plan [plan]", "b (bash_before): echo b [main, headless]", "sub: headless only [headless, plan]",
-		`colors.trace.bash          = "#010203"`, `colors.bg                  = ""`, "settings.trace_hooks       = false"} {
+		`colors.trace.lua           = "#010203"`, `colors.bg                  = ""`, "settings.trace_hooks       = false"} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("Describe lacks %q:\n%s", part, desc)
 		}

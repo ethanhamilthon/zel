@@ -26,6 +26,7 @@ type cachedRecord struct {
 	theme  core.Colors
 	rows   []row
 	plain  bool
+	full   bool // ShowPrompt when the rows were built
 }
 type app struct {
 	screen  tcell.Screen

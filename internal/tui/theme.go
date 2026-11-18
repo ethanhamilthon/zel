@@ -8,7 +8,7 @@ import (
 )
 
 // applyTheme sets every UI color from [colors]; the TUI has no other hex values
-// except the accent palette and the literal tones of highlighted bash.
+// except the accent palette and the literal tones of highlighted Lua.
 var activeColors core.Colors
 
 func applyTheme(c core.Colors) {
@@ -22,7 +22,7 @@ func applyTheme(c core.Colors) {
 	notice := color("trace.notice")
 	traceColors = map[string]lipgloss.Color{
 		"system": color("trace.system"), "user": color("trace.user"), "assistant": color("trace.agent"), "agent": color("trace.agent"),
-		"bash": color("trace.bash"), "notice": notice, "compaction": notice, "task": notice,
+		"lua": color("trace.lua"), "notice": notice, "compaction": notice, "task": notice,
 		"output": color("trace.output"), "error": color("trace.error"),
 	}
 	a := accentColor

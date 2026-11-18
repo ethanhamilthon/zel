@@ -3,6 +3,7 @@ package tui
 import (
 	"cmp"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,8 +45,8 @@ func (m *app) draw() {
 		if len(indicators) > 0 {
 			indicators = append(indicators, row{}) // one line between the tasks and the working line
 		}
-		_, showBash := m.ctl.Appearance()
-		indicators = append(indicators, workingRow(status, m.turnSteps(), showBash, width))
+		_, showCode := m.ctl.Appearance()
+		indicators = append(indicators, workingRow(status, m.turnSteps(), showCode, width))
 	}
 	if m.promptCancel != nil {
 		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)
@@ -132,6 +133,7 @@ func (m *app) line(y int, text string, width int, color lipgloss.Color) {
 }
 func (m *app) historyRows(width int) {
 	colors, _ := m.ctl.Appearance()
+	full := m.ctl.ShowPrompt()
 	changed := len(m.cache) != len(m.records)
 	if len(m.cache) > len(m.records) {
 		m.cache = m.cache[:len(m.records)]
@@ -143,16 +145,20 @@ func (m *app) historyRows(width int) {
 	for i := len(m.records) - 1; i >= 0; i-- {
 		r := m.records[i]
 		c := &m.cache[i]
-		if c.source == r && c.width == width && c.theme == colors && !c.plain {
+		if c.source == r && c.width == width && c.theme == colors && c.full == full && !c.plain {
 			continue
 		}
 		changed = true
-		c.source, c.width, c.theme = r, width, colors
+		c.source, c.width, c.theme, c.full = r, width, colors, full
 		c.rows = nil
 		c.plain = false
 		switch r.Kind {
 		case "user":
-			c.rows = plainRows(r.Text, width, userColor)
+			text := r.Text
+			if !full {
+				text = collapsePrompts(text)
+			}
+			c.rows = plainRows(text, width, userColor)
 		case "assistant":
 			text, ok := "", false
 			if len(r.Text) <= 64<<10 {
@@ -280,7 +286,7 @@ func (m *app) turnSteps() int {
 // workingRow is the working indicator, one line: the star, the time, the steps
 // and the queue in the accent color, then what is running in dark gray, cut
 // with "..." to fit.
-func workingRow(status core.Status, steps int, showBash bool, width int) row {
+func workingRow(status core.Status, steps int, showCode bool, width int) row {
 	stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
 	parts := []string{stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)] + " " + formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
@@ -296,7 +302,7 @@ func workingRow(status core.Status, steps int, showBash bool, width int) row {
 	}
 	head := ansi.Truncate(strings.Join(parts, " · "), width, "...")
 	r := row{{head, textWidth(head), style(accentColor)}}
-	if !status.Cancelling && showBash {
+	if !status.Cancelling && showCode {
 		activity := strings.ReplaceAll(cmp.Or(activityLine(status, time.Now()), "thinking..."), "\t", " ")
 		if room := width - textWidth(head) - 3; room > 0 {
 			activity = ansi.Truncate(" · "+cleanInput(activity), room+3, "...")
@@ -332,4 +338,11 @@ func activityLine(status core.Status, now time.Time) string {
 		return lines[0]
 	}
 	return lines[int(max(0, now.Sub(status.LiveSince))/activityStep)%len(lines)]
+}
+
+var promptBlock = regexp.MustCompile(`(?s)<prompt name="([A-Za-z0-9_-]+)">\n.*?\n</prompt>`)
+
+// collapsePrompts shows each <prompt name="x"> block of a user message as #x.
+func collapsePrompts(text string) string {
+	return promptBlock.ReplaceAllString(text, "#$1")
 }

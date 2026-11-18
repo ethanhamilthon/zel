@@ -10,7 +10,7 @@ import (
 // [colors.trace].
 var ColorKeys = [...]string{
 	"bg", "accent", "agent", "user", "user_highlight", "gray", "dark_gray", "error",
-	"trace.system", "trace.user", "trace.agent", "trace.bash", "trace.notice", "trace.output", "trace.error",
+	"trace.system", "trace.user", "trace.agent", "trace.lua", "trace.notice", "trace.output", "trace.error",
 }
 
 // colorDefaults is the default theme, in ColorKeys order.

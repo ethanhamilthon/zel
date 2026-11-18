@@ -42,7 +42,8 @@ type Settings struct {
 	CompactionThreshold     int
 	BashTimeout             int               // seconds per bash call of the agent
 	BashOutput              int               // bytes of one bash call's output the agent gets, 0 = no cut
-	ShowBash                bool              // show the running command in the working line
+	ShowCode                bool              // show the running code in the working line
+	ShowPrompt              bool              // chat shows the full #prompt text instead of #name
 	TraceHooks              bool              // Tracing opens with the hook runs shown
 	Editor                  string            // the command Ctrl+E opens the composer text in
 	Colors                  Colors            // [colors]: the TUI theme, defaults filled in
@@ -53,7 +54,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{Effort: "medium", CompactionThreshold: CompactionThreshold, BashTimeout: BashTimeout, BashOutput: BashOutput,
-		ShowBash: true, TraceHooks: true, Editor: Editor, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
+		ShowCode: true, TraceHooks: true, Editor: Editor, Colors: DefaultColors(), Providers: map[string]Provider{}, Env: map[string]string{}}
 }
 
 // Redact hides the API keys of the providers in text.

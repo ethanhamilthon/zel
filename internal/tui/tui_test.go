@@ -92,7 +92,7 @@ func TestBashCountAndCompletionPreview(t *testing.T) {
 	}
 	m.records = append(m.records, core.Record{Kind: "reasoning", Text: "thinking"})
 	if n := m.turnSteps(); n != 15 {
-		t.Fatalf("bash calls = %d", n)
+		t.Fatalf("lua calls = %d", n)
 	}
 	m.input.set("#pl")
 	m.updateCompletions()
@@ -557,10 +557,10 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 		{Kind: "system", Text: "prompt"},
 		{Kind: "hook", Text: "session_created: x -> exit 0, 5ms", At: at, Duration: 5 * time.Millisecond},
 		{Kind: "user", Text: "list the files", At: at, Turn: 1},
-		{Kind: "bash", Text: "ls", Output: "a.go", At: at.Add(time.Second), Turn: 1, Duration: 300 * time.Millisecond, Request: req, First: true},
+		{Kind: "lua", Text: "ls", Output: "a.go", At: at.Add(time.Second), Turn: 1, Duration: 300 * time.Millisecond, Request: req, First: true},
 		{Kind: "agent", Text: "Two files.", At: at.Add(2 * time.Second), Turn: 1, Request: req},
 		{Kind: "user", Text: "fail", At: at.Add(3 * time.Second), Turn: 2},
-		{Kind: "bash", Text: "false", Output: "[exit 1]", Status: "exit 1", At: at.Add(4 * time.Second), Turn: 2, Duration: 10 * time.Millisecond},
+		{Kind: "lua", Text: "false", Output: "[exit 1]", Status: "exit 1", At: at.Add(4 * time.Second), Turn: 2, Duration: 10 * time.Millisecond},
 	}
 	m.showTrace()
 	key := func(k tcell.Key, r rune) { m.menuKey(tcell.NewEventKey(k, r, 0)); m.draw() }
@@ -580,17 +580,17 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 	key(tcell.KeyDown, 0)
 	key(tcell.KeyTab, 0)
 	v := view()
-	if !strings.Contains(v, "Tracing · Bash") || strings.Contains(v, "Two files") || !strings.Contains(v, "false") {
-		t.Fatalf("Tab shows the bash entries only:\n%s", v)
+	if !strings.Contains(v, "Tracing · Lua") || strings.Contains(v, "Two files") || !strings.Contains(v, "false") {
+		t.Fatalf("Tab shows the Lua entries only:\n%s", v)
 	}
 	key(tcell.KeyEnter, 0)
-	if v := view(); !strings.Contains(v, "Tracing / bash · 2/2 · turn 2") || !strings.Contains(v, "exit 1 · 10ms") {
-		t.Fatalf("Enter opens the selected bash:\n%s", v)
+	if v := view(); !strings.Contains(v, "Tracing / lua · 2/2 · turn 2") || !strings.Contains(v, "exit 1 · 10ms") {
+		t.Fatalf("Enter opens the selected call:\n%s", v)
 	}
 	key(tcell.KeyLeft, 0)
 	key(tcell.KeyLeft, 0)
 	v = view()
-	if !strings.Contains(v, "Tracing / bash · 1/2 · turn 1") || !strings.Contains(v, "── output") || !strings.Contains(v, "a.go") ||
+	if !strings.Contains(v, "Tracing / lua · 1/2 · turn 1") || !strings.Contains(v, "── output") || !strings.Contains(v, "a.go") ||
 		!strings.Contains(v, "exit 0 · 300ms") || !strings.Contains(v, "request 1 · 1.5s · 16.0k in (14.0k cached) · 780 out") {
 		t.Fatalf("the entry has its command, output, time and tokens:\n%s", v)
 	}
@@ -636,7 +636,7 @@ func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
 	r := workingRow(status, 2, true, 40)
 	text := rowText(r)
-	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 bashs") {
+	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 calls") {
 		t.Fatalf("%d wide: %q", w, text)
 	}
 	fg := func(c span) tcell.Color { f, _, _ := c.style.Decompose(); return f }
@@ -644,7 +644,7 @@ func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 		t.Fatalf("the star and the time are accent, what runs is dark gray: %+v", r)
 	}
 	if hidden := rowText(workingRow(status, 2, false, 40)); strings.Contains(hidden, "go test") {
-		t.Fatalf("show_bash = false must hide the command: %q", hidden)
+		t.Fatalf("show_code = false must hide the command: %q", hidden)
 	}
 }
 
@@ -672,5 +672,12 @@ func TestCtrlEEditsTheInputInTheEditor(t *testing.T) {
 	}
 	if m.editing || m.input.text != "my EDITED" {
 		t.Fatalf("editing %v, input %q", m.editing, m.input.text)
+	}
+}
+
+func TestCollapsePrompts(t *testing.T) {
+	in := "fix <prompt name=\"plan-1\">\nline 1\n\nline 2\n</prompt> and <prompt name=\"b\">\nx\n</prompt>."
+	if got, want := collapsePrompts(in), "fix #plan-1 and #b."; got != want {
+		t.Fatalf("collapsePrompts = %q, want %q", got, want)
 	}
 }

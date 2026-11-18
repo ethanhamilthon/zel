@@ -89,7 +89,7 @@ func TestTraceEntries(t *testing.T) {
 	for _, e := range got {
 		kinds = append(kinds, fmt.Sprintf("%s/%d", e.Kind, e.Turn))
 	}
-	if want := "system/0 user/1 thinking/1 bash/1 bash/1 agent/1 hook/1 user/2 notice/2"; strings.Join(kinds, " ") != want {
+	if want := "system/0 user/1 thinking/1 lua/1 lua/1 agent/1 hook/1 user/2 notice/2"; strings.Join(kinds, " ") != want {
 		t.Fatalf("entries %s, want %s", strings.Join(kinds, " "), want)
 	}
 	ls, f := got[3], got[4]
@@ -455,7 +455,7 @@ provider:
 		strings.Contains(desc, "{") || !strings.Contains(desc, `zel -p "prompt"`) {
 		t.Errorf("headless prompt:\n%s\ntool:\n%s", prompt, desc)
 	}
-	hi := "<completion name=\"hi\">\nsay 42\n</completion>"
+	hi := "<prompt name=\"hi\">\nsay 42\n</prompt>"
 	if got, err := main.ExpandPrompt(ctx, "#hi and #unknown, #hi"); err != nil || got != hi+" and #unknown, "+hi {
 		t.Errorf("main expansion: %q %v", got, err)
 	}
