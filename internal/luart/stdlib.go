@@ -183,6 +183,18 @@ func (v *vm) installStdlib() {
 	L.SetGlobal("print", lua.LNil)
 	if osLib, ok := L.GetGlobal("os").(*lua.LTable); ok {
 		osLib.RawSetString("exit", lua.LNil)
+		// os.getenv sees the session environment (ZEL_MODE, settings.env), then Zel's own.
+		osLib.RawSetString("getenv", L.NewFunction(func(L *lua.LState) int {
+			name := L.CheckString(1)
+			if val, ok := v.childEnv()[name]; ok {
+				L.Push(lua.LString(val))
+			} else if val, ok := os.LookupEnv(name); ok {
+				L.Push(lua.LString(val))
+			} else {
+				L.Push(lua.LNil)
+			}
+			return 1
+		}))
 		osLib.RawSetString("execute", L.NewFunction(v.osExecute))
 	}
 	mt := L.NewTypeMetatable(fileClass)
