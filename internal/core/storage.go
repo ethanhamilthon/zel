@@ -116,6 +116,10 @@ func (s *session) readItems(items []store.Item) {
 		}
 		var m Metadata
 		if len(item.Meta) > 0 && json.Unmarshal(item.Meta, &m) == nil {
+			// Response items in older logs have a request sequence but no origin.
+			if m.RequestSeq != 0 && m.Model == "" {
+				m.Provider, m.Model = item.Provider, item.Model
+			}
 			if s.itemMeta == nil {
 				s.itemMeta = map[int]*Metadata{}
 			}

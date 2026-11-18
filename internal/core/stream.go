@@ -30,11 +30,15 @@ func (s *session) request(ctx context.Context, emit func(TurnEvent)) (items []js
 	}
 	s.histMu.RUnlock()
 	// The system prompt is only what the user wrote in the config; our own text goes into the lua tool description.
-	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInput(), Effort: settings.Effort,
+	var target selection
+	if settings.Providers[settings.Provider].API != provider.APIChat {
+		target = selection{Provider: settings.Provider, Model: settings.Model}
+	}
+	request := provider.Request{Model: settings.Model, Instructions: prompt, Input: s.requestInputFor(target), Effort: settings.Effort,
 		Tools: []provider.Tool{{Name: "lua", Description: s.toolDescription(), Parameters: luaParameters(), Freeform: "code"}}}
 	started := time.Now()
 	s.histMu.Lock()
-	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History))}
+	s.lastRequest = Metadata{RequestID: fmt.Sprintf("r-%d", len(s.History)), Provider: settings.Provider, Model: settings.Model}
 	s.requestedLen = len(s.History)
 	s.histMu.Unlock()
 	s.slots.sent()

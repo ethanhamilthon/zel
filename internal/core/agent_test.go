@@ -652,6 +652,191 @@ func TestWithdrawIdentifiedSteering(t *testing.T) {
 	}
 }
 
+func TestResponsesHistoryAcrossModelSelection(t *testing.T) {
+	const (
+		image            = "data:image/png;base64,aQ=="
+		foreignReasoning = `{"type":"reasoning","id":"rs_proxy","status":"completed","summary":[{"type":"summary_text","text":"foreign thinking"}],"encrypted_content":"foreign opaque data"}`
+		foreignCall      = `{"type":"function_call","id":"fc_proxy","status":"completed","call_id":"call_proxy","name":"lua","arguments":"{\"code\":\"return 42\"}"}`
+		foreignMessage   = `{"type":"message","id":"msg_proxy","status":"completed","role":"assistant","content":[{"type":"output_text","text":"proxy answer","annotations":[]}]}`
+		nativeReasoning  = `{"type":"reasoning","id":"rs_native","summary":[{"type":"summary_text","text":"native summary"}],"encrypted_content":"native opaque data"}`
+		nativeCall       = `{"type":"function_call","id":"fc_native","status":"completed","call_id":"call_native","name":"lua","arguments":"{\"code\":\"return 43\"}"}`
+		nativeMessage    = `{"type":"message","id":"msg_native","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"native answer","annotations":[]}]}`
+	)
+	complete := func(items ...string) string {
+		return sse(`{"type":"response.completed","response":{"output":[` + strings.Join(items, ",") + `]}}`)
+	}
+	for _, tc := range []struct{ provider, model string }{{"claude", "claude-sonnet"}, {"gpt", "gemini-pro"}, {"gpt", "gpt-5"}} {
+		for _, resume := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/resume=%t", tc.model, resume), func(t *testing.T) {
+				native := tc.model == "gpt-5"
+				freeform := tc.model == "gemini-pro"
+				if freeform {
+					t.Setenv("ZEL_FREEFORM", "1")
+				} else {
+					t.Setenv("ZEL_FREEFORM", "0")
+				}
+				source := &fakeProvider{reply: func(n int, _ string) string {
+					if n == 1 {
+						return complete(foreignReasoning, foreignCall)
+					}
+					return complete(foreignMessage)
+				}}
+				claude := httptest.NewServer(source)
+				defer claude.Close()
+				var requests int // requests to the GPT model only
+				var mu sync.Mutex
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mu.Lock()
+					defer mu.Unlock()
+					var body struct {
+						Model string
+						Input []json.RawMessage
+					}
+					data, _ := io.ReadAll(r.Body)
+					if r.URL.Path != "/responses" || json.Unmarshal(data, &body) != nil {
+						http.Error(w, "invalid Responses request", 400)
+						return
+					}
+					if body.Model == "gemini-pro" {
+						r.Body = io.NopCloser(strings.NewReader(string(data)))
+						source.ServeHTTP(w, r)
+						return
+					}
+					if body.Model != "gpt-5" {
+						http.Error(w, "wrong model", 400)
+						return
+					}
+					reject := func(message string) {
+						w.WriteHeader(400)
+						_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
+					}
+					var input strings.Builder
+					for i, item := range body.Input {
+						var fields map[string]json.RawMessage
+						_ = json.Unmarshal(item, &fields)
+						if fields["status"] != nil && (string(fields["type"]) == `"reasoning"` || (string(fields["role"]) == `"assistant"` && fields["id"] == nil)) {
+							reject(fmt.Sprintf("Unknown parameter: input[%d].status", i))
+							return
+						}
+						input.Write(item)
+						input.WriteByte('\n')
+					}
+					got := input.String()
+					check := func(want ...string) bool {
+						for _, s := range want {
+							if !strings.Contains(got, s) {
+								reject(fmt.Sprintf("missing %s from %s", s, got))
+								return false
+							}
+						}
+						return true
+					}
+					if !native {
+						for _, s := range []string{"rs_proxy", "fc_proxy", "msg_proxy", "foreign thinking", "foreign opaque data", `"status"`} {
+							if strings.Contains(got, s) {
+								reject("foreign output metadata leaked: " + s)
+								return
+							}
+						}
+						if !check(`"output":"42"`, `"text":"proxy answer","type":"output_text"`) {
+							return
+						}
+						if freeform {
+							if !check(`"type":"custom_tool_call"`, `"type":"custom_tool_call_output"`, `"input":"return 42"`) {
+								return
+							}
+						} else if !check(`"type":"function_call"`, `"type":"function_call_output"`, `"arguments":"{\"code\":\"return 42\"}"`) {
+							return
+						}
+						if strings.Count(got, `"call_id":"call_proxy"`) != 2 {
+							reject("tool call and result no longer match")
+							return
+						}
+					}
+					if requests >= 1 && native && !check(`"id":"rs_native"`, "native summary", `"encrypted_content":"native opaque data"`, nativeCall, `"output":"43"`) {
+						return
+					}
+					if requests >= 2 && native && !check(nativeMessage) {
+						return
+					}
+					if native && requests == 0 || !resume || native && requests == 1 {
+						if !check(image) {
+							return
+						}
+					} else {
+						if !check(imagePlaceholder) {
+							return
+						}
+						if strings.Contains(got, image) {
+							reject("image bytes survived resume")
+							return
+						}
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					requests++
+					if native && requests == 1 {
+						fmt.Fprint(w, complete(strings.TrimSuffix(nativeReasoning, "}")+`,"status":"completed"}`, nativeCall))
+					} else {
+						fmt.Fprint(w, complete(nativeMessage))
+					}
+				}))
+				defer server.Close()
+				home, dir := t.TempDir(), t.TempDir()
+				isolate(t, home)
+				cfg := fmt.Sprintf(`{"provider":%q,"model":%q,"providers":{"claude":{"base_url":%q},"gpt":{"base_url":%q,"api":"responses"}}}`, tc.provider, tc.model, claude.URL, server.URL)
+				writeFile(t, config.DefaultPaths(home, "", nil, false).Connect, cfg)
+				a, err := New(dir, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(a.Close)
+				ctx := context.Background()
+				if err := a.RunInput(ctx, Input{Text: "first", Images: []shell.Image{{URL: image}}}, func(TurnEvent) {}); err != nil {
+					t.Fatal(err)
+				}
+				if !native {
+					if err := a.SelectSession(ctx, "gpt", "gpt-5", "high"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if resume {
+					s := a.session()
+					a.Close()
+					if tc.provider == "claude" {
+						// A pre-fix log has model change records but no per-response origin.
+						path := filepath.Join(s.sessionDir(), "session.jsonl")
+						log, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						legacy := strings.ReplaceAll(string(log), `"Provider":"claude","Model":"claude-sonnet",`, "")
+						if legacy == string(log) {
+							t.Fatal("no response origin in history")
+						}
+						writeFile(t, path, legacy)
+					}
+					a, err = New(s.dir, Options{Resume: s.id})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer a.Close()
+				}
+				if _, err := turn(t, a, "second"); err != nil {
+					t.Fatal(err)
+				}
+				if a.FinalText() != "native answer" {
+					t.Fatalf("final answer = %q", a.FinalText())
+				}
+				if !native && !slices.ContainsFunc(a.session().History, func(item json.RawMessage) bool {
+					return string(item) == foreignReasoning
+				}) {
+					t.Fatal("sending the turn changed stored reasoning")
+				}
+			})
+		}
+	}
+}
+
 func TestImagesLiveInMemoryOnly(t *testing.T) {
 	a := newTestAgent(t, okProvider(), Options{})
 	s := a.session()

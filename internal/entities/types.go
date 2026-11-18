@@ -19,6 +19,8 @@ type Metadata struct {
 	ContextInput *int64
 	Steps        int       `json:",omitempty"`
 	RequestID    string    `json:"-"`
+	Provider     string    `json:",omitempty"`
+	Model        string    `json:",omitempty"`
 	RequestSeq   int       `json:",omitempty"`
 	TurnSeq      int       `json:",omitempty"`
 	At           time.Time `json:",omitzero"`

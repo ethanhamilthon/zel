@@ -93,6 +93,8 @@ type meta struct {
 type Item struct {
 	Data json.RawMessage
 	Meta json.RawMessage
+	// Selection in effect when the item was written, for legacy history.
+	Provider, Model string
 }
 
 // Load reads a session: its header, latest title and model, and its items.
@@ -130,7 +132,7 @@ func (s *Store) Load(project, id string) (Session, []Item, error) {
 					v.Provider, v.Model, v.Effort = l.Provider, l.Model, l.Effort
 				case "item":
 					if l.Seq != nil && *l.Seq <= len(items) {
-						items = append(items[:*l.Seq], Item{Data: l.Data, Meta: l.Meta})
+						items = append(items[:*l.Seq], Item{Data: l.Data, Meta: l.Meta, Provider: v.Provider, Model: v.Model})
 					}
 				case "truncate":
 					if l.Seq != nil && *l.Seq < len(items) {
