@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -212,6 +213,135 @@ func sockFrom(t *testing.T, path, token, cwd, op string, args any) ipc.Response 
 
 func okProvider() *fakeProvider {
 	return &fakeProvider{reply: func(int, string) string { return textReply("ok") }}
+}
+
+func TestSocketSteerWakesIdleAndPrintIsLocal(t *testing.T) {
+	fp := &fakeProvider{reply: func(int, string) string { return textReply("done") }}
+	a := newTestAgent(t, fp, Options{})
+	s := a.session()
+	events := make(chan Event, 64)
+	ctl := NewController(a, func(e Event) { events <- e })
+	defer ctl.Close()
+	waitFor := func(match func(Event) bool) Event {
+		t.Helper()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case e := <-events:
+				if match(e) {
+					return e
+				}
+			case <-timer.C:
+				t.Fatal("missing controller event")
+			}
+		}
+	}
+	const private = "local-only output\nsecond line"
+	if r := sock(t, a, "print", map[string]string{"text": private}); !r.OK {
+		t.Fatal(r)
+	}
+	if e := waitFor(func(e Event) bool { return e.Agent != nil && e.Agent.Kind == "print" }); e.Agent.Text != private {
+		t.Fatalf("print event: %+v", e.Agent)
+	}
+	if got := len(fp.requests()); got != 0 {
+		t.Fatalf("print woke the model (%d requests)", got)
+	}
+
+	// An invalid attachment is rejected atomically, without consuming a slot.
+	if r := sockIn(t, a, t.TempDir(), "steer", map[string]any{"files": []string{"missing.gif"}}); r.Code != 3 {
+		t.Fatal(r)
+	}
+	cwd := t.TempDir()
+	gif, err := base64.StdEncoding.DecodeString("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "pixel.gif"), gif, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r := sockIn(t, a, cwd, "steer", map[string]any{"text": "background finished", "files": []string{"pixel.gif"}}); !r.OK {
+		t.Fatal(r)
+	}
+	if e := waitFor(func(e Event) bool { return e.Kind == "done" }); e.Status != "ok" {
+		t.Fatal(e)
+	}
+	reqs := fp.requests()
+	if len(reqs) != 1 || !strings.Contains(reqs[0], "background finished") || !strings.Contains(reqs[0], "data:image/png;base64,") || strings.Contains(reqs[0], "local-only") {
+		t.Fatalf("requests: %v", reqs)
+	}
+	if !slices.ContainsFunc(a.Trace(), func(e TraceEntry) bool { return e.Kind == "print" && e.Text == private }) {
+		t.Fatal("print missing from trace")
+	}
+	id, dir := s.id, s.dir
+	ctl.Close()
+	a.Close()
+	next, err := New(dir, Options{Resume: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	if records := next.Records(); len(records) == 0 || records[0].Kind != "print" || records[0].Text != private {
+		t.Fatalf("resumed records: %+v", records)
+	}
+}
+
+func TestSocketIndicatorsAndChoice(t *testing.T) {
+	a := newTestAgent(t, &fakeProvider{}, Options{})
+	ctl := NewController(a, func(Event) {})
+	defer ctl.Close()
+	call := func(op, text string) ipc.Response {
+		return sock(t, a, op, map[string]string{"text": text})
+	}
+	if r := call("status", "idle"); r.Code != 1 {
+		t.Fatal(r)
+	}
+	end := a.session().beginCallStatus()
+	if r := call("status", "working"); !r.OK || ctl.CallStatus() != "working" {
+		t.Fatal(r)
+	}
+	first, second := call("status.new", "first"), call("status.new", "second")
+	before := ctl.Indicators()
+	if len(before) != 2 || first.Out != before[0].ID || second.Out != before[1].ID || before[0].Started.IsZero() {
+		t.Fatalf("indicators: %+v", before)
+	}
+	end()
+	if ctl.CallStatus() != "" {
+		t.Fatal("call status survived the call")
+	}
+	if r := sock(t, a, "status.update", map[string]string{"id": first.Out, "text": "updated"}); !r.OK {
+		t.Fatal(r)
+	}
+	if next := ctl.Indicators(); next[0].Text != "updated" || next[0].Started != before[0].Started || before[0].Text != "first" {
+		t.Fatal(next)
+	}
+	if r := sock(t, a, "status.update", map[string]any{"id": first.Out, "done": true}); !r.OK {
+		t.Fatal(r)
+	}
+	if next := ctl.Indicators(); len(next) != 1 || next[0].ID != second.Out {
+		t.Fatal(next)
+	}
+	if r := sock(t, a, "status.update", map[string]string{"id": first.Out}); r.Code != 3 {
+		t.Fatal(r)
+	}
+
+	args := map[string]any{"text": "Which?", "options": []string{"One", "Two"}}
+	if r := sock(t, a, "choice", args); r.Code != 6 {
+		t.Fatal(r)
+	}
+	a.OnChoiceChanged(func() {})
+	if r := sock(t, a, "choice", args); !r.OK || r.Out != "c1" {
+		t.Fatal(r)
+	}
+	if q := a.PendingChoice(); q == nil || q.Title != "Which?" || !slices.Equal(q.Options, []string{"One", "Two"}) {
+		t.Fatalf("choice: %+v", q)
+	}
+	if err := ctl.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if next := ctl.Indicators(); len(next) != 1 || next[0].ID != second.Out {
+		t.Fatal(next)
+	}
 }
 
 func instructionItems(a *Runtime) int {

@@ -1,25 +1,45 @@
 zel - minimal AI coding agent
 
 USAGE
-  zel [--mode NAME] [--config FILE]     open the TUI
+  zel [--mode NAME] [--config FILE]... [--no-default-configs]
+                          open the TUI
   zel -p PROMPT [--provider NAME] [--model MODEL] [--effort LEVEL] [--resume ID]
-         [--cwd DIR] [--timeout SECONDS] [--json] [--mode NAME] [--config FILE]
+         [--cwd DIR] [--timeout SECONDS] [--json] [--mode NAME]
+         [--config FILE]... [--no-default-configs]
                           run without the TUI: "zel: session ID" goes to stderr,
                           the final answer to stdout (exit 0, nonzero on error,
                           130 when cancelled). PROMPT may come on stdin. Run from
                           the agent's lua sh(), zel -p is a subagent of that
                           session. --mode NAME adds a custom mode to main or
-                          headless (available in lua as zel.session.modes).
-  zel config [--config FILE]     the config and its problems
-  zel models [--json]     the models of the configured providers
+                          headless (listed by zel session --json).
+  zel exec [--timeout S] [--cwd DIR] [--env K=V]... -- CMD ARGS...
+                          run a process with stdin and return JSON with merged
+                          stdout/stderr, exit code, timeout and elapsed ms
+  zel steer [-s ID] [--file PATH]... [TEXT|-]
+                          send text and/or images; wakes an idle session
+  zel status [-s ID] TEXT       set the running Lua call's status
+  zel status [-s ID] new TEXT   start a separate indicator and print its ID
+  zel status [-s ID] -i ID TEXT | --done
+                          update or remove an indicator
+  zel choice [-s ID] QUESTION OPTION...
+                          ask in the TUI, print the ID without waiting
+  zel print [-s ID] TEXT|-      add a chat record (not sent to the model)
+  zel session [-s ID] --json    show the live session
+  zel rename [-s ID] NAME      rename the live session
+  zel defaults --reset         replace the defaults/ folder with bundled files
+  zel config [--config FILE]... [--no-default-configs]
+                          the config, files read, and any problems
+  zel models [--json] [--config FILE]... [--no-default-configs]
+                          the models of the configured providers
   zel docs [TOPIC]        the reference (lua tool, api, config, connect, hooks)
   zel update              replace this binary with the latest release
   zel version | zel help
 
 CONFIG
-  ~/.config/zel/init.lua (or --config FILE instead of it), ./zel.lua in the
-  working directory, and ~/.config/zel/connect.json for providers and active
-  model selection. Changes apply by themselves (hot reload).
+  Zel reads init.lua in ZEL_HOME, then ./zel.lua in the starting folder,
+  then any --config files in order. --no-default-configs skips the first two.
+  connect.json in ZEL_HOME stores providers and the active model selection.
+  Config is read at startup, on new session or resume, and on explicit reload.
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
@@ -27,6 +47,7 @@ KEYS
   @ completes paths, # completes prompt completions
 
 ENVIRONMENT
-  ZEL_HOME   config directory (default ~/.config/zel); sessions live in ~/.zel/
+  ZEL_HOME         config directory (default ~/.config/zel); sessions live in ~/.zel/
+  ZEL_SESSION_ID   default live session for session commands; -s ID overrides it
 
 lua and sh() run with your permissions and network access; there is no sandbox.

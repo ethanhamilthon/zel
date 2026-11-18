@@ -62,7 +62,11 @@ func (s *session) openSession(id string) error {
 	choices, _ := s.store.Choices(s.project, id)
 	s.histMu.Lock()
 	s.choices = choices
+	err = s.loadPrints()
 	s.histMu.Unlock()
+	if err != nil {
+		return err
+	}
 	if _, err := s.instructions(context.Background()); err != nil {
 		s.release()
 		return err
@@ -72,7 +76,7 @@ func (s *session) openSession(id string) error {
 		s.release()
 		return err
 	}
-	return nil
+	return s.publishSocketToken()
 }
 
 func (s *session) createSession() error {
@@ -89,7 +93,10 @@ func (s *session) createSession() error {
 		return err
 	}
 	s.fixSelection(selection{})
-	return s.acquire()
+	if err := s.acquire(); err != nil {
+		return err
+	}
+	return s.publishSocketToken()
 }
 
 func (s *session) readItems(items []store.Item) {

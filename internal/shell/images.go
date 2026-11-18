@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	_ "image/gif"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"zel/internal/entities"
 
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 const (
@@ -24,7 +26,7 @@ const (
 
 type Image = entities.Image
 
-// CaptureImage reads a PNG or JPEG file and returns its absolute path and a
+// CaptureImage reads a PNG, JPEG, GIF or WebP file and returns its absolute path and a
 // preview data URL that fits the request limits. Nothing is stored on disk.
 func CaptureImage(path string) (Image, error) {
 	// Check the file type before os.Open, which blocks on a FIFO until a writer
@@ -54,8 +56,8 @@ func CaptureImage(path string) (Image, error) {
 		return Image{}, fmt.Errorf("view image exceeds %d MiB", MaxImageInputBytes>>20)
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || (format != "png" && format != "jpeg") {
-		return Image{}, fmt.Errorf("view requires a valid PNG or JPEG image")
+	if err != nil || (format != "png" && format != "jpeg" && format != "gif" && format != "webp") {
+		return Image{}, fmt.Errorf("view requires a valid PNG, JPEG, GIF or WebP image")
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 20_000_000 {
 		return Image{}, fmt.Errorf("view image exceeds 20 megapixels")
@@ -75,8 +77,12 @@ func imagePreview(data []byte, cfg image.Config, format string) ([]byte, string,
 	if err != nil {
 		return nil, "", fmt.Errorf("decode image: %w", err)
 	}
-	if max(cfg.Width, cfg.Height) <= maxImageEdge && len(data) <= maxImageBytes {
+	if (format == "png" || format == "jpeg") && max(cfg.Width, cfg.Height) <= maxImageEdge && len(data) <= maxImageBytes {
 		return data, format, nil
+	}
+	// Convert GIF/WebP to a static preview supported by every provider.
+	if format != "jpeg" {
+		format = "png"
 	}
 	edge := min(maxImageEdge, max(cfg.Width, cfg.Height))
 	for {

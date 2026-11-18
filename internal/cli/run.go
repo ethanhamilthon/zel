@@ -69,7 +69,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "docs", "models", "config":
+	case "version", "help", "--help", "-h", "docs", "models", "config", "steer", "status", "choice", "print", "session", "rename", "defaults":
 		return true
 	}
 	return false
@@ -125,6 +125,12 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 				fmt.Fprint(out, helpText)
 			}
 			return nil
+		case "steer", "status", "choice", "print", "session", "rename":
+			return socketCommand(ctx, args[0], rest, in, out)
+		case "defaults":
+			return defaultsCommand(rest)
+		case "exec":
+			return execCommand(ctx, rest, in, out)
 		case "update":
 			return updateCommand(ctx, rest, out)
 		case "docs":

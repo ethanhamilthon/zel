@@ -40,6 +40,11 @@ func (s *session) traceSources() ([]TraceEntry, func() []TraceEntry) {
 	if s.id != "" && s.store != nil {
 		path = s.eventsLog()
 	}
+	s.histMu.RLock()
+	for _, line := range s.printLines {
+		history = append(history, TraceEntry{Kind: "print", Text: line.Text, At: line.At, Turn: -1})
+	}
+	s.histMu.RUnlock()
 	return history, func() []TraceEntry { return s.cachedEventTrace(path) }
 }
 

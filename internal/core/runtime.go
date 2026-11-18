@@ -46,6 +46,9 @@ type Runtime struct {
 	depth     int
 	closeOnce sync.Once
 
+	printWake  notifier
+	indicators indicatorState
+
 	mu  sync.RWMutex
 	cur *session
 }
@@ -73,6 +76,11 @@ type session struct {
 	hookCtx   context.Context
 	stopHooks context.CancelFunc
 	outputMu  sync.Mutex // numbers the files of cut call outputs
+
+	indicators     *indicatorState
+	printWake      *notifier
+	printLines     []printLine // guarded by histMu
+	printPublished int         // guarded by histMu
 
 	luaMu        sync.Mutex
 	luaConf      *luart.Config // the config VM of the snapshot in conf
@@ -207,6 +215,9 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		queue:   &Steering{wake: wake},
 		conf:    &confHolder{notice: notice},
 		acts:    &activities{},
+
+		printWake:  &a.printWake,
+		indicators: &a.indicators,
 	}
 	s.path = s.configFile()
 	return s
@@ -394,6 +405,8 @@ func (s *session) runTool(ctx context.Context, callID, name, arguments string, e
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: lua: EINVAL: the tool input must be Lua code (" + err.Error() + ")"
 	}
+	endStatus := s.beginCallStatus()
+	defer endStatus()
 	return s.runLua(ctx, args.Code)
 }
 

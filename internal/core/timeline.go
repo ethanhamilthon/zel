@@ -1,6 +1,7 @@
 package core
 
 import (
+	"math"
 	"slices"
 
 	"zel/internal/entities"
@@ -12,14 +13,25 @@ func (s *session) Records() []Record {
 	s.histMu.RLock()
 	defer s.histMu.RUnlock()
 	var records []Record
-	next := 0
-	choicesBefore := func(seq int) {
-		for ; next < len(s.choices) && s.choices[next].Seq <= seq; next++ {
-			records = append(records, entities.ChoiceRecord(s.choices[next].Title, s.choices[next].Answer))
+	nextChoice, nextPrint := 0, 0
+	localBefore := func(seq int) {
+		for {
+			choice := nextChoice < len(s.choices) && s.choices[nextChoice].Seq <= seq
+			printed := nextPrint < len(s.printLines) && s.printLines[nextPrint].Seq <= seq
+			if choice && (!printed || !s.choices[nextChoice].At.After(s.printLines[nextPrint].At)) {
+				c := s.choices[nextChoice]
+				records = append(records, entities.ChoiceRecord(c.Title, c.Answer))
+				nextChoice++
+			} else if printed {
+				records = append(records, s.printLines[nextPrint].record(s.id, nextPrint))
+				nextPrint++
+			} else {
+				return
+			}
 		}
 	}
 	for seq := range s.History {
-		choicesBefore(seq)
+		localBefore(seq)
 		meta := s.itemMeta[seq]
 		for _, r := range s.projection(seq).records {
 			if meta != nil {
@@ -32,7 +44,7 @@ func (s *session) Records() []Record {
 			records = append(records, r)
 		}
 	}
-	choicesBefore(len(s.History))
+	localBefore(math.MaxInt)
 	return records
 }
 

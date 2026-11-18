@@ -44,6 +44,7 @@ func (s *session) acquire() error {
 	}
 	s.owner = file
 	s.life = newLifecycle()
+	_ = os.Remove(filepath.Join(s.sessionDir(), socketTokenFile)) // stale after a crash
 	if s.sock, err = ipc.Listen(s.socketPath(), s.token, s.serveSocket); err != nil {
 		s.release()
 		return fmt.Errorf("session socket: %w", err)
@@ -63,6 +64,7 @@ func (s *session) release() {
 		s.sock = nil
 	}
 	if s.owner != nil {
+		_ = os.Remove(filepath.Join(s.sessionDir(), socketTokenFile))
 		_ = syscall.Flock(int(s.owner.Fd()), syscall.LOCK_UN)
 		_ = s.owner.Close()
 		s.owner = nil
@@ -160,6 +162,10 @@ func (s *session) baseEnv() map[string]string {
 	}
 	if noDefaults {
 		env["ZEL_NO_DEFAULT_CONFIGS"] = "1"
+	}
+	if os.Getenv("ZEL_HOME") != "" {
+		// Helpers may run from a different folder from the session that opened the store.
+		env["ZEL_HOME"] = s.home
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session
