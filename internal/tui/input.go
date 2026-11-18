@@ -83,6 +83,10 @@ func (m *app) key(k *tcell.EventKey) {
 		m.openEditor()
 		return
 	}
+	if cmdName, ok := commandShortcut(k, m.ctl.Config()); ok {
+		m.runCommand(cmdName)
+		return
+	}
 	switch k.Key() {
 	case tcell.KeyPgUp:
 		m.scroll += max(1, m.chatHeight-2)
@@ -289,10 +293,6 @@ func (m *app) accept(r result) {
 	m.dirty = true
 	if r.kind == "choice" {
 		m.syncChoice()
-		return
-	}
-	if r.kind == "tasks" {
-		m.tasks = m.ctl.ActiveTasks()
 		return
 	}
 	if r.kind == "editor" {

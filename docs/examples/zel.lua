@@ -1,7 +1,5 @@
 -- ./zel.lua: the local config, read only in the folder where the session started.
--- It is merged over init.lua: settings are deep-merged, same names replace.
-local zel = require("zel")
-
+-- It is merged over init.lua: same-named settings, systems, prompts, functions and commands replace.
 return {
   settings = { env = { GOFLAGS = "-count=1" } },
   systems = {

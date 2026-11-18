@@ -38,15 +38,15 @@ func (m *app) draw() {
 	m.historyRows(width)
 	status := m.ctl.Status()
 	var indicators []row
-	for _, task := range m.tasks {
-		indicators = append(indicators, taskRow(task, width))
+	for _, ind := range m.indicators {
+		indicators = append(indicators, indicatorRow(ind, width))
 	}
 	if status.Busy {
 		if len(indicators) > 0 {
-			indicators = append(indicators, row{}) // one line between the tasks and the working line
+			indicators = append(indicators, row{}) // one line between the indicators and the working line
 		}
 		_, showCode := m.ctl.Appearance()
-		indicators = append(indicators, workingRow(status, m.turnSteps(), showCode, width))
+		indicators = append(indicators, workingRow(status, m.callStatus, m.turnSteps(), showCode, width))
 	}
 	if m.promptCancel != nil {
 		indicators = append(indicators, plainRows("Expanding prompt…", width, grayColor)...)
@@ -178,7 +178,7 @@ func (m *app) historyRows(width int) {
 		case "choice":
 			question, answer, _ := strings.Cut(r.Text, core.ChoiceSeparator)
 			c.rows = styledRows(lipgloss.NewStyle().Foreground(accentColor).Render(question+": ")+lipgloss.NewStyle().Foreground(userColor).Render(answer), width, style(userColor))
-		case "compaction":
+		case "compaction", "print":
 			c.rows = plainRows(r.Text, width, darkGray)
 		case "turn_end":
 			c.rows = plainRows(answerHeader(r), width, errorColor)
@@ -286,7 +286,7 @@ func (m *app) turnSteps() int {
 // workingRow is the working indicator, one line: the star, the time, the steps
 // and the queue in the accent color, then what is running in dark gray, cut
 // with "..." to fit.
-func workingRow(status core.Status, steps int, showCode bool, width int) row {
+func workingRow(status core.Status, callStatus string, steps int, showCode bool, width int) row {
 	stars := []string{"✶", "✸", "✹", "✺", "✹", "✸"}
 	parts := []string{stars[int(time.Since(status.Started)/(80*time.Millisecond))%len(stars)] + " " + formatDuration(time.Since(status.Started))}
 	if status.Cancelling {
@@ -302,26 +302,31 @@ func workingRow(status core.Status, steps int, showCode bool, width int) row {
 	}
 	head := ansi.Truncate(strings.Join(parts, " · "), width, "...")
 	r := row{{head, textWidth(head), style(accentColor)}}
-	if !status.Cancelling && showCode {
-		activity := strings.ReplaceAll(cmp.Or(activityLine(status, time.Now()), "thinking..."), "\t", " ")
+	if !status.Cancelling && (callStatus != "" || showCode) {
+		var text string
+		if callStatus != "" {
+			text, _, _ = strings.Cut(callStatus, "\n")
+		} else {
+			text = cmp.Or(activityLine(status, time.Now()), "thinking...")
+		}
+		text = strings.ReplaceAll(text, "\t", " ")
 		if room := width - textWidth(head) - 3; room > 0 {
-			activity = ansi.Truncate(" · "+cleanInput(activity), room+3, "...")
+			activity := ansi.Truncate(" · "+cleanInput(text), room+3, "...")
 			r = append(r, span{activity, textWidth(activity), style(darkGray)})
 		}
 	}
 	return r
 }
 
-// taskRow is the indicator of a running background task, drawn like the
-// working line with its own sprite: the time in the accent color, then the
-// task's name in dark gray.
-func taskRow(task core.ActiveTask, width int) row {
+// indicatorRow is one active `zel status new` line, drawn above the working
+// line: the spinner and elapsed time in the accent color, then the text in dark gray.
+func indicatorRow(ind core.Indicator, width int) row {
 	frames := []string{"◐", "◓", "◑", "◒"}
-	since := time.Since(task.Started)
+	since := time.Since(ind.Started)
 	head := ansi.Truncate(frames[int(since/(120*time.Millisecond))%len(frames)]+" "+formatDuration(since), width, "...")
 	r := row{{head, textWidth(head), style(accentColor)}}
 	if room := width - textWidth(head) - 3; room > 0 {
-		name := ansi.Truncate(" · "+cleanInput(cmp.Or(task.Name, task.ID)), room+3, "...")
+		name := ansi.Truncate(" · "+cleanInput(cmp.Or(ind.Text, ind.ID)), room+3, "...")
 		r = append(r, span{name, textWidth(name), style(darkGray)})
 	}
 	return r
