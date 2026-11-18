@@ -275,6 +275,9 @@ func (c *Client) Stream(ctx context.Context, request Request, fn func(StreamEven
 	defer func() { err = c.safeError(err) }()
 	custom := c.FreeformTools()
 	freeform := freeformFields(request.Tools)
+	if c.api != APIChat {
+		request.Input = responsesInput(request.Input)
+	}
 	body := request.payload(custom)
 	for attempt := 0; ; attempt++ {
 		delivered, completed := false, false // delivered: the caller has seen the response itself

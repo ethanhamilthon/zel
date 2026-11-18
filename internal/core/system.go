@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"zel/internal/config"
+	"zel/internal/provider"
 )
 
 //go:embed prompt/zel.md
@@ -90,12 +91,14 @@ func instructionSnapshot(item json.RawMessage) (string, bool) {
 	return v.Text, v.Type == "instructions"
 }
 func (s *session) requestInput() []json.RawMessage {
-	s.histMu.RLock()
-	defer s.histMu.RUnlock()
-	return s.requestInputLocked()
+	return s.requestInputFor(selection{})
 }
 
-func (s *session) requestInputLocked() []json.RawMessage {
+// The target is set for Responses replay, where unlike Chat Completions
+// provider-specific output items can otherwise go straight back on the wire.
+func (s *session) requestInputFor(target selection) []json.RawMessage {
+	s.histMu.RLock()
+	defer s.histMu.RUnlock()
 	input := make([]json.RawMessage, 0, len(s.History)+1)
 	marked := s.compacted.Drop == 0
 	for i := range s.History {
@@ -107,7 +110,13 @@ func (s *session) requestInputLocked() []json.RawMessage {
 			marked = true
 		}
 		if item, ok, _ := s.compactedProjection(i); ok {
-			input = append(input, item)
+			if m := s.itemMeta[i]; target.Model != "" && m != nil && m.Model != "" &&
+				(m.Provider != target.Provider || m.Model != target.Model) {
+				item = provider.PortableItem(item)
+			}
+			if item != nil {
+				input = append(input, item)
+			}
 		}
 	}
 	return input
