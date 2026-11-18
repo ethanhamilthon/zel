@@ -570,26 +570,29 @@ func (c *Config) checkCopies() error {
 	return nil
 }
 
-// copyFunctions puts the functions of the config into v's REPL environment
-// (or globals if v has no separate REPL environment), copied in one pass so
-// upvalues shared between functions stay shared in the copy.
+// copyFunctions puts the functions of the config into v's private globals
+// (without overriding private built-ins) and into v's REPL environment when
+// present, copied in one pass so shared upvalues stay shared and copied
+// functions can call sibling tools by global name.
 func (c *Config) copyFunctions(ctx context.Context, v *vm) error {
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	dst := v.L.G.Global
-	if v.repl != nil {
-		dst = v.repl
-	}
 	cp := newCopier(c.v.L, v.L)
 	for _, f := range c.data.Functions {
+		if c.builtins[f.Name] || v.L.G.Global.RawGetString(f.Name) != lua.LNil {
+			return fmt.Errorf("functions.%s: collides with a built-in", f.Name)
+		}
 		fn, err := cp.copyFunction(c.funcs[f.Name])
 		if err != nil {
 			return fmt.Errorf("functions.%s: %w", f.Name, err)
 		}
-		dst.RawSetString(f.Name, fn)
+		v.L.SetGlobal(f.Name, fn)
+		if v.repl != nil {
+			v.repl.RawSetString(f.Name, fn)
+		}
 	}
 	return nil
 }

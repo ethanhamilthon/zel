@@ -259,9 +259,11 @@ func (v *vm) initREPL() {
 
 	if strLib, ok := L.GetGlobal(lua.StringLibName).(*lua.LTable); ok {
 		repl.RawSetString(lua.StringLibName, copyTable(strLib, "__index"))
-		// Keep string methods working while hiding/protecting the shared metatable.
+		// Keep string methods working via a dedicated method table without
+		// __index so indexing (""):__index / ("").__index cannot reach strLib.
+		strMethods := copyTable(strLib, "__index")
 		strMt := L.NewTable()
-		strMt.RawSetString("__index", strLib)
+		strMt.RawSetString("__index", strMethods)
 		strMt.RawSetString("__metatable", lua.LString("protected"))
 		L.SetMetatable(lua.LString(""), strMt)
 	}

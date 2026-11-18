@@ -447,3 +447,121 @@ return {functions = {f = {description = "f", fn = function() return handle end}}
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestStringMetatableAndIndexIsolation(t *testing.T) {
+	env := newEnv(t)
+	init := fixture(t, env.info.Root, "init.lua", `return { functions = {
+  check_str = { description = "str", fn = function()
+    return string.upper("ok"), ("hi"):upper(), ("ab"):rep(2)
+  end },
+} }`)
+	c := loadFixture(t, env, init)
+	a := NewAgent(env, c)
+	defer a.Close()
+
+	// Direct value indexing, metatable reads, rawget/rawset, and mutation attempts
+	// cannot reach or mutate the private string library or string method table.
+	got := run(t, a, `
+local direct_idx = ("").__index
+local lit_idx = ("abc").__index
+local mt_field = ("").__metatable
+local tbl_idx = string.__index
+local str_mt = getmetatable("")
+local tbl_mt = getmetatable(string)
+local mut_idx = pcall(function() ("").__index.upper = function() return "HACK" end end)
+local mut_val = pcall(function() ("").upper = function() return "HACK" end end)
+local set_mt = pcall(setmetatable, "", {})
+local rg_idx = pcall(rawget, "", "__index")
+local rg_up = pcall(rawget, "", "upper")
+local rs_up = pcall(rawset, "", "upper", nil)
+local loaded_idx = assert(loadstring('return ("").__index == nil'))()
+local co_idx = coroutine.wrap(function() return ("").__index == nil end)()
+string.upper = function() return "REPL" end
+local m1, m2 = ("a,b"):match("(%a),(%a)")
+return direct_idx == nil, lit_idx == nil, mt_field == nil, tbl_idx == nil, str_mt, tbl_mt == nil,
+  mut_idx, mut_val, set_mt, rg_idx, rg_up, rs_up, loaded_idx, co_idx,
+  string.upper("ok"), ("hi"):upper(), ("hello"):sub(2, 4), m1, m2,
+  check_str()`)
+
+	want := strings.Join([]string{
+		"true", "true", "true", "true", "protected", "true",
+		"false", "false", "false", "false", "false", "false", "true", "true",
+		"REPL", "HI", "ell", "a", "b",
+		"OK", "HI", "abab",
+	}, "\n")
+	if got != want {
+		t.Fatalf("string isolation failed:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestConfiguredFunctionSiblingAndRecursiveCalls(t *testing.T) {
+	env := newEnv(t)
+	init := fixture(t, env.info.Root, "init.lua", `
+local state = { count = 0 }
+return { functions = {
+  bump = { description = "bump", fn = function(n)
+    state.count = state.count + (n or 1)
+    priv_total = (priv_total or 0) + (n or 1)
+    return state.count, priv_total
+  end },
+  bump_twice = { description = "bump twice", fn = function()
+    bump(1)
+    return bump(2)
+  end },
+  write_file = { description = "write", fn = function(name, text)
+    local f = assert(io.open(name, "w"))
+    f:write(text)
+    f:close()
+    return true
+  end },
+  read_via_sibling = { description = "read", fn = function(name, text)
+    assert(write_file(name, text .. ":" .. os.getenv("TEST_ENV")))
+    return assert(io.open(name)):read("*a")
+  end },
+  fact = { description = "fact", fn = function(n)
+    if n <= 1 then return 1 end
+    return n * fact(n - 1)
+  end },
+  get_state = { description = "get_state", fn = function()
+    return state.count, priv_total, type(os), type(io), os.getenv("ZEL_SESSION_ID")
+  end },
+} }`)
+	c := loadFixture(t, env, init)
+	a := NewAgent(env, c)
+	defer a.Close()
+
+	// Sibling calls, shared upvalue + private global state, recursive calls, and absent REPL introspection.
+	got := run(t, a, `
+local c, p = bump_twice()
+local content = read_via_sibling("sib.txt", "hi")
+local f5 = fact(5)
+return c, p, content, f5, type(os), type(io), type(debug), type(getfenv), type(setfenv), type(priv_total)`)
+	if got != "3\n3\nhi:base\n120\nnil\nnil\nnil\nnil\nnil\nnil" {
+		t.Fatalf("sibling/recursive failed: %q", got)
+	}
+
+	// Shadowing functions or stdlib names in the REPL does not override trusted bindings.
+	got = run(t, a, `
+local orig_fact = fact
+bump = function() return -999, -999 end
+fact = function() return -1 end
+os = { getenv = function() return "FAKE" end }
+io = { open = function() error("fake io") end }
+priv_total = 999
+local repl_b1, repl_b2 = bump(1)
+local repl_f = fact(5)
+local sc, sp = bump_twice()
+local trusted_f = orig_fact(4)
+local gc, gp, tos, tio, sid = get_state()
+local sib_content = read_via_sibling("sib2.txt", "ok")
+return repl_b1, repl_b2, repl_f, sc, sp, trusted_f, gc, gp, tos, tio, sid, sib_content`)
+	if got != "-999\n-999\n-1\n6\n6\n24\n6\n6\ntable\ntable\ns1\nok:base" {
+		t.Fatalf("REPL shadowing overrode trusted binding: %q", got)
+	}
+
+	// Reset starts with a fresh copy of shared state.
+	a.Reset()
+	if got := run(t, a, `return bump_twice()`); got != "[lua: fresh VM]\n3\n3" {
+		t.Fatalf("reset failed: %q", got)
+	}
+}
