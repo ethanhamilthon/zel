@@ -12,7 +12,7 @@ from verify_support import inputs, lua, message, outputs, suite, user_texts
 MENU, ALT_MENU, TRACE, RELOAD, ESC, DOWN, PGDN = (
     '\x0b', '\x1bk', '\x14', '\x12', '\x1b', '\x1b[B', '\x1b[6~')
 STARS = '✶✸✹✺'
-GATE = 'sh("while [ ! -f release-turn ]; do sleep .05; done")'
+GATE = 'fixture_gate()'
 
 
 def respond(body):
@@ -27,11 +27,11 @@ def respond(body):
     if 'Expanded test plan.' in latest:
         return [message('Finished prompt check.')]
     if latest == 'identity':
-        return [lua('session()', 'identity')]
+        return [lua('assert(os == nil and io == nil and debug == nil); session()', 'identity')]
     if latest == 'plain-working':
         return [lua('return (function() ' + GATE + '; return "' + 'x' * 150 + '" end)()', 'plain')]
     if latest == 'active-status':
-        return [lua('sh("zel status fixture-call-status"); ' + GATE + '; return "released"', 'held')]
+        return [lua('fixture_status("fixture-call-status"); ' + GATE + '; return "released"', 'held')]
     if latest == 'trace-check':
         return [lua('return "traced"', 'trace1'), lua('error("trace failure", 0)', 'trace2')]
     return [message('Hello from the fake provider.')]
@@ -76,6 +76,11 @@ def composer_and_models(f):
   prompts = {plan = "Expanded test plan."},
   settings = {colors = {accent = "#ff3b30", dark_gray = "#606060"}},
   systems = {project = "LOCAL-FILE-RULE"},
+  functions = {
+    fixture_gate = {description = "Wait for fixture release", fn = function()
+      os.execute("while [ ! -f release-turn ]; do sleep .05; done")
+    end},
+  },
 }
 ''')
     t = boot(f)
@@ -263,9 +268,17 @@ def status_and_steer(f):
     from PIL import Image
 
     f.configure()
-    (f.cwd / 'zel.lua').write_text('''return {settings = {
-      show_code = false, colors = {accent = "#ff3b30", dark_gray = "#606060"},
-    }}''')
+    (f.cwd / 'zel.lua').write_text('''return {
+  settings = {show_code = false, colors = {accent = "#ff3b30", dark_gray = "#606060"}},
+  functions = {
+    fixture_gate = {description = "Wait for fixture release", fn = function()
+      os.execute("while [ ! -f release-turn ]; do sleep .05; done")
+    end},
+    fixture_status = {description = "Set fixture call status", fn = function(text)
+      os.execute("zel status '" .. tostring(text):gsub("'", "'\\\\''") .. "'")
+    end},
+  },
+}''')
     t = boot(f, 'live')
     ident = live_session(f, t)
 
@@ -286,7 +299,7 @@ def status_and_steer(f):
     w = next(y for y, row in enumerate(rows) if 'fixture-call-status' in row)
     f.check(rows[i].startswith(tuple('◐◓◑◒')) and rows[w].startswith(tuple(STARS)) and
             w == i + 2 and rows[i + 1] == '', 'indicator and call status are separate lines with a blank separator', rows)
-    f.check('sh(' not in rows[w], 'call status replaces Lua code', rows[w])
+    f.check('fixture_status' not in rows[w] and 'fixture_gate' not in rows[w], 'call status replaces Lua code', rows[w])
     t.shot('01-status')
     Image.new('RGB', (24, 16), (20, 80, 200)).save(f.cwd / 'fixture.png')
     cmd('steer', '--file', 'fixture.png', '-', stdin='steer-marker-active\n')

@@ -188,6 +188,21 @@ class Term:
         self.decoder = codecs.getincrementaldecoder("utf8")("replace")
         self.raw = bytearray()
 
+    def drain(self, max_reads=256):
+        if self.master is None:
+            return
+        for _ in range(max_reads):
+            if not select.select([self.master], [], [], 0)[0]:
+                return
+            try:
+                data = os.read(self.master, 65536)
+            except OSError:
+                return
+            if not data:
+                return
+            self.raw.extend(data)
+            self.stream.feed(self.decoder.decode(data))
+
     def pump(self, seconds=.2):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
@@ -200,6 +215,7 @@ class Term:
                     return
                 self.raw.extend(data)
                 self.stream.feed(self.decoder.decode(data))
+        self.drain()
 
     def send(self, data, delay=.25):
         os.write(self.master, data.encode())
@@ -214,11 +230,16 @@ class Term:
 
     def until(self, condition, label, timeout=10, required=True):
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
+        while True:
             self.pump(.1)
             if condition():
                 return self.fixture.check(True, label)
             if self.p.poll() is not None:
+                self.drain()
+                if condition():
+                    return self.fixture.check(True, label)
+                break
+            if time.monotonic() >= end:
                 break
         self.shot(f"failed-{self.fixture.report.failures + 1:02}")
         check = self.fixture.require if required else self.fixture.check
