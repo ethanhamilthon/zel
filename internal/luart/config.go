@@ -400,9 +400,10 @@ func (c *Config) addHook(path string, value lua.LValue) error {
 		}
 		async = bool(b)
 	}
-	source := path
+	// The file name and line are enough to find the hook in Tracing.
+	source := filepath.Base(path)
 	if fn.Proto != nil {
-		source = fmt.Sprintf("%s:%d", strings.TrimPrefix(fn.Proto.SourceName, "@"), fn.Proto.LineDefined)
+		source = fmt.Sprintf("%s:%d", filepath.Base(strings.TrimPrefix(fn.Proto.SourceName, "@")), fn.Proto.LineDefined)
 	}
 	c.data.Hooks = append(c.data.Hooks, config.Hook{Events: events, Async: async, Ref: len(c.hooks), Source: source})
 	c.hooks = append(c.hooks, fn)

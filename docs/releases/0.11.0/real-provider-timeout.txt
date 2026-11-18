@@ -1,0 +1,8 @@
+```
+
+Step 2:
+```text
+[lua: fresh VM]
+nil
+[after hook saw 8 bytes]
+```

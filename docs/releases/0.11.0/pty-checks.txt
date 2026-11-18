@@ -1,0 +1,34 @@
+PASS zel config: init.lua + loads + zel.lua override + connect.json with $VAR
+PASS zel config warns that zel.lua replaces a system
+PASS zel -p runs Lua with config functions and hooks
+PASS headless tool text lists functions, no choice()
+PASS systems are built per session mode
+PASS startup opens the model picker
+PASS TUI: the lua call runs and the answer streams
+PASS turn summary counts calls
+PASS lua_before hook blocks the call
+PASS prompt message answered
+PASS the model gets <prompt name="plan">
+PASS show_prompt = false: the chat shows #plan
+PASS task.spawn result arrives as a notification
+PASS the model gets the task notification with its result
+PASS read(png) reports the attached image
+PASS read(png) attaches the image to the next request
+PASS choice() shows the picker
+PASS the choice answer comes back
+PASS answer reaches the model
+PASS timeout call returns
+PASS the call times out and the VM is reset
+PASS next call reports a fresh VM
+PASS globals are gone after the reset
+PASS edit and grep call
+PASS edit() applies all edits, grep() finds the line
+PASS async idle hook runs in its own VM with zel.* upvalue
+PASS Tracing lists lua entries
+PASS Tab: the Lua view
+PASS an entry shows code and output
+PASS hot reload of zel.lua: show_prompt = true shows the full text
+PASS broken zel.lua: Tracing says the previous config stays
+PASS the previous config (its hooks) still works
+PASS model menu lists models
+PASS choosing a model writes connect.json and keeps the rest

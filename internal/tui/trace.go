@@ -157,9 +157,9 @@ func traceHeader(t core.TraceEntry) string {
 	switch {
 	case t.Status != "":
 		parts = append(parts, t.Status)
-	case strings.HasPrefix(t.Output, "[skipped: "), strings.HasPrefix(t.Output, "[moved to task "):
+	case strings.HasPrefix(t.Output, "[skipped: "):
 	case t.Kind == "lua" && t.Duration > 0:
-		parts = append(parts, "exit 0")
+		parts = append(parts, "ok")
 	}
 	if t.Kind == "lua" || t.Kind == "hook" {
 		if d := traceDuration(t.Duration); d != "" {

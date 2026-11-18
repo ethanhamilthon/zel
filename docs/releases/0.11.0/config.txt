@@ -1,0 +1,55 @@
+Config: /var/folders/rl/lh1xp1cn6_gbxbs72ddyhfb40000gn/T/zel-011-home-4yjex2ik/init.lua
+Local:  /private/var/folders/rl/lh1xp1cn6_gbxbs72ddyhfb40000gn/T/zel-011-project-35r3n702/zel.lua
+Connect: /var/folders/rl/lh1xp1cn6_gbxbs72ddyhfb40000gn/T/zel-011-home-4yjex2ik/connect.json
+Warnings:
+  /private/var/folders/rl/lh1xp1cn6_gbxbs72ddyhfb40000gn/T/zel-011-project-35r3n702/zel.lua: systems.style replaces an earlier definition
+Settings:
+  model                      = "fixture/fixture"
+  effort                     = "low"
+  settings.compaction        = 400000
+  settings.timeout           = 3
+  settings.output            = 8000
+  settings.show_code         = true
+  settings.show_prompt       = false
+  settings.trace_hooks       = true
+  settings.editor            = "nvim"
+Keys:
+  editor                     = "ctrl+e"
+  info                       = "ctrl+i"
+  menu                       = "ctrl+k"
+  models                     = "ctrl+m"
+  new_session                = "ctrl+n"
+  quit                       = "ctrl+q"
+  redraw                     = "ctrl+l"
+  sessions                   = "ctrl+r"
+  stop                       = "ctrl+d"
+  trace                      = "ctrl+t"
+Colors:
+  colors.bg                  = "#0A0A0A"
+  colors.accent              = "#FF3B30"
+  colors.agent               = "#d6d6d6"
+  colors.user                = "#606060"
+  colors.user_highlight      = "#8c8c8c"
+  colors.gray                = "#929292"
+  colors.dark_gray           = "#606060"
+  colors.error               = "#e27878"
+  colors.trace.system        = "#606060"
+  colors.trace.user          = "#d97757"
+  colors.trace.agent         = "#ffffff"
+  colors.trace.lua           = "#a0a0a0"
+  colors.trace.notice        = "#808080"
+  colors.trace.output        = "#404040"
+  colors.trace.error         = "#e27878"
+Providers:
+  fixture: base_url=http://127.0.0.1:53474/v1 api=responses api_key=set
+Systems:
+  rules: GLOBAL-RULE mode=main
+  extra: LOADED-MODULE-RULE
+  style: LOCAL-STYLE
+Prompts: #plan
+Functions:
+  add: adds a and b
+Hooks:
+  init.lua:8 (lua_before)
+  init.lua:9 (lua_after)
+  init.lua:10 (idle) [async]

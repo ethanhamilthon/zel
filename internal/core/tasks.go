@@ -80,7 +80,9 @@ func (t *tasks) spawnLua(name string, timeout time.Duration, run luart.TaskFunc)
 			result, err := run(ctx, log)
 			jb.mu.Lock()
 			jb.value = result
-			if err != nil {
+			// A stopped or timed out task says so in its state, not with the
+			// cancellation error of the VM.
+			if err != nil && ctx.Err() == nil {
 				jb.failure = err.Error()
 			}
 			jb.mu.Unlock()

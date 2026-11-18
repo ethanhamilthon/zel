@@ -556,7 +556,7 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 	mu.loading = false
 	mu.trace = []core.TraceEntry{
 		{Kind: "system", Text: "prompt"},
-		{Kind: "hook", Text: "session_created: x -> exit 0, 5ms", At: at, Duration: 5 * time.Millisecond},
+		{Kind: "hook", Text: "session_created: init.lua:3 -> ok, 5ms", At: at, Duration: 5 * time.Millisecond},
 		{Kind: "user", Text: "list the files", At: at, Turn: 1},
 		{Kind: "lua", Text: "ls", Output: "a.go", At: at.Add(time.Second), Turn: 1, Duration: 300 * time.Millisecond, Request: req, First: true},
 		{Kind: "agent", Text: "Two files.", At: at.Add(2 * time.Second), Turn: 1, Request: req},
@@ -592,7 +592,7 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 	key(tcell.KeyLeft, 0)
 	v = view()
 	if !strings.Contains(v, "Tracing / lua · 1/2 · turn 1") || !strings.Contains(v, "── output") || !strings.Contains(v, "a.go") ||
-		!strings.Contains(v, "exit 0 · 300ms") || !strings.Contains(v, "request 1 · 1.5s · 16.0k in (14.0k cached) · 780 out") {
+		!strings.Contains(v, "ok · 300ms") || !strings.Contains(v, "request 1 · 1.5s · 16.0k in (14.0k cached) · 780 out") {
 		t.Fatalf("the entry has its command, output, time and tokens:\n%s", v)
 	}
 	key(tcell.KeyEscape, 0)

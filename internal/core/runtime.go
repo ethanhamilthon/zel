@@ -72,8 +72,6 @@ type session struct {
 	childMu     sync.Mutex
 	children    map[string]SubagentRun // zel -p children that run now, by session ID
 	childPIDs   map[string]int
-	hookWG      sync.WaitGroup // async hooks
-	hookMu      sync.Mutex
 	hookCtx     context.Context
 	stopHooks   context.CancelFunc
 	outputMu    sync.Mutex // numbers the files of cut call outputs

@@ -1,0 +1,32 @@
+* 9s · 1 call
+2
+hi
+
+<prompt name="hi">
+Say hi in Kazakh.
+</prompt>  please
+
+* 2s · 0 calls
+Сәлем!
+
+Use the lua tool: start task.spawn('sleep check', function() sh('sleep 3') return 'done sleeping' end) and do
+NOT wait for it; just end your turn saying 'started'.
+
+* 7s · 1 call
+started
+
+* 10s · 1 call
+Done sleeping.
+
+Use the lua tool: read('red.png') to see the image, and in the same call ask me choice('Which color is the ima
+ge?', {'red','blue'}). Then end the turn.
+
+* 8s · 1 call
+Picker sent.
+
+Which color is the image?: red
+
+* 4s · 0 calls
+Correct—it’s red.
+
+

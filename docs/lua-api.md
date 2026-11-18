@@ -28,7 +28,7 @@ and `connect.json`.
 
   ======== [output cut: 5000 of 13000 bytes omitted]
   ======== full output: /Users/…/.zel/sessions/…/outputs/b12.txt
-  ======== read it with slice(), grep() or sh("tail ...")
+  ======== read it with slice(read(path), from, count) or grep()
 
   …last 4000 bytes…
   ```
@@ -53,7 +53,9 @@ and `connect.json`.
 - The agent wakes up only for user messages and short notifications such as
   `<notification>t1 finished</notification>`.
 - `sh` and tasks run with the session environment: `ZEL_SESSION_ID`,
-  `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_CONFIG`, ... and `settings.env`. API keys are
+  `ZEL_SOCKET`, `ZEL_TOKEN`, `ZEL_MODE`, `ZEL_DEPTH`, ... and `settings.env`.
+  `ZEL_CONFIG` is the `--config` file, if any: a `zel -p` child reads the same
+  one, else its own `init.lua` and the `zel.lua` of its folder. API keys are
   never exported.
 
 ## API

@@ -16,8 +16,9 @@ func TestProductionPackageBoundaries(t *testing.T) {
 	allowed := map[string][]string{
 		"entities": {}, "config": {}, "store": {}, "edit": {}, "ipc": {},
 		"shell": {"entities"}, "provider": {"entities"},
-		"tui": {"core"},
-		"cli": {"core", "config", "ipc", "edit", "shell"},
+		"luart": {"config", "shell", "edit"},
+		"tui":   {"core"},
+		"cli":   {"core", "config"},
 	}
 	for pkg, deps := range allowed {
 		paths, err := filepath.Glob(filepath.Join("..", "internal", pkg, "*.go"))

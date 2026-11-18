@@ -1,0 +1,98 @@
+PASS no provider: exit with an error
+PASS default files (configs only)
+PASS .gitignore content
+PASS empty composer starts at the corner, no padding
+PASS typed text has no left padding
+PASS answer streamed
+PASS exactly one empty line between the answer and the input
+PASS working indicator shown
+PASS the Lua code is one line cut with ...
+PASS time is accent, the Lua code is dark gray
+PASS file completions: an empty line, no left padding, arrow on the right
+PASS # lists the configured prompt
+PASS answer to #plan
+PASS #plan reaches the model as a prompt block
+PASS chat shows #plan by default
+PASS menu: no Providers, Settings or hints
+PASS main menu: descriptions instead of hotkeys, flush with the right edge of the box
+PASS the arrow is in the last column of the box
+PASS Info shows init.lua
+PASS the menu and Info are one box: the title stays in place
+PASS choosing a model updates only the model selection in connect.json
+PASS show_prompt reveals existing prompt text on reload
+PASS an edit of init.lua changes the accent while running
+PASS the mouse is not captured
+PASS read() attached the image
+PASS the provider received the image bytes
+PASS clean quit
+PASS saved history has a placeholder, no image data
+PASS no attachments folder anywhere
+PASS config home holds only configs, no sessions
+PASS a resumed chat shows the placeholder where the image was
+PASS answer after two retries
+PASS the provider failed twice, then answered
+PASS retries are shown in Tracing
+PASS clean quit again
+PASS zel config --config replaces init.lua and skips zel.lua
+PASS zel config loads zel.lua and the selected model
+PASS zel -p --config uses the override and keeps connect.json
+PASS the model has one tool, lua
+PASS the main description documents Lua and choice()
+PASS no tool description template markers
+PASS no template placeholder is left
+PASS the reasoning summary is always requested
+PASS the headless description has no user and no choice()
+PASS configured functions are advertised to the model
+PASS Lua globals survive between calls and timeout covers sh()
+PASS the call after timeout gets a fresh Lua VM
+PASS settings.output cuts the result and saves the full text
+PASS settings.slash_menu is gone
+PASS settings.reasoning_summary is gone
+PASS settings.bash_timeout is gone
+PASS settings.bash_output is gone
+PASS settings.show_bash is gone
+PASS "/" opens the menu
+PASS answer after the hooked command
+PASS lua_after matched the code and appended output
+PASS the hook run is an entry in Tracing
+PASS read() resolves a relative path after cd()
+PASS the image of a relative path reached the model
+PASS clean quit after hooks
+PASS init.lua rejects providers
+PASS zel -p --mode plan gets the plan instruction
+PASS zel -p without --mode has no plan instruction
+PASS --mode main is refused
+PASS the current model is first and selected in the models menu
+PASS while the editor runs zel does not draw
+PASS Ctrl+E: the editor changed the input and zel shows it
+PASS Ctrl+E opens nvim with the input
+PASS the text saved in nvim is the input now
+PASS a background task started
+PASS task line, one empty line, working line
+PASS the task line is styled like the working line
+PASS Info shows the subagent: model, effort, context, spend
+PASS the subagent finished and the agent answered
+PASS clean quit after the editor, task and subagent checks
+PASS a turn with one Lua call
+PASS the turn summary says "1 call", not steps
+PASS a 25-line input shows all 25 lines (a third of the screen was 10)
+PASS Info: a centered half-screen box, title at its top left
+PASS show_code = false hides the code but keeps the working indicator
+PASS choice() opens a picker
+PASS the selected answer reaches the model
+PASS clean quit after the input and choice checks
+PASS turn 1 answered
+PASS turn 2: two Lua calls in one response, then an answer
+PASS Ctrl+T: Tracing with a row per turn, at the latest entry
+PASS PgUp: the first turn has its row too
+PASS hooks shown, Lua error and duration, no separate output row
+PASS Tab: only Lua entries
+PASS an entry: Lua code and output together, status, duration, request tokens
+PASS Left: the previous Lua entry in the view
+PASS Esc: back on the same row
+PASS Ctrl+H hides the hooks
+PASS clean quit after the Tracing checks
+PASS trace_hooks = false: a resumed session opens Tracing without hooks
+PASS Ctrl+H shows them again
+PASS clean quit after trace_hooks
+ALL PASS

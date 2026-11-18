@@ -85,13 +85,11 @@ func (s *session) release() {
 
 func (s *session) shutdown(reason string) {
 	s.sessionClosed(reason)
-	s.hookMu.Lock()
 	s.ended.Store(true)
+	// Async hooks end with hookCtx; closing the config VM waits for them.
 	if s.stopHooks != nil {
 		s.stopHooks()
 	}
-	s.hookMu.Unlock()
-	s.hookWG.Wait()
 	if s.queue != nil {
 		s.queue.OnPush(nil)
 	}

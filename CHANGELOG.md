@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.11.0
+
+Breaking release: Lua only. No migration of the old config or sessions.
+
+- The model has one tool, `lua`, instead of `bash`. One VM per session keeps
+  its globals between calls; a timeout or a config reload starts a fresh one.
+  The API is plain globals: `sh()`, `read()` (images attach), `write()`,
+  `edit()`, `slice()`, `grep()`, `glob()`, `list()`, `task.spawn/list/get/wait/tail/stop`
+  (tasks are Lua functions with copies of their upvalues), `choice()`, `cd()`,
+  `docs()`, `models()` and `session.*`. Subagents are `sh("zel -p ...")`.
+- The config is Lua: `~/.config/zel/init.lua` and `./zel.lua` return
+  `settings`, `systems`, `prompts`, `functions` (tools for the agent),
+  `hooks` and `loads`; config code uses `require("zel")`. Providers and the
+  selected model live in `~/.config/zel/connect.json`, with `$VAR` expansion.
+  `settings.yaml`, `systems/`, `prompts/`, `hooks/`, `${{ }}` and `modes` are gone.
+- Hooks are Lua functions: `{events = {...}, fn = function(event, data) end, async = true}`.
+  A returned string is the event's text, `false, "reason"` blocks.
+  `bash_before`/`bash_after` are now `lua_before`/`lua_after`.
+- `#name` prompts are sent as `<prompt name="name">`, and the chat shows them
+  as `#name`; `settings.show_prompt = true` shows the full text.
+- `zel task`, `zel choice`, `zel view`, `zel edit`, `zel cd` and `zel session`
+  are removed; the session socket only serves `zel -p` children.
+- Renamed: `bash_timeout` -> `timeout`, `bash_output` -> `output`,
+  `show_bash` -> `show_code`, `colors.trace.bash` -> `colors.trace.lua`; the
+  Tracing tab is `Lua` with Lua highlighting, the counter says `calls`.
+- Steering waits for the running call to end; calls not yet started are skipped.
+
 ## 0.10.1
 
 - Configs now use YAML (`~/.config/zel/settings.yaml`), with `systems/*.md`,
