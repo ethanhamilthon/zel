@@ -231,21 +231,21 @@ func TestPruneBeforeTheNextFrame(t *testing.T) {
 
 func TestInputFollowsChat(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		records []core.Record
-		pending string
-		tasks   []core.ActiveTask
-		inputY  int
+		name       string
+		records    []core.Record
+		pending    string
+		indicators []core.Indicator
+		inputY     int
 	}{
 		{name: "empty"},
 		{name: "user", records: []core.Record{{Kind: "user", Text: "hello"}}, inputY: 2},
 		{name: "assistant", records: []core.Record{{Kind: "assistant", Text: "hello"}}, inputY: 3},
 		{name: "pending", pending: "hello", inputY: 2},
-		{name: "working", tasks: []core.ActiveTask{{Name: "Running task", Started: time.Now()}}, inputY: 2},
+		{name: "working", indicators: []core.Indicator{{ID: "i1", Text: "Running indicator", Started: time.Now()}}, inputY: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testApp(t)
-			m.records, m.pending, m.tasks = tc.records, tc.pending, tc.tasks
+			m.records, m.pending, m.indicators = tc.records, tc.pending, tc.indicators
 			m.input.set("draft")
 			s := m.screen.(tcell.SimulationScreen)
 			for _, height := range []int{20, 40} {
@@ -635,7 +635,7 @@ func abs(n int) int { return max(n, -n) }
 
 func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
-	r := workingRow(status, 2, true, 40)
+	r := workingRow(status, "", 2, true, 40)
 	text := rowText(r)
 	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 calls") {
 		t.Fatalf("%d wide: %q", w, text)
@@ -644,8 +644,111 @@ func TestWorkingRowColorsAndSingleLine(t *testing.T) {
 	if len(r) != 2 || fg(r[0]) != tcell.GetColor(string(accentColor)) || fg(r[1]) != tcell.GetColor(string(darkGray)) {
 		t.Fatalf("the star and the time are accent, what runs is dark gray: %+v", r)
 	}
-	if hidden := rowText(workingRow(status, 2, false, 40)); strings.Contains(hidden, "go test") {
+	if hidden := rowText(workingRow(status, "", 2, false, 40)); strings.Contains(hidden, "go test") {
 		t.Fatalf("show_code = false must hide the command: %q", hidden)
+	}
+	if explicit := rowText(workingRow(status, "read main.go", 2, false, 40)); !strings.Contains(explicit, "read main.go") {
+		t.Fatalf("callStatus must show even when show_code = false: %q", explicit)
+	}
+	indRow := indicatorRow(core.Indicator{ID: "i1", Text: "make test", Started: time.Now().Add(-6 * time.Second)}, 40)
+	indTxt := rowText(indRow)
+	if !strings.ContainsAny(indTxt, "◐◓◑◒") || !strings.Contains(indTxt, "6s · make test") {
+		t.Fatalf("indicatorRow = %q", indTxt)
+	}
+}
+
+func TestMenuClosesWithConfiguredKey(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	if err := os.WriteFile(config.DefaultPaths(home, dir, "").Init, []byte("return {settings = {keys = {menu = 'alt+k'}}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := core.New(dir, core.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	q := newEventQueue()
+	m := &app{runtime: a, screen: screen, ctx: ctx, cancel: cancel, results: make(chan result, 8), cwd: dir}
+	m.ctl = core.NewController(a, q.Push)
+	t.Cleanup(func() {
+		cancel()
+		m.ctl.Close()
+		a.Close()
+		q.Close()
+		screen.Fini()
+	})
+
+	m.key(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModAlt))
+	if m.menu == nil || m.menu.page != "main" {
+		t.Fatal("alt+k did not open menu")
+	}
+	m.key(tcell.NewEventKey(tcell.KeyCtrlK, 0, 0))
+	if m.menu == nil {
+		t.Fatal("hard-coded Ctrl+K closed menu when keys.menu = alt+k")
+	}
+	m.key(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModAlt))
+	if m.menu != nil {
+		t.Fatal("keys.menu (alt+k) did not close menu")
+	}
+}
+
+func TestPrintRecordAndConfigScreenAndCommandShortcut(t *testing.T) {
+	m := testApp(t)
+	m.control(core.Event{Kind: "print", Text: "printed note"})
+	m.pruneRecords()
+	if len(m.records) != 1 || m.records[0].Kind != "print" || m.records[0].Text != "printed note" {
+		t.Fatalf("print record lost: %+v", m.records)
+	}
+	m.historyRows(60)
+	if len(m.cache) != 1 || len(m.cache[0].rows) == 0 {
+		t.Fatalf("print record not rendered: %+v", m.cache)
+	}
+	fg, _, _ := m.cache[0].rows[0][0].style.Decompose()
+	if fg != tcell.GetColor(string(darkGray)) {
+		t.Fatalf("print row color = %v, want darkGray", fg)
+	}
+
+	cfg := &core.Config{
+		Files:         []string{"/tmp/init.lua"},
+		Systems:       []core.System{{Name: "style", Text: "short", Source: "/tmp/init.lua"}},
+		Functions:     []core.Function{{Name: "sh", Description: "`sh(cmd)` - run\nsecond line", Source: "/tmp/init.lua"}},
+		Prompts:       map[string]string{"plan": "expanded"},
+		PromptSources: map[string]string{"plan": "/tmp/init.lua"},
+		Hooks:         []core.Hook{{Events: []string{"idle"}, Async: true, Source: "init.lua:5"}},
+		Commands:      []core.Command{{Name: "Commit", Description: "commit diff", Key: "alt+g", Source: "/tmp/init.lua"}},
+		Warnings:      []string{"warn1"},
+		Errors:        []string{"err1"},
+	}
+	txt := configText(cfg, "Reloaded")
+	for _, want := range []string{"Reloaded", "Errors (1)", "err1", "Warnings (1)", "warn1", "Files (1)", "Systems (1)", "style", "Functions (1)", "`sh(cmd)` - run", "Prompts (1)", "plan", "Hooks (1)", "idle (async)", "Commands (1)", "Commit · alt+g"} {
+		if !strings.Contains(txt, want) {
+			t.Fatalf("configText missing %q:\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, "second line") {
+		t.Fatalf("configText must only show first line of function description:\n%s", txt)
+	}
+
+	if name, ok := commandShortcut(tcell.NewEventKey(tcell.KeyRune, 'g', tcell.ModAlt), cfg); !ok || name != "Commit" {
+		t.Fatalf("commandShortcut = %q, %v", name, ok)
+	}
+	m.openMenu("config")
+	m.draw()
+	m.key(tcell.NewEventKey(tcell.KeyCtrlR, 0, 0))
+	select {
+	case r := <-m.results:
+		m.accept(r)
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not finish")
+	}
+	if m.menu == nil || m.menu.page != "config" || !strings.Contains(m.menu.body, "Files (") {
+		t.Fatalf("Config page after Ctrl+R: %+v", m.menu)
 	}
 }
 

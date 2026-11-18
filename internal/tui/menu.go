@@ -123,10 +123,10 @@ Tracing: Tab: all, Lua, agent or errors · Ctrl+H: show the hooks
   Left/Right in an entry: the previous or next of the view
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.
-The config file (~/.config/zel/settings.yaml) reloads automatically.
+Config: ~/.config/zel/init.lua and ./zel.lua (Ctrl+R in Config reloads).
 Commands run with your user permissions.`
 
-var pageTitles = map[string]string{"sessions": "Sessions", "models": "Models", "effort": "Effort", "trace": "Tracing", "info": "Info", "help": "Help"}
+var pageTitles = map[string]string{"sessions": "Sessions", "models": "Models", "effort": "Effort", "trace": "Tracing", "config": "Config", "info": "Info", "help": "Help"}
 
 func (m *app) openMenu(page string) {
 	m.resetCompletions()
@@ -141,10 +141,16 @@ func (m *app) openMenu(page string) {
 			{"New session", "Start a clean session", "new"},
 			{"Models", "Switch model and effort", "models"},
 			{"Tracing", "Inspect every session step", "trace"},
+			{"Config", "Files, entries, commands and errors", "config"},
 			{"Rename", "Rename this session", "rename"},
 			{"Info", "Model, context and spend", "info"},
 			{"Help", "Keys and tips", "help"},
 			{"Quit", "Save and exit", "quit"},
+		}
+		if cfg := m.ctl.Config(); cfg != nil {
+			for _, cmd := range cfg.Commands {
+				mu.list.items = append(mu.list.items, item{label: cmd.Name, detail: commandDetail(cmd), id: "cmd:" + cmd.Name})
+			}
 		}
 	case "models":
 		m.modelItems()
@@ -172,6 +178,9 @@ func (m *app) openMenu(page string) {
 	case "trace":
 		mu.title = m.traceTitle()
 		m.loadPage()
+	case "config":
+		m.configStatus = ""
+		mu.body = configText(m.ctl.Config(), "")
 	case "sessions", "info":
 		m.loadPage()
 	}
@@ -315,12 +324,56 @@ func (m *app) acceptMenu(r result) {
 			m.modelsAt = time.Time{}
 			m.fetchModels()
 		}
+	case "reload":
+		if m.menu != nil && m.menu.page == "config" {
+			if m.configStatus == "Reloading..." {
+				cfg := m.ctl.Config()
+				switch {
+				case m.ctl.Status().Busy:
+					m.configStatus = "Reload queued until turn ends"
+				case cfg != nil && len(cfg.Errors) > 0:
+					m.configStatus = "Error: " + strings.Join(cfg.Errors, "; ")
+				default:
+					m.configStatus = "Reloaded"
+				}
+			}
+			m.menu.body = configText(m.ctl.Config(), m.configStatus)
+		}
 	}
 }
+
+func commandDetail(cmd core.Command) string {
+	switch {
+	case cmd.Description != "" && cmd.Key != "":
+		return cmd.Description + " (" + cmd.Key + ")"
+	case cmd.Description != "":
+		return cmd.Description
+	default:
+		return cmd.Key
+	}
+}
+
+func (m *app) reloadConfig() {
+	if m.menu == nil || m.menu.page != "config" {
+		return
+	}
+	m.configStatus = "Reloading..."
+	m.menu.body = configText(m.ctl.Config(), m.configStatus)
+	m.work("reload", func() (any, error) {
+		m.ctl.Reload()
+		return nil, nil
+	})
+}
+
 func (m *app) menuKey(k *tcell.EventKey) {
 	mu := m.menu
 	if mu.form != nil {
 		m.formKey(k)
+		return
+	}
+	if shortcut(k, m.ctl.Settings().Keys) == "menu" {
+		m.menu = nil
+		m.updateCompletions()
 		return
 	}
 	switch k.Key() {
@@ -340,9 +393,11 @@ func (m *app) menuKey(k *tcell.EventKey) {
 			m.openMenu(parent)
 		}
 		return
-	case tcell.KeyCtrlK:
-		m.menu = nil
-		return
+	case tcell.KeyCtrlR:
+		if mu.page == "config" {
+			m.reloadConfig()
+			return
+		}
 	case tcell.KeyUp:
 		if mu.body != "" && len(mu.list.items) == 0 {
 			mu.offset = max(0, mu.offset-1)

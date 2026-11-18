@@ -3,6 +3,8 @@ package tui
 import (
 	"cmp"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,4 +80,112 @@ func spend(u core.Usage) string {
 		cache = fmt.Sprintf("%s cached, %.0f%% hit", formatTokens(u.Cached), percent)
 	}
 	return fmt.Sprintf("%s in · %s out · %s", formatTokens(u.Input), formatTokens(u.Output), cache)
+}
+
+func configSource(s string) string {
+	if s == "" {
+		return ""
+	}
+	return core.DisplayPath(s)
+}
+
+// configText formats the Config menu page: reload status, warnings/errors, and
+// every loaded section with its source file.
+func configText(cfg *core.Config, reloadStatus string) string {
+	var b strings.Builder
+	if reloadStatus != "" {
+		b.WriteString(reloadStatus + "\n\n")
+	} else {
+		b.WriteString("Ctrl+R to reload\n\n")
+	}
+	if cfg == nil {
+		b.WriteString("No configuration loaded.\n")
+		return b.String()
+	}
+	if len(cfg.Errors) > 0 {
+		fmt.Fprintf(&b, "Errors (%d)\n", len(cfg.Errors))
+		for _, e := range cfg.Errors {
+			fmt.Fprintf(&b, "  %s\n", e)
+		}
+		b.WriteByte('\n')
+	}
+	if len(cfg.Warnings) > 0 {
+		fmt.Fprintf(&b, "Warnings (%d)\n", len(cfg.Warnings))
+		for _, w := range cfg.Warnings {
+			fmt.Fprintf(&b, "  %s\n", w)
+		}
+		b.WriteByte('\n')
+	}
+	fmt.Fprintf(&b, "Files (%d)\n", len(cfg.Files))
+	if len(cfg.Files) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, f := range cfg.Files {
+		fmt.Fprintf(&b, "  %s\n", configSource(f))
+	}
+	fmt.Fprintf(&b, "\nSystems (%d)\n", len(cfg.Systems))
+	if len(cfg.Systems) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, s := range cfg.Systems {
+		if src := configSource(s.Source); src != "" {
+			fmt.Fprintf(&b, "  %s · %s\n", s.Name, src)
+		} else {
+			fmt.Fprintf(&b, "  %s\n", s.Name)
+		}
+	}
+	fmt.Fprintf(&b, "\nFunctions (%d)\n", len(cfg.Functions))
+	if len(cfg.Functions) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, f := range cfg.Functions {
+		line := firstLine(f.Description)
+		if src := configSource(f.Source); src != "" {
+			fmt.Fprintf(&b, "  %s · %s\n    %s\n", f.Name, src, line)
+		} else {
+			fmt.Fprintf(&b, "  %s\n    %s\n", f.Name, line)
+		}
+	}
+	fmt.Fprintf(&b, "\nPrompts (%d)\n", len(cfg.Prompts))
+	if len(cfg.Prompts) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Prompts)) {
+		if src := configSource(cfg.PromptSources[name]); src != "" {
+			fmt.Fprintf(&b, "  %s · %s\n", name, src)
+		} else {
+			fmt.Fprintf(&b, "  %s\n", name)
+		}
+	}
+	fmt.Fprintf(&b, "\nHooks (%d)\n", len(cfg.Hooks))
+	if len(cfg.Hooks) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, h := range cfg.Hooks {
+		label := strings.Join(h.Events, ", ")
+		if h.Async {
+			label += " (async)"
+		}
+		if src := configSource(h.Source); src != "" {
+			fmt.Fprintf(&b, "  %s · %s\n", label, src)
+		} else {
+			fmt.Fprintf(&b, "  %s\n", label)
+		}
+	}
+	fmt.Fprintf(&b, "\nCommands (%d)\n", len(cfg.Commands))
+	if len(cfg.Commands) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, cmd := range cfg.Commands {
+		var parts []string
+		parts = append(parts, cmd.Name)
+		if cmd.Key != "" {
+			parts = append(parts, cmd.Key)
+		}
+		if src := configSource(cmd.Source); src != "" {
+			parts = append(parts, src)
+		}
+		fmt.Fprintf(&b, "  %s\n", strings.Join(parts, " · "))
+	}
+	return b.String()
 }

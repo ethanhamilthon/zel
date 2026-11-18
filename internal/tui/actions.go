@@ -51,10 +51,22 @@ func (m *app) switchSession(id string) {
 		return m.ctl.Resume(id)
 	})
 }
+func (m *app) runCommand(name string) {
+	if err := m.ctl.RunCommand(name); err != nil {
+		m.notice(err)
+	}
+}
+
 func (m *app) activate(it item) {
 	mu := m.menu
 	switch mu.page {
 	case "main":
+		if name, ok := strings.CutPrefix(it.id, "cmd:"); ok {
+			m.menu = nil
+			m.updateCompletions()
+			m.runCommand(name)
+			return
+		}
 		switch it.id {
 		case "new":
 			m.switchSession("")

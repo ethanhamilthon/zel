@@ -29,15 +29,14 @@ func normalizeControl(k *tcell.EventKey) *tcell.EventKey {
 	return k
 }
 
-func shortcut(k *tcell.EventKey, keys map[string]string) string {
-	name := ""
+func keyName(k *tcell.EventKey) string {
 	if k.Key() == tcell.KeyRune {
 		r := latinKey(k.Rune())
 		switch k.Modifiers() {
 		case tcell.ModCtrl:
-			name = "ctrl+" + string(r)
+			return "ctrl+" + string(r)
 		case tcell.ModAlt:
-			name = "alt+" + string(r)
+			return "alt+" + string(r)
 		}
 	} else if k.Key() >= tcell.KeyCtrlA && k.Key() <= tcell.KeyCtrlZ && k.Modifiers()&(tcell.ModAlt|tcell.ModShift) == 0 {
 		// Enter and Tab keep their editor meaning unless the protocol explicitly
@@ -45,8 +44,13 @@ func shortcut(k *tcell.EventKey, keys map[string]string) string {
 		if (k.Key() == tcell.KeyEnter || k.Key() == tcell.KeyTab) && k.Modifiers()&tcell.ModCtrl == 0 {
 			return ""
 		}
-		name = "ctrl+" + string(rune('a'+k.Key()-tcell.KeyCtrlA))
+		return "ctrl+" + string(rune('a'+k.Key()-tcell.KeyCtrlA))
 	}
+	return ""
+}
+
+func shortcut(k *tcell.EventKey, keys map[string]string) string {
+	name := keyName(k)
 	if name == "" {
 		return ""
 	}
@@ -59,4 +63,20 @@ func shortcut(k *tcell.EventKey, keys map[string]string) string {
 		}
 	}
 	return ""
+}
+
+func commandShortcut(k *tcell.EventKey, cfg *core.Config) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	name := keyName(k)
+	if name == "" {
+		return "", false
+	}
+	for _, cmd := range cfg.Commands {
+		if cmd.Key != "" && strings.EqualFold(cmd.Key, name) {
+			return cmd.Name, true
+		}
+	}
+	return "", false
 }

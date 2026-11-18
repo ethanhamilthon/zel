@@ -32,7 +32,7 @@ var Events = []string{
 
 // System is one named system prompt entry from systems in Lua config.
 type System struct {
-	Name, Text string
+	Name, Text, Source string
 }
 
 // Hook is one hook entry from hooks in Lua config.
@@ -45,7 +45,13 @@ type Hook struct {
 
 // Function is one custom tool function from functions in Lua config.
 type Function struct {
-	Name, Description string
+	Name, Description, Source string
+}
+
+// Command is one user command entry from commands in Lua config.
+type Command struct {
+	Name, Description, Key, Source string
+	Ref                            int
 }
 
 // Paths are the configuration file locations of a session.
@@ -59,8 +65,10 @@ type Config struct {
 	Settings         Settings
 	Systems          []System
 	Prompts          map[string]string
+	PromptSources    map[string]string
 	Hooks            []Hook
 	Functions        []Function
+	Commands         []Command
 	Files            []string // every file read: watched for hot reload
 	Warnings, Errors []string
 }

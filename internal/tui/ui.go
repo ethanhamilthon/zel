@@ -77,7 +77,9 @@ type app struct {
 	fileIndex                      []string
 	fileAt                         time.Time
 	fileLoading                    bool
-	tasks                          []core.ActiveTask
+	indicators                     []core.Indicator
+	callStatus                     string
+	configStatus                   string
 	editing                        bool // Ctrl+E: an editor owns the terminal
 }
 
@@ -109,10 +111,9 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 	m.turnIndex = len(m.records)
 	a.OnChoiceChanged(func() { m.post(result{kind: "choice"}) })
 	defer a.OnChoiceChanged(nil)
-	a.OnSubagentsChanged(func() { m.post(result{kind: "tasks"}) })
-	defer a.OnSubagentsChanged(nil)
 	m.syncChoice()
-	m.tasks = m.ctl.ActiveTasks()
+	m.indicators = m.ctl.Indicators()
+	m.callStatus = m.ctl.CallStatus()
 	keyboard := make(chan tcell.Event, 64)
 	quit := make(chan struct{})
 	defer close(quit)
@@ -187,8 +188,18 @@ func runScreen(ctx context.Context, a *core.Runtime, cwd string, screen tcell.Sc
 					m.loadPage()
 				}
 			}
+			nextIndicators := m.ctl.Indicators()
+			if !slices.Equal(nextIndicators, m.indicators) {
+				m.indicators = nextIndicators
+				m.dirty = true
+			}
+			callStatus := m.ctl.CallStatus()
+			if callStatus != m.callStatus {
+				m.callStatus = callStatus
+				m.dirty = true
+			}
 			status := m.ctl.Status()
-			if status.Busy || len(m.tasks) > 0 {
+			if status.Busy || len(m.indicators) > 0 {
 				m.dirty = true
 			}
 			if status.Busy != m.busy {
@@ -253,8 +264,19 @@ func (m *app) control(e core.Event) {
 			m.pending = ""
 		}
 		m.records = core.ApplyEvent(m.records, *e.Agent)
+	case "print":
+		m.records = append(m.records, core.Record{Kind: "print", Text: e.Text})
 	case "notice", "error":
 		m.ctl.LogEvent(e.Kind, e.Text)
+		if m.menu != nil && m.menu.page == "config" {
+			if e.Kind == "error" {
+				m.configStatus = "Error: " + e.Text
+				m.menu.body = configText(m.ctl.Config(), m.configStatus)
+			} else if e.Kind == "notice" && e.Text == "config reloaded" {
+				m.configStatus = "Reloaded"
+				m.menu.body = configText(m.ctl.Config(), m.configStatus)
+			}
+		}
 	case "fatal":
 		m.failure = errors.New(e.Text)
 		m.cancel()
@@ -297,14 +319,15 @@ func (m *app) control(e core.Event) {
 		}
 		m.pruneRecords()
 	}
-	m.tasks = m.ctl.ActiveTasks()
+	m.indicators = m.ctl.Indicators()
+	m.callStatus = m.ctl.CallStatus()
 }
 func (m *app) pruneRecords() {
 	kept := m.records[:0]
 	cached := m.cache[:0]
 	for i, r := range m.records {
 		switch r.Kind {
-		case "user", "assistant", "choice", "compaction", "turn_end", "error":
+		case "user", "assistant", "choice", "compaction", "turn_end", "error", "print":
 			kept = append(kept, r)
 			if i < len(m.cache) {
 				cached = append(cached, m.cache[i])
