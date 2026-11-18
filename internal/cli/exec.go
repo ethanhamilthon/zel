@@ -25,17 +25,35 @@ import (
 // can SIGKILL the outer group (including this zel exec) while the worker is
 // starting the command. The worker owns both Start and cancellation, so there
 // is no gap where a running command has no supervisor.
+//
+// The worker writes its JSON result to a launcher-owned pipe rather than caller
+// stdout so an undrained caller stdout pipe cannot strand the worker if the
+// launcher is killed.
 func execProcess(ctx context.Context, args []string) error {
 	const worker = "--_exec-worker"
 	if len(args) > 0 && args[0] == worker {
-		const fd = 3 // first ExtraFiles descriptor
-		life := os.NewFile(fd, "exec lifeline")
+		const (
+			lifeFD = 3 // first ExtraFiles descriptor
+			resFD  = 4 // second ExtraFiles descriptor
+		)
+		life := os.NewFile(lifeFD, "exec lifeline")
 		info, err := life.Stat()
 		if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+			_ = life.Close()
 			return errors.New("zel exec: missing worker lifeline")
 		}
 		defer life.Close()
-		syscall.CloseOnExec(fd)
+		syscall.CloseOnExec(lifeFD)
+
+		res := os.NewFile(resFD, "exec result")
+		info, err = res.Stat()
+		if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+			_ = res.Close()
+			return errors.New("zel exec: missing worker result pipe")
+		}
+		defer res.Close()
+		syscall.CloseOnExec(resFD)
+
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		go func() {
@@ -43,32 +61,59 @@ func execProcess(ctx context.Context, args []string) error {
 			_, _ = life.Read(b[:]) // the launcher never writes; EOF means it is gone
 			cancel()
 		}()
-		return Run(ctx, append([]string{"exec"}, args[1:]...), os.Stdin, os.Stdout, Options{})
+		err = Run(ctx, append([]string{"exec"}, args[1:]...), os.Stdin, res, Options{})
+		if errors.Is(err, syscall.EPIPE) {
+			return &ExitError{Code: 1, Err: err, Reported: true}
+		}
+		return err
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	r, w, err := os.Pipe()
+	lifeR, lifeW, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	defer r.Close()
-	defer w.Close()
-	// The launcher alone holds w. A signal handled by main closes it too,
+	defer lifeR.Close()
+	defer lifeW.Close()
+
+	resR, resW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer resR.Close()
+	defer resW.Close()
+
+	// The launcher alone holds lifeW. A signal handled by main closes it too,
 	// allowing the worker to reap the command and return the usual JSON result.
-	stop := context.AfterFunc(ctx, func() { _ = w.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = lifeW.Close() })
 	defer stop()
+
 	cmd := exec.Command(exe, append([]string{"exec", worker}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.ExtraFiles = []*os.File{r}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.ExtraFiles = []*os.File{lifeR, resW}
+	cmd.Stdin, cmd.Stderr = os.Stdin, os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	_ = r.Close()
+	_ = lifeR.Close()
+	_ = resW.Close()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readCh := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(resR)
+		_ = resR.Close()
+		readCh <- readResult{data: data, err: err}
+	}()
+
 	err = cmd.Wait()
+	res := <-readCh
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		code := exit.ExitCode()
@@ -77,7 +122,18 @@ func execProcess(ctx context.Context, args []string) error {
 		}
 		return &ExitError{Code: code, Reported: true}
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if res.err != nil {
+		return res.err
+	}
+	if len(res.data) > 0 {
+		if _, err := os.Stdout.Write(res.data); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+	}
+	return nil
 }
 
 func execCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
