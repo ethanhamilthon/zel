@@ -69,7 +69,7 @@ func IsHelper(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "version", "help", "--help", "-h", "task", "choice", "view", "session", "cd", "edit", "docs", "models", "config":
+	case "version", "help", "--help", "-h", "docs", "models", "config":
 		return true
 	}
 	return false
@@ -127,18 +127,6 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 			return nil
 		case "update":
 			return updateCommand(ctx, rest, out)
-		case "task":
-			return taskCommand(ctx, rest, in, out)
-		case "choice":
-			return choiceCommand(ctx, rest, out)
-		case "view":
-			return viewCommand(ctx, rest, out)
-		case "session":
-			return sessionInfoCommand(ctx, rest, out)
-		case "cd":
-			return cdCommand(ctx, rest, out)
-		case "edit":
-			return editCommand(rest, in, out)
 		case "docs":
 			return docsCommand(rest, out)
 		case "models":
@@ -166,7 +154,7 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	fs.StringVar(&dir, "cwd", "", "working directory")
 	fs.Float64Var(&timeout, "timeout", 0, "seconds before the run is cancelled")
 	fs.BoolVar(&asJSON, "json", false, "print {ok, answer, session, error}")
-	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.config/zel/settings.yaml")
+	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.config/zel/init.lua")
 	// -p may come without its value when flags follow: zel -p --resume ID "text".
 	args = slices.Clone(args)
 	for i, a := range args {
