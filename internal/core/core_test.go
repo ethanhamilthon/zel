@@ -371,6 +371,7 @@ func TestLuaOutputErrorAndEnvironment(t *testing.T) {
 		"error('boom', 0)":           "error: boom",
 		"return sh('exit 3').code":   "3",
 		"return sh('echo fine').out": "fine\n",
+		"return type(os), type(io), type(debug), type(require)": "nil\nnil\nnil\nnil",
 	} {
 		got := s.runLua(ctx, code)
 		if !strings.HasPrefix(got, want) && !strings.Contains(got, want) {

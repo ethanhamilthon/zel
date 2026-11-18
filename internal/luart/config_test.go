@@ -50,7 +50,7 @@ return {
 	local := filepath.Join(root, "zel.lua")
 	extra := fixture(t, root, "b.lua", `
 return {systems = {c = "C"}, settings = {timeout = 17, env = {SHARED = "b"}, show_prompt = true}, prompts = {review = "new"},
- functions = {over = {description = "new", fn = function() return "new" end}},
+ functions = {over = {description = "new", fn = function() return "new" end}, pkgpath = {description = "pkg", fn = function() return package.path end}},
  hooks = {{events = {"message", "idle"}, async = true, fn = function() print("async ran") end}},
  commands = {{name = "Commit", description = "commit v2", fn = function() end}, {name = "Other", key = "ctrl+o", fn = function() end}}}`)
 	env.log = make(chan string, 4)
@@ -81,7 +81,7 @@ return {systems = {c = "C"}, settings = {timeout = 17, env = {SHARED = "b"}, sho
 	for _, f := range d.Functions {
 		fns = append(fns, f.Name+":"+f.Description+"@"+filepath.Base(f.Source))
 	}
-	if !reflect.DeepEqual(fns, []string{"greet:`greet(name)` - says hi@init.lua", "over:new@b.lua"}) {
+	if !reflect.DeepEqual(fns, []string{"greet:`greet(name)` - says hi@init.lua", "over:new@b.lua", "pkgpath:pkg@b.lua"}) {
 		t.Fatalf("functions %v", fns)
 	}
 	if len(d.Warnings) != 6 || !strings.Contains(d.Warnings[0], "systems.a replaces a definition from") || !strings.Contains(strings.Join(d.Warnings, "\n"), "functions.over replaces a definition from "+init) ||
@@ -119,10 +119,11 @@ return {systems = {c = "C"}, settings = {timeout = 17, env = {SHARED = "b"}, sho
 	case <-time.After(3 * time.Second):
 		t.Fatal("async hook did not run")
 	}
-	// The package.path has the defaults folder first, then the config folders.
+	// The private package.path of the session VM has the defaults folder first,
+	// while package itself is hidden from the agent REPL.
 	a := NewAgent(env, c)
 	defer a.Close()
-	if got := run(t, a, `return package.path:match("^[^;]*;[^;]*;"), greet("bob")`); !strings.HasPrefix(got, filepath.Join(home, "defaults", "?.lua")+";"+filepath.Join(home, "defaults", "?", "init.lua")+";") || !strings.HasSuffix(got, "hi bob") {
+	if got := run(t, a, `return type(package), pkgpath():match("^[^;]*;[^;]*;"), greet("bob")`); !strings.HasPrefix(got, "nil\n"+filepath.Join(home, "defaults", "?.lua")+";"+filepath.Join(home, "defaults", "?", "init.lua")+";") || !strings.HasSuffix(got, "hi bob") {
 		t.Fatalf("%q", got)
 	}
 }
@@ -182,5 +183,65 @@ func TestConfigErrors(t *testing.T) {
 	}
 	if _, err := LoadConfig(t.Context(), newEnv(t), config.Paths{Files: []string{missing}, Required: []string{missing}}, config.DefaultSettings()); err == nil {
 		t.Fatal("a missing required file loaded")
+	}
+}
+
+func TestHooksAndCommandsKeepFullStdlib(t *testing.T) {
+	env := newEnv(t)
+	env.log = make(chan string, 4)
+	fixture(t, env.info.Root, "helper_mod.lua", `return {tag = "loaded-ok"}`)
+	init := fixture(t, env.info.Root, "init.lua", `
+local mod = require("helper_mod")
+local function check_env()
+  return table.concat({
+    type(os), type(io), type(debug), type(package), type(require),
+    type(getfenv), type(setfenv), type(loadfile), type(dofile),
+    os.getenv("ZEL_SESSION_ID") or "", mod.tag,
+  }, ",")
+end
+return {
+  hooks = {
+    {events = {"message"}, fn = function() return check_env() end},
+    {events = {"idle"}, async = true, fn = function()
+      local f = assert(io.open("async_hook.txt", "w"))
+      f:write(check_env())
+      f:close()
+      print("async:" .. mod.tag)
+    end},
+  },
+  commands = {
+    {name = "Check", fn = function()
+      local p = assert(io.popen("echo cmd-ok"))
+      local out = p:read("*a"):gsub("%s+$", "")
+      p:close()
+      return out .. ":" .. check_env()
+    end},
+  },
+}`)
+	c := loadFixture(t, env, init)
+	want := "table,table,table,table,function,function,function,function,function,s1,loaded-ok"
+
+	res, err := c.RunHook(t.Context(), c.Data().Hooks[0], "message", map[string]any{"text": "hi"})
+	if err != nil || !res.HasText || res.Text != want {
+		t.Fatalf("sync hook: %+v %v", res, err)
+	}
+	if _, err := c.RunHook(t.Context(), c.Data().Hooks[1], "idle", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-env.log:
+		if msg != "async:loaded-ok" {
+			t.Fatalf("async log: %q", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("async hook did not log")
+	}
+	data, err := os.ReadFile(filepath.Join(env.info.Cwd, "async_hook.txt"))
+	if err != nil || string(data) != want {
+		t.Fatalf("async hook file: %q %v", data, err)
+	}
+	out, err := c.RunCommand(t.Context(), c.Data().Commands[0])
+	if err != nil || out != "cmd-ok:"+want {
+		t.Fatalf("command: %q %v", out, err)
 	}
 }
