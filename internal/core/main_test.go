@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -97,9 +98,9 @@ func TestExecLauncherKilledWithUndrainedStdout(t *testing.T) {
 	defer errW.Close()
 
 	script := `printf '%524288s\n' ''
+(touch bg.tmp; mv bg.tmp bg; sleep 5; touch descendant) &
 printf '%s %s\n' "$PPID" "$$" > pids.tmp
 mv pids.tmp pids
-(sleep 5; touch descendant) &
 sleep 10
 touch foreground
 wait`
@@ -126,6 +127,7 @@ wait`
 	})
 
 	pidPath := filepath.Join(dir, "pids")
+	bgPath := filepath.Join(dir, "bg")
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		data, err := os.ReadFile(pidPath)
 		if err == nil {
@@ -133,13 +135,13 @@ wait`
 			if len(fields) == 2 {
 				workerPID, _ = strconv.Atoi(fields[0])
 				childPID, _ = strconv.Atoi(fields[1])
-				if workerPID > 0 && childPID > 0 {
+				if _, bgErr := os.Stat(bgPath); bgErr == nil && workerPID > 0 && childPID > 0 {
 					break
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for worker/child pids: %v", err)
+			t.Fatalf("timed out waiting for worker/child pids and bg marker: %v", err)
 		}
 	}
 
@@ -152,19 +154,8 @@ wait`
 	}
 
 	// Keep pubOutR open and undrained while asserting the worker exits promptly.
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		err := syscall.Kill(workerPID, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("worker pid %d stayed alive with undrained caller stdout (kill err=%v)", workerPID, err)
-		}
-	}
-
-	if err := syscall.Kill(-childPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("expected child process group %d to be killed, got err=%v", childPID, err)
-	}
+	waitProcessGone(t, workerPID, 2*time.Second, "worker stayed alive with undrained caller stdout")
+	waitProcessGroupGone(t, childPID, 2*time.Second)
 	for _, marker := range []string{"foreground", "descendant"} {
 		if _, err := os.Stat(filepath.Join(dir, marker)); !os.IsNotExist(err) {
 			t.Fatalf("%s marker should not exist: %v", marker, err)
@@ -200,5 +191,238 @@ wait`
 	}
 	if errOut := readPipe("stderr", errR); len(errOut) != 0 {
 		t.Fatalf("expected empty stderr after launcher kill, got %q", errOut)
+	}
+}
+
+type procInfo struct {
+	pid  int
+	ppid int
+	pgid int
+	stat string
+	comm string
+}
+
+func (p procInfo) isZombie() bool {
+	return strings.HasPrefix(p.stat, "Z") || p.stat == "X"
+}
+
+func waitProcessGone(t *testing.T, pid int, timeout time.Duration, failureMsg string) {
+	t.Helper()
+	var lastErr error
+	for deadline := time.Now().Add(timeout); ; time.Sleep(10 * time.Millisecond) {
+		lastErr = syscall.Kill(pid, 0)
+		if errors.Is(lastErr, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	procs, listErr := listProcesses(func(p procInfo) bool { return p.pid == pid })
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		return
+	} else {
+		lastErr = err
+	}
+	if listErr != nil || len(procs) == 0 {
+		t.Fatalf("%s: pid %d (kill err=%v, list err=%v)", failureMsg, pid, lastErr, listErr)
+	}
+	if !procs[0].isZombie() {
+		t.Fatalf("%s: pid %d still live (kill err=%v): %+v", failureMsg, pid, lastErr, procs[0])
+	}
+	t.Logf("pid %d exited to unreaped zombie after %v (kill err=%v): %+v", pid, timeout, lastErr, procs[0])
+}
+
+// waitProcessGroupGone waits for all processes in pgid to exit and be reaped.
+// After SIGKILL to a process group and reaping only the group leader, descendants
+// reparented to init/subreaper can briefly stay in kernel exit teardown or as
+// unreaped zombies: Linux Kill(-pgid, 0) returns nil for both, while macOS
+// returns nil during exit teardown and EPERM for zombies.
+func waitProcessGroupGone(t *testing.T, pgid int, timeout time.Duration) {
+	t.Helper()
+	var lastErr error
+	for deadline := time.Now().Add(timeout); ; time.Sleep(10 * time.Millisecond) {
+		lastErr = syscall.Kill(-pgid, 0)
+		if errors.Is(lastErr, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	procs, listErr := listProcesses(func(p procInfo) bool { return p.pgid == pgid })
+	if err := syscall.Kill(-pgid, 0); errors.Is(err, syscall.ESRCH) {
+		return
+	} else {
+		lastErr = err
+	}
+	if listErr != nil {
+		t.Fatalf("expected child process group %d to be killed after %v (kill err=%v, list err=%v)", pgid, timeout, lastErr, listErr)
+	}
+	var live, zombies []procInfo
+	for _, p := range procs {
+		if p.isZombie() {
+			zombies = append(zombies, p)
+		} else {
+			live = append(live, p)
+		}
+	}
+	if len(live) > 0 {
+		t.Fatalf("expected child process group %d to be killed, live processes survived after %v (kill err=%v): %+v", pgid, timeout, lastErr, live)
+	}
+	if len(zombies) == 0 {
+		t.Fatalf("expected child process group %d to be killed after %v, got kill err=%v with no listed members", pgid, timeout, lastErr)
+	}
+	t.Logf("child process group %d has only unreaped zombie(s) after %v (kill err=%v): %+v", pgid, timeout, lastErr, zombies)
+}
+
+func listProcesses(match func(procInfo) bool) ([]procInfo, error) {
+	if runtime.GOOS == "linux" {
+		entries, err := os.ReadDir("/proc")
+		if err != nil {
+			return nil, err
+		}
+		var out []procInfo
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if _, err := strconv.Atoi(e.Name()); err != nil {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+			if err != nil {
+				continue
+			}
+			if p, ok := parseProcStat(string(data)); ok && match(p) {
+				out = append(out, p)
+			}
+		}
+		return out, nil
+	}
+	raw, err := exec.Command("ps", "-axo", "pid=,ppid=,pgid=,stat=,comm=").Output()
+	if err != nil {
+		return nil, err
+	}
+	var out []procInfo
+	for _, line := range strings.Split(string(raw), "\n") {
+		if p, ok := parsePSLine(line); ok && match(p) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func parseProcStat(line string) (procInfo, bool) {
+	var p procInfo
+	open := strings.IndexByte(line, '(')
+	close := strings.LastIndexByte(line, ')')
+	if open < 0 || close <= open {
+		return p, false
+	}
+	var err error
+	if p.pid, err = strconv.Atoi(strings.TrimSpace(line[:open])); err != nil {
+		return p, false
+	}
+	p.comm = line[open+1 : close]
+	fields := strings.Fields(line[close+1:])
+	if len(fields) < 3 {
+		return p, false
+	}
+	p.stat = fields[0]
+	p.ppid, _ = strconv.Atoi(fields[1])
+	if p.pgid, err = strconv.Atoi(fields[2]); err != nil {
+		return p, false
+	}
+	return p, true
+}
+
+func parsePSLine(line string) (procInfo, bool) {
+	var p procInfo
+	s := strings.TrimSpace(line)
+	if s == "" {
+		return p, false
+	}
+	take := func() (string, bool) {
+		i := strings.IndexAny(s, " \t")
+		if i < 0 {
+			f := s
+			s = ""
+			return f, f != ""
+		}
+		f := s[:i]
+		s = strings.TrimLeft(s[i:], " \t")
+		return f, f != ""
+	}
+	f0, ok0 := take()
+	f1, ok1 := take()
+	f2, ok2 := take()
+	f3, ok3 := take()
+	if !ok0 || !ok1 || !ok2 || !ok3 {
+		return p, false
+	}
+	var err error
+	if p.pid, err = strconv.Atoi(f0); err != nil {
+		return p, false
+	}
+	p.ppid, _ = strconv.Atoi(f1)
+	if p.pgid, err = strconv.Atoi(f2); err != nil {
+		return p, false
+	}
+	p.stat = f3
+	p.comm = s
+	return p, true
+}
+
+func TestProcessStateClassification(t *testing.T) {
+	if p, ok := parseProcStat("123 (my (sleep)) Z 1 120 120 0 -1"); !ok || p.pid != 123 || p.ppid != 1 || p.pgid != 120 || p.comm != "my (sleep)" || !p.isZombie() {
+		t.Fatalf("parseProcStat zombie: ok=%v p=%+v", ok, p)
+	}
+	if p, ok := parseProcStat("124 (sleep) S 1 120 120 0 -1"); !ok || p.isZombie() {
+		t.Fatalf("parseProcStat live: ok=%v p=%+v", ok, p)
+	}
+	if p, ok := parsePSLine("  43353 43352 43352 Z+   <defunct>"); !ok || p.pid != 43353 || p.ppid != 43352 || p.pgid != 43352 || !p.isZombie() || p.comm != "<defunct>" {
+		t.Fatalf("parsePSLine zombie: ok=%v p=%+v", ok, p)
+	}
+	if p, ok := parsePSLine("  43352 43231 43352 S    /bin/sleep"); !ok || p.isZombie() || p.comm != "/bin/sleep" {
+		t.Fatalf("parsePSLine live: ok=%v p=%+v", ok, p)
+	}
+
+	cmd := exec.Command("/bin/sleep", "10")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	liveProcs, err := listProcesses(func(p procInfo) bool { return p.pid == pid })
+	if err != nil || len(liveProcs) != 1 || liveProcs[0].isZombie() {
+		t.Fatalf("expected live sleep process %d, got err=%v procs=%+v", pid, err, liveProcs)
+	}
+
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	var sawZombie bool
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		zProcs, err := listProcesses(func(p procInfo) bool { return p.pid == pid })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(zProcs) == 1 && zProcs[0].isZombie() {
+			sawZombie = true
+			break
+		}
+	}
+	if !sawZombie {
+		t.Fatalf("expected un-waited killed child %d to appear as zombie", pid)
+	}
+	_ = cmd.Wait()
+	afterReap, err := listProcesses(func(p procInfo) bool { return p.pid == pid })
+	if err != nil || len(afterReap) != 0 {
+		t.Fatalf("expected reaped child %d to disappear, got err=%v procs=%+v", pid, err, afterReap)
 	}
 }
