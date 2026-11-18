@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 
 	"zel/internal/config"
 	"zel/internal/ipc"
+	"zel/internal/store"
 )
 
 func TestContextProjectionInvalidation(t *testing.T) {
@@ -1391,6 +1393,172 @@ func TestFailedReloadKeepsLiveStateAndReportsToOldHooks(t *testing.T) {
 			log, err = os.ReadFile(filepath.Join(s.dir, "reload.log"))
 			if err != nil || !strings.HasSuffix(string(log), "\ntrue:\n") {
 				t.Fatalf("successful config_changed hook logged %q: %v", log, err)
+			}
+		})
+	}
+}
+
+func TestFailedReloadMetadataReplacementRollsBackDiskAndResumesCleanly(t *testing.T) {
+	const originalLua = `return {settings = {timeout = 17}, systems = {rule = 'OLD-RULE'}}`
+	const updatedLua = `return {settings = {timeout = 31}, systems = {rule = 'NEW-RULE'}}`
+
+	for _, mode := range []string{"resume", "retry"} {
+		t.Run(mode, func(t *testing.T) {
+			a := newTestAgentWith(t, okProvider(), Options{}, withLocal(originalLua))
+			s := a.session()
+			if err := a.ConfigureSession(t.Context(), "p", "old", "high"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := turn(t, a, "freeze the prompt"); err != nil {
+				t.Fatal(err)
+			}
+			oldPrompt := s.prompt
+			if !strings.Contains(oldPrompt, "OLD-RULE") {
+				t.Fatalf("unexpected initial prompt: %q", oldPrompt)
+			}
+			connPath := s.paths().Connect
+			origConn, err := os.ReadFile(connPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connCfg, err := config.LoadConnect(connPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseURL := connCfg.Providers["p"].BaseURL
+			newConn, err := json.Marshal(map[string]any{
+				"provider": "p2",
+				"model":    "new",
+				"effort":   "low",
+				"providers": map[string]any{
+					"p2": map[string]any{"base_url": baseURL},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			logPath := filepath.Join(s.sessionDir(), "session.jsonl")
+			metaPath := filepath.Join(s.sessionDir(), "meta.json")
+			origLog, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			writeFile(t, connPath, string(newConn))
+			writeFile(t, a.ConfigFile(), updatedLua)
+			if err := os.Remove(metaPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(metaPath, 0700); err != nil {
+				t.Fatal(err)
+			}
+			faultActive := true
+			defer func() {
+				if faultActive {
+					_ = os.Remove(metaPath)
+				}
+			}()
+
+			if err := a.Reload(); err == nil || !strings.Contains(err.Error(), "could not save history") {
+				t.Fatalf("reload error = %v, want could not save history", err)
+			}
+			st := a.Settings()
+			if st.Provider != "p" || st.Model != "old" || st.Effort != "high" || st.Timeout != 17 ||
+				s.cfg.sel != (selection{"p", "old", "high"}) || s.prompt != oldPrompt || instructionItems(a) != 1 {
+				t.Fatalf("failed reload changed memory: %+v sel=%+v prompt=%q", st, s.cfg.sel, s.prompt)
+			}
+			if errs := a.ConfigErrors(); len(errs) != 1 || !strings.Contains(errs[0], "could not save history") {
+				t.Fatalf("config errors = %v", errs)
+			}
+			gotLog, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotLog, origLog) {
+				t.Fatalf("session.jsonl persisted rejected reload:\ngot:  %s\nwant: %s", gotLog, origLog)
+			}
+
+			// Clear the metadata fault and verify durable log before retry or resume.
+			if err := os.Remove(metaPath); err != nil {
+				t.Fatal(err)
+			}
+			faultActive = false
+
+			fresh, err := store.Open(a.StateHome())
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, loadedItems, err := fresh.Load(s.project, s.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Provider != "p" || loaded.Model != "old" || loaded.Effort != "high" {
+				t.Fatalf("durable log model after failed reload = %+v", loaded)
+			}
+			var loadedPrompts int
+			for _, item := range loadedItems {
+				if p, ok := instructionSnapshot(item.Data); ok {
+					loadedPrompts++
+					if p != oldPrompt {
+						t.Fatalf("durable log prompt = %q, want %q", p, oldPrompt)
+					}
+				}
+			}
+			if loadedPrompts != 1 {
+				t.Fatalf("durable log prompt count = %d, want 1", loadedPrompts)
+			}
+
+			if mode == "resume" {
+				writeFile(t, connPath, string(origConn))
+				writeFile(t, a.ConfigFile(), originalLua)
+				dir, id := s.dir, s.id
+				a.Close()
+				resumed, err := New(dir, Options{Resume: id})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resumed.Close()
+				rst := resumed.Settings()
+				if rst.Provider != "p" || rst.Model != "old" || rst.Effort != "high" ||
+					resumed.session().prompt != oldPrompt || instructionItems(resumed) != 1 {
+					t.Fatalf("resumed state = %+v prompt=%q items=%d", rst, resumed.session().prompt, instructionItems(resumed))
+				}
+				if _, err := turn(t, resumed, "ordinary turn after resume"); err != nil {
+					t.Fatalf("turn after resume: %v", err)
+				}
+				return
+			}
+
+			if err := a.Reload(); err != nil {
+				t.Fatalf("retry reload after fault removal: %v", err)
+			}
+			st = a.Settings()
+			if st.Provider != "p2" || st.Model != "new" || st.Effort != "low" || st.Timeout != 31 ||
+				!strings.Contains(s.prompt, "NEW-RULE") || instructionItems(a) != 2 || len(a.ConfigErrors()) != 0 {
+				t.Fatalf("state after retry = %+v prompt=%q items=%d errs=%v", st, s.prompt, instructionItems(a), a.ConfigErrors())
+			}
+			retriedLog, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Count(retriedLog, []byte("NEW-RULE")) != 1 || bytes.Count(retriedLog, []byte(`"model":"new"`)) != 1 {
+				t.Fatalf("unexpected log after retry:\n%s", retriedLog)
+			}
+			if _, err := turn(t, a, "ordinary turn after retry"); err != nil {
+				t.Fatalf("turn after retry: %v", err)
+			}
+			dir, id := s.dir, s.id
+			a.Close()
+			resumed, err := New(dir, Options{Resume: id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resumed.Close()
+			rst := resumed.Settings()
+			if rst.Provider != "p2" || rst.Model != "new" || rst.Effort != "low" ||
+				!strings.Contains(resumed.session().prompt, "NEW-RULE") {
+				t.Fatalf("resumed after retry = %+v prompt=%q", rst, resumed.session().prompt)
 			}
 		})
 	}

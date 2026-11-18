@@ -101,6 +101,8 @@ type Item struct {
 // A torn last line (a crash in the middle of a write) is ignored.
 func (s *Store) Load(project, id string) (Session, []Item, error) {
 	dir := s.Dir(project, id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	file, err := os.Open(filepath.Join(dir, "session.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return Session{}, nil, ErrNotFound
@@ -151,10 +153,8 @@ func (s *Store) Load(project, id string) (Session, []Item, error) {
 	if m, err := readMeta(dir); err == nil {
 		v.First, v.Updated = m.First, m.Updated
 	}
-	s.mu.Lock()
 	v.Project = project
 	s.last[dir] = v
-	s.mu.Unlock()
 	return v, items, nil
 }
 
@@ -212,22 +212,38 @@ func (s *Store) Append(v Session, items []Item, saved, total int) error {
 		seq := min(saved, total) + i
 		_ = enc.Encode(line{T: "item", Seq: &seq, Data: items[i].Data, Meta: items[i].Meta})
 	}
-	if buf.Len() > 0 {
-		if err := appendFile(filepath.Join(dir, "session.jsonl"), buf.Bytes(), true); err != nil {
-			return err
-		}
-	}
+	metaPath := filepath.Join(dir, "meta.json")
 	if buf.Len() == 0 && known && v.First == prev.First && v.Parent == prev.Parent {
-		if _, err := os.Stat(filepath.Join(dir, "meta.json")); err == nil {
+		if info, err := os.Stat(metaPath); err == nil && !info.IsDir() {
 			return nil
 		}
 	}
-	keep := v
-	keep.Created = time.Time{}
-	if err := writeJSON(filepath.Join(dir, "meta.json"), meta{ID: v.ID, Title: v.Title, First: v.First, Parent: v.Parent,
-		Provider: v.Provider, Model: v.Model, Effort: v.Effort, Updated: time.Now().UTC()}); err != nil {
+	tmpMeta, err := stageJSON(metaPath, meta{ID: v.ID, Title: v.Title, First: v.First, Parent: v.Parent,
+		Provider: v.Provider, Model: v.Model, Effort: v.Effort, Updated: time.Now().UTC()})
+	if err != nil {
 		return err
 	}
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var origExisted bool
+	var origSize int64
+	if buf.Len() > 0 {
+		origExisted, origSize, err = appendLog(sessionPath, buf.Bytes())
+		if err != nil {
+			os.Remove(tmpMeta)
+			return err
+		}
+	}
+	if err := os.Rename(tmpMeta, metaPath); err != nil {
+		os.Remove(tmpMeta)
+		if buf.Len() > 0 {
+			if rbErr := rollbackLog(sessionPath, origExisted, origSize); rbErr != nil {
+				return errors.Join(err, rbErr)
+			}
+		}
+		return err
+	}
+	keep := v
+	keep.Created = time.Time{}
 	s.last[dir] = keep
 	return nil
 }
@@ -305,23 +321,72 @@ func appendFile(path string, data []byte, sync bool) error {
 	return errors.Join(err, file.Close())
 }
 
-// writeJSON replaces path with v atomically.
-func writeJSON(path string, v any) error {
-	data, err := json.Marshal(v)
+func appendLog(path string, data []byte) (existed bool, origSize int64, err error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		existed, origSize = true, info.Size()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, 0, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return false, 0, err
+	}
+	_, err = file.Write(data)
+	if err == nil {
+		err = file.Sync()
+	}
+	if err != nil {
+		if existed {
+			err = errors.Join(err, file.Truncate(origSize), file.Sync())
+		}
+		err = errors.Join(err, file.Close())
+		if !existed {
+			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				err = errors.Join(err, rmErr)
+			}
+		}
+		return false, 0, err
+	}
+	if err := file.Close(); err != nil {
+		return false, 0, errors.Join(err, rollbackLog(path, existed, origSize))
+	}
+	return existed, origSize, nil
+}
+
+func rollbackLog(path string, existed bool, origSize int64) error {
+	if !existed {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0600)
 	if err != nil {
 		return err
+	}
+	err = file.Truncate(origSize)
+	if err == nil {
+		err = file.Sync()
+	}
+	return errors.Join(err, file.Close())
+}
+
+// stageJSON writes v to a temporary sibling file ready to rename onto path.
+func stageJSON(path string, v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, err = tmp.Write(data)
 	err = errors.Join(err, tmp.Close())
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
 	if err != nil {
 		os.Remove(tmp.Name())
+		return "", err
 	}
-	return err
+	return tmp.Name(), nil
 }
