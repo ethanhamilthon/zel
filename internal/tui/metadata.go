@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"zel/internal/config"
 	"zel/internal/core"
 )
 
@@ -91,7 +92,7 @@ func configSource(s string) string {
 
 // configText formats the Config menu page: reload status, warnings/errors, and
 // every loaded section with its source file.
-func configText(cfg *core.Config, reloadStatus string) string {
+func configText(cfg *config.Config, reloadStatus string) string {
 	var b strings.Builder
 	if reloadStatus != "" {
 		b.WriteString(reloadStatus + "\n\n")

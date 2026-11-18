@@ -300,6 +300,25 @@ local json_escapes = {
   ['t'] = '\t',
 }
 
+-- table.concat of thousands of parts overflows the Lua registry; join in groups.
+local function concat_parts(parts, first, last)
+  if first then
+    local range = {}
+    for i = first, last do
+      range[#range + 1] = parts[i]
+    end
+    parts = range
+  end
+  while #parts > 200 do
+    local merged = {}
+    for i = 1, #parts, 200 do
+      merged[#merged + 1] = table.concat(parts, "", i, math.min(i + 199, #parts))
+    end
+    parts = merged
+  end
+  return table.concat(parts)
+end
+
 local function json_decode(str)
   local pos = 1
   local len = #str
@@ -320,7 +339,7 @@ local function json_decode(str)
       local c = str:sub(pos, pos)
       if c == '"' then
         pos = pos + 1
-        return table.concat(buf)
+        return concat_parts(buf)
       elseif c == '\\' then
         pos = pos + 1
         if pos > len then
@@ -859,7 +878,7 @@ local slice_entry = entry(
     if last < start then
       return ""
     end
-    return table.concat(lines, "", start, last)
+    return concat_parts(lines, start, last)
   end
 )
 
@@ -923,7 +942,7 @@ local function literal_replace_all(s, old, new)
     out[#out + 1] = new
     pos = i + oldlen
   end
-  return table.concat(out)
+  return concat_parts(out)
 end
 
 local edit_entry = entry(

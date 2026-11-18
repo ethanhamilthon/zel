@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"zel/internal/config"
 	"zel/internal/core"
 
 	"github.com/gdamore/tcell/v2"
@@ -342,7 +343,7 @@ func (m *app) acceptMenu(r result) {
 	}
 }
 
-func commandDetail(cmd core.Command) string {
+func commandDetail(cmd config.Command) string {
 	switch {
 	case cmd.Description != "" && cmd.Key != "":
 		return cmd.Description + " (" + cmd.Key + ")"

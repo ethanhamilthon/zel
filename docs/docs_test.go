@@ -14,12 +14,11 @@ import (
 // The packages keep to the dependency graph of ARCHITECTURE.md.
 func TestProductionPackageBoundaries(t *testing.T) {
 	allowed := map[string][]string{
-		"entities": {}, "config": {"defaults"}, "defaults": {}, "store": {}, "edit": {}, "ipc": {},
+		"entities": {}, "config": {"defaults"}, "defaults": {}, "store": {}, "ipc": {},
 		"shell": {"entities"}, "provider": {"entities"},
-		"defaults": {},
-		"luart":    {"config", "shell", "edit"},
-		"tui":      {"core"},
-		"cli":      {"core", "config"},
+		"luart": {"config", "shell"},
+		"tui":   {"core", "config"},
+		"cli":   {"core", "config", "defaults"},
 	}
 	for pkg, deps := range allowed {
 		paths, err := filepath.Glob(filepath.Join("..", "internal", pkg, "*.go"))

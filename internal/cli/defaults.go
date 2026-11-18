@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"zel/internal/core"
+	"zel/internal/defaults"
 )
 
 func defaultsCommand(args []string) error {
@@ -20,7 +21,7 @@ func defaultsCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return resetDefaults(home, core.BundledDefaults())
+	return resetDefaults(home, defaults.Files())
 }
 
 func resetDefaults(home string, files map[string]string) error {

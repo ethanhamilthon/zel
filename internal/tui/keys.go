@@ -5,6 +5,7 @@ import (
 	"unicode"
 
 	"github.com/gdamore/tcell/v2"
+	"zel/internal/config"
 	"zel/internal/core"
 )
 
@@ -65,7 +66,7 @@ func shortcut(k *tcell.EventKey, keys map[string]string) string {
 	return ""
 }
 
-func commandShortcut(k *tcell.EventKey, cfg *core.Config) (string, bool) {
+func commandShortcut(k *tcell.EventKey, cfg *config.Config) (string, bool) {
 	if cfg == nil {
 		return "", false
 	}

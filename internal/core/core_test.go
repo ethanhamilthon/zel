@@ -1200,6 +1200,10 @@ func TestCommandsReloadAndPrompt(t *testing.T) {
 		defer mu.Unlock()
 		var out []string
 		for _, e := range events {
+			if e.Agent != nil {
+				out = append(out, e.Agent.Kind+":"+e.Agent.Text)
+				continue
+			}
 			out = append(out, e.Kind+":"+e.Text)
 		}
 		return out
@@ -1219,7 +1223,7 @@ func TestCommandsReloadAndPrompt(t *testing.T) {
 	}
 	got := text()
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"error:command Fail: boom", "notice:said it"}) {
+	if !slices.Equal(got, []string{"error:command Fail: boom", "print:said it"}) {
 		t.Fatalf("command results: %q", got)
 	}
 	// A failed reload keeps the old config and shows the error in the snapshot.

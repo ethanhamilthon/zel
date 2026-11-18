@@ -11,6 +11,7 @@ import (
 	"time"
 	"zel/internal/entities"
 
+	"zel/internal/config"
 	"zel/internal/core"
 
 	"github.com/gdamore/tcell/v2"
@@ -661,7 +662,7 @@ func TestMenuClosesWithConfiguredKey(t *testing.T) {
 	home := t.TempDir()
 	dir := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
-	if err := os.WriteFile(config.DefaultPaths(home, dir, "").Init, []byte("return {settings = {keys = {menu = 'alt+k'}}}\n"), 0600); err != nil {
+	if err := os.WriteFile(config.DefaultPaths(home, dir, nil, false).Files[0], []byte("return {settings = {keys = {menu = 'alt+k'}}}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a, err := core.New(dir, core.Options{})
@@ -714,14 +715,14 @@ func TestPrintRecordAndConfigScreenAndCommandShortcut(t *testing.T) {
 		t.Fatalf("print row color = %v, want darkGray", fg)
 	}
 
-	cfg := &core.Config{
+	cfg := &config.Config{
 		Files:         []string{"/tmp/init.lua"},
-		Systems:       []core.System{{Name: "style", Text: "short", Source: "/tmp/init.lua"}},
-		Functions:     []core.Function{{Name: "sh", Description: "`sh(cmd)` - run\nsecond line", Source: "/tmp/init.lua"}},
+		Systems:       []config.System{{Name: "style", Text: "short", Source: "/tmp/init.lua"}},
+		Functions:     []config.Function{{Name: "sh", Description: "`sh(cmd)` - run\nsecond line", Source: "/tmp/init.lua"}},
 		Prompts:       map[string]string{"plan": "expanded"},
 		PromptSources: map[string]string{"plan": "/tmp/init.lua"},
-		Hooks:         []core.Hook{{Events: []string{"idle"}, Async: true, Source: "init.lua:5"}},
-		Commands:      []core.Command{{Name: "Commit", Description: "commit diff", Key: "alt+g", Source: "/tmp/init.lua"}},
+		Hooks:         []config.Hook{{Events: []string{"idle"}, Async: true, Source: "init.lua:5"}},
+		Commands:      []config.Command{{Name: "Commit", Description: "commit diff", Key: "alt+g", Source: "/tmp/init.lua"}},
 		Warnings:      []string{"warn1"},
 		Errors:        []string{"err1"},
 	}
