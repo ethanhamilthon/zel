@@ -396,9 +396,9 @@ func TestUpdateReplacesBinaryWithVerifiedRelease(t *testing.T) {
 	}
 }
 
-// A parent `zel -p` whose bash runs a child `zel -p` and an explicitly invoked script:
-// the whole path through the bash tool, the socket and the child's report.
-func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
+// A parent `zel -p` whose lua call runs a child `zel -p` and an explicitly invoked script:
+// the whole path through the lua tool, the socket and the child's report.
+func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the zel binary")
 	}
@@ -442,8 +442,8 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 		case lastOutput != "":
 			responseText(w, "parent final: "+lastOutput)
 		default:
-			args, _ := json.Marshal(map[string]string{"command": "zel -p 'child task'\n./hello world"})
-			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": string(args)})
+			args, _ := json.Marshal(map[string]string{"code": `return sh("zel -p 'child task'\n./hello world").out`})
+			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": string(args)})
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[%s]}}\n\n", item)
 		}
