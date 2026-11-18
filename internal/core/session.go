@@ -44,6 +44,7 @@ func (s *session) acquire() error {
 		return err
 	}
 	s.owner = file
+	_ = os.Remove(filepath.Join(s.sessionDir(), socketTokenFile)) // stale after a crash
 	s.tasks = s.newTasks()
 	if s.sock, err = ipc.Listen(s.socketPath(), s.token, s.serveSocket); err != nil {
 		s.release()
@@ -71,6 +72,7 @@ func (s *session) release() {
 		s.sock = nil
 	}
 	if s.owner != nil {
+		_ = os.Remove(filepath.Join(s.sessionDir(), socketTokenFile))
 		_ = syscall.Flock(int(s.owner.Fd()), syscall.LOCK_UN)
 		_ = s.owner.Close()
 		s.owner = nil
@@ -182,6 +184,10 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_TOKEN":      s.token,
 		// Only a --config file is passed on: a child reads init.lua and its own zel.lua.
 		"ZEL_CONFIG": s.configFlag(),
+	}
+	if os.Getenv("ZEL_HOME") != "" {
+		// Helpers may run from a different folder from the session that opened the store.
+		env["ZEL_HOME"] = s.home
 	}
 	if s.parent != nil {
 		env["ZEL_PARENT"] = s.parent.session

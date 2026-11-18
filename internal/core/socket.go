@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,15 +34,16 @@ func errResponse(err error) ipc.Response {
 	return ipc.Response{Code: 1, Error: "EFAIL: " + msg}
 }
 
-// serveSocket answers the zel -p children of this session.
-func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response {
+// serveSocket answers CLI requests and tracks zel -p children.
+func (s *session) serveSocket(_ context.Context, req ipc.Request) ipc.Response {
 	if s.ended.Load() {
 		return bad("EFAIL", "the session has ended")
 	}
 	var a struct {
 		Session, Provider, Model, Effort, Prompt string
-		N, PID                                   int
-		Context, Input, Output, Cached           int64
+		SessionArgs
+		N, PID                         int
+		Context, Input, Output, Cached int64
 	}
 	if len(req.Args) > 0 {
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -49,6 +51,52 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 		}
 	}
 	switch req.Op {
+	case "steer":
+		return s.socketSteer(req.Cwd, a.Text, a.Files)
+	case "status":
+		if !s.indicators.setCall(a.Text) {
+			return bad("EFAIL", "no Lua call is running")
+		}
+		return ok("")
+	case "status.new":
+		return ok(s.indicators.add(a.Text))
+	case "status.update":
+		if !s.indicators.update(a.ID, a.Text, a.Done) {
+			return bad("ENOENT", "unknown indicator %q", a.ID)
+		}
+		return ok("")
+	case "choice":
+		if s.mode() == "headless" {
+			return bad("EDENIED", "no UI to ask the user in")
+		}
+		if strings.TrimSpace(a.Text) == "" || len(a.Options) == 0 {
+			return bad("EINVAL", "choice requires a question and options")
+		}
+		for _, option := range a.Options {
+			if strings.TrimSpace(option) == "" {
+				return bad("EINVAL", "choice options must not be empty")
+			}
+		}
+		id, err := s.ask.ask(s, a.Text, a.Options)
+		if err != nil {
+			return errResponse(err)
+		}
+		return ok(fmt.Sprintf("c%d", id))
+	case "print":
+		if a.Text == "" {
+			return ok("")
+		}
+		if err := s.print(a.Text); err != nil {
+			return errResponse(err)
+		}
+		return ok("")
+	case "session":
+		return ipc.Response{OK: true, Data: s.socketSession()}
+	case "rename":
+		if err := s.Rename(a.Name); err != nil {
+			return errResponse(err)
+		}
+		return ok("")
 	case "child.start":
 		s.childStarted(SubagentRun{ID: a.Session, Parent: s.id, Started: time.Now(), Provider: a.Provider, Model: a.Model, Effort: a.Effort, Command: a.Prompt}, a.PID)
 		return ok("")
@@ -71,7 +119,65 @@ func (s *session) serveSocket(ctx context.Context, req ipc.Request) ipc.Response
 	return bad("EINVAL", "unknown op %q", req.Op)
 }
 
-// sessionInfo is zel session: text in Out, the same as JSON in Data.
+func (s *session) socketSession() json.RawMessage {
+	st := s.Settings()
+	return raw(struct {
+		ID       string   `json:"id"`
+		Name     string   `json:"name"`
+		Cwd      string   `json:"cwd"`
+		Root     string   `json:"root"`
+		Mode     string   `json:"mode"`
+		Modes    []string `json:"modes"`
+		Depth    int      `json:"depth"`
+		Model    string   `json:"model"`
+		Effort   string   `json:"effort"`
+		Provider string   `json:"provider"`
+	}{s.id, cmp.Or(s.CustomTitle(), s.DefaultTitle()), s.dir, s.dir,
+		s.mode(), s.modes(), s.depth, st.Model, st.Effort, st.Provider})
+}
+
+func (s *session) socketSteer(cwd, text string, files []string) ipc.Response {
+	if strings.TrimSpace(text) == "" && len(files) == 0 {
+		return bad("EINVAL", "steer requires text or images")
+	}
+	if len(files) > MaxPendingImages {
+		return bad("ELIMIT", "at most %d new images per model request", MaxPendingImages)
+	}
+	if strings.TrimSpace(text) == "" {
+		text = "Image attachment"
+	}
+	input := notification(text)
+	for _, file := range files {
+		path, err := ResolvePath(file)
+		if err != nil {
+			return bad("EINVAL", "%v", err)
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(cmp.Or(cwd, s.dir), path)
+		}
+		image, err := shell.CaptureImage(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return bad("ENOENT", "%v", err)
+			}
+			return bad("EINVAL", "%v", err)
+		}
+		input.Images = append(input.Images, image)
+	}
+	n := len(input.Images)
+	if n > 0 && !s.slots.reserve(n) {
+		return bad("ELIMIT", "at most %d new images per model request", MaxPendingImages)
+	}
+	if !s.queue.Push(input) {
+		if n > 0 {
+			s.slots.release(n)
+		}
+		return bad("ELIMIT", "input queue is full")
+	}
+	return ok("")
+}
+
+// view is the legacy Lua image attachment path.
 func (s *session) view(path string) error {
 	if s.ended.Load() {
 		return errors.New("session has ended")

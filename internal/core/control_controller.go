@@ -44,6 +44,7 @@ func NewController(a *Runtime, emit func(Event)) *Controller {
 	defer c.mu.Unlock()
 	a.Queue().OnPush(func() { go c.view(func() { c.deliverLocked() }) })
 	a.OnConfigChanged(func() { go c.Reload() })
+	a.printWake.set(func() { go c.view(c.publishPrintsLocked) })
 	c.deliverLocked()
 	return c
 }
@@ -126,6 +127,7 @@ func (c *Controller) Close() {
 		}
 	})
 	c.wait()
+	c.a.printWake.set(nil)
 }
 
 func (c *Controller) wait() {
@@ -186,6 +188,7 @@ func (c *Controller) endLocked(op *operation) {
 
 func (c *Controller) observe(e TurnEvent) {
 	c.view(func() {
+		c.publishPrintsLocked()
 		if isStatus(e) {
 			c.emit(Event{Kind: e.Kind, Text: e.Text})
 		} else {
@@ -235,6 +238,7 @@ func (c *Controller) settleLocked() {
 		}
 		return
 	}
+	c.publishPrintsLocked()
 	c.deliverLocked()
 	if c.active == nil {
 		c.a.session().checkIdle()
