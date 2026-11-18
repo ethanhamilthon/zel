@@ -11,6 +11,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/image v0.46.0
 )
 
