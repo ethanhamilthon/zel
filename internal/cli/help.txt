@@ -10,6 +10,9 @@ USAGE
                           the agent's lua sh(), zel -p is a subagent of that
                           session. --mode NAME adds a custom mode to main or
                           headless (available in lua as zel.session.modes).
+  zel exec [--timeout S] [--cwd DIR] [--env K=V]... -- CMD ARGS...
+                          run a process with stdin and return JSON with merged
+                          stdout/stderr, exit code, timeout and elapsed ms
   zel config [--config FILE]     the config and its problems
   zel models [--json]     the models of the configured providers
   zel docs [TOPIC]        the reference (lua tool, api, config, connect, hooks)
