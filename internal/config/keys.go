@@ -32,7 +32,7 @@ func parseKeys(v any, base map[string]string) (map[string]string, error) {
 			return nil, fmt.Errorf("keys.%s: must be a string", action)
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
-		if key != "" && !(len(key) == 6 && strings.HasPrefix(key, "ctrl+") && key[5] >= 'a' && key[5] <= 'z') && !(len(key) == 5 && strings.HasPrefix(key, "alt+") && key[4] >= 'a' && key[4] <= 'z') {
+		if key != "" && !ValidKey(key) {
 			return nil, fmt.Errorf("keys.%s: use ctrl+LETTER, alt+LETTER or an empty string", action)
 		}
 		keys[action] = key
@@ -49,4 +49,10 @@ func parseKeys(v any, base map[string]string) (map[string]string, error) {
 		used[key] = action
 	}
 	return keys, nil
+}
+
+// ValidKey reports whether key is ctrl+LETTER or alt+LETTER (lower case).
+func ValidKey(key string) bool {
+	return (len(key) == 6 && strings.HasPrefix(key, "ctrl+") && key[5] >= 'a' && key[5] <= 'z') ||
+		(len(key) == 5 && strings.HasPrefix(key, "alt+") && key[4] >= 'a' && key[4] <= 'z')
 }
