@@ -117,9 +117,8 @@ History items are immutable after append. The session caches their display
 records, type/role and token estimates; compaction caches transformed zones.
 Saves prepare only dirty suffixes and leave unchanged metadata files alone.
 
-Images exist only in memory: `read()` of an image runs `zel steer --file`, the session sends it
-with the next request, and `withoutImages` turns it into a text placeholder in
-the saved history. Nothing is written to an attachments folder.
+`read()` sends images through `zel steer --file`. The session keeps them in memory
+until the next model request and saves only a text placeholder in history.
 
 Only complete commands are published before tool execution; incomplete argument
 fragments do not become UI records. The tcell frontend has one event loop owning

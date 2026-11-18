@@ -62,7 +62,7 @@ func (s *session) print(text string) error {
 // printLine publishes command output. The caller holds c.mu.
 func (c *Controller) printLine(text string) {
 	if err := c.a.session().storePrint(text); err != nil {
-		c.emit(Event{Kind: "error", Text: fmt.Sprintf("could not save print: %v", err)})
+		c.emit(Event{Kind: "command_error", Text: fmt.Sprintf("could not save command output: %v", err)})
 		return
 	}
 	c.publishPrintsLocked()

@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"zel/internal/config"
@@ -97,8 +98,8 @@ func TestConfigShowsTheFile(t *testing.T) {
 	if strings.Contains(out, "init.lua") || !strings.Contains(out, extra) {
 		t.Fatalf("--no-default-configs should leave only extra:\n%s", out)
 	}
-	if _, err := zel(t, "", "config", "--config", filepath.Join(home, "missing.lua")); err != nil {
-		t.Fatal(err)
+	if strings.Count(out, "Files:\n") != 1 {
+		t.Fatalf("expected one Files header:\n%s", out)
 	}
 	// Inside a session zel config sees the files of the session.
 	t.Setenv("ZEL_CONFIGS", extra)
@@ -109,6 +110,43 @@ func TestConfigShowsTheFile(t *testing.T) {
 	}
 	if strings.Contains(out, "init.lua") || !strings.Contains(out, extra) {
 		t.Fatalf("config in a session:\n%s", out)
+	}
+}
+
+func TestMissingExplicitConfigDoesNotContactProvider(t *testing.T) {
+	noSession(t)
+	home := t.TempDir()
+	t.Setenv("ZEL_HOME", home)
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	st := core.DefaultSettings()
+	st.Provider, st.Model = "p", "m"
+	st.Providers["p"] = core.Provider{BaseURL: server.URL}
+	if err := writeConfig(home, st); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.lua")
+	for _, args := range [][]string{
+		{"-p", "hello", "--cwd", dir, "--config", "missing.lua"},
+		{"-p", "hello", "--cwd", dir, "--config", "missing.lua", "--json"},
+		{"models", "--json", "--config", missing},
+		{"config", "--config", missing},
+	} {
+		out, err := zel(t, "", args...)
+		if ExitCode(err) == 0 || !strings.Contains(err.Error(), missing) {
+			t.Errorf("%v: got %q, %v; want a nonzero exit naming %s", args, out, err, missing)
+		}
+		if args[0] == "models" && out != "" {
+			t.Errorf("models listed results after failure: %q", out)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("provider received %d requests", n)
 	}
 }
 
@@ -131,7 +169,7 @@ func TestHeadlessArguments(t *testing.T) {
 		{args: []string{"-p", "--resume", "ID", "text"}, want: call{cwd, core.Options{Prompt: "text", Resume: "ID"}}},
 		{args: []string{"-p", "hello", "--model", "m", "--effort", "high"}, want: call{cwd, core.Options{Prompt: "hello", Model: "m", Effort: "high"}}},
 		{args: []string{"--provider", "p", "-p", "two words"}, want: call{cwd, core.Options{Prompt: "two words", Provider: "p"}}},
-		{args: []string{"-p", "--config", "a.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Configs: []string{filepath.Join(cwd, "a.toml")}}}},
+		{args: []string{"-p", "--config", "a.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Configs: []string{filepath.Join(dir, "a.toml")}}}},
 		{args: []string{"-p"}, stdin: "from stdin", want: call{cwd, core.Options{Prompt: "from stdin"}}},
 		{args: []string{"-p", "-", "--timeout", "5"}, stdin: "dash", want: call{cwd, core.Options{Prompt: "dash"}}},
 		{args: []string{"-p", "--json"}, stdin: " \n", err: "nonempty prompt"},
@@ -452,11 +490,14 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 		mu.Unlock()
 		switch {
 		case first == "child task":
+			if !strings.Contains(body.Instructions, "EXPLICIT-CONFIG") || !strings.Contains(body.Instructions, "CHILD-DEFAULT") {
+				t.Errorf("child did not load inherited explicit config and its own default: %s", body.Instructions)
+			}
 			responseText(w, "child answer")
 		case lastOutput != "":
 			responseText(w, "parent final: "+lastOutput)
 		default:
-			args, _ := json.Marshal(map[string]string{"code": `return sh("zel -p 'child task'\n./hello world").out`})
+			args, _ := json.Marshal(map[string]string{"code": `return sh("zel -p 'child task' --cwd child\n./hello world").out`})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "lua", "arguments": string(args)})
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[%s]}}\n\n", item)
@@ -470,13 +511,24 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 		t.Fatal(err)
 	}
 	project := t.TempDir()
-	t.Chdir(project)
-	project, _ = os.Getwd()
+	project, _ = filepath.EvalSymlinks(project)
+	childProject := filepath.Join(project, "child")
+	if err := os.Mkdir(childProject, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for path, script := range map[string]string{
+		filepath.Join(project, "extra.lua"):    "return {systems = {extra = 'EXPLICIT-CONFIG'}}",
+		filepath.Join(childProject, "zel.lua"): "return {systems = {local_rule = 'CHILD-DEFAULT'}}",
+	} {
+		if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(project, "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out, stderr strings.Builder
-	if err := Run(context.Background(), []string{"-p", "parent"}, strings.NewReader(""), &out, Options{Stderr: &stderr}); err != nil {
+	if err := Run(context.Background(), []string{"-p", "parent", "--cwd", project, "--config", "extra.lua"}, strings.NewReader(""), &out, Options{Stderr: &stderr}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	text := out.String()
@@ -492,7 +544,7 @@ func TestHeadlessLuaEndToEndWithSubagent(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("no child session in %q: %v", text, err)
 	}
-	if v, _, err := db.Load(project, child); err != nil || v.Parent != parent || v.Depth != 1 || v.Mode != "headless" {
+	if v, _, err := db.Load(childProject, child); err != nil || v.Parent != parent || v.Depth != 1 || v.Mode != "headless" {
 		t.Fatalf("child %q of %q: %+v %v", child, parent, v, err)
 	}
 	mu.Lock()

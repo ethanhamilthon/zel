@@ -46,8 +46,8 @@ func (c *Controller) startReloadLocked() {
 
 func (c *Controller) publishReload(err error) {
 	if err != nil {
-		c.emit(Event{Kind: "error", Text: err.Error()})
+		c.emit(Event{Kind: "config_reloaded", Error: err.Error()})
 	} else {
-		c.emit(Event{Kind: "notice", Text: "config reloaded"})
+		c.emit(Event{Kind: "config_reloaded", Text: "config reloaded"})
 	}
 }

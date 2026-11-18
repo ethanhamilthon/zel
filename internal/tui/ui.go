@@ -268,14 +268,19 @@ func (m *app) control(e core.Event) {
 		m.records = append(m.records, core.Record{Kind: "print", Text: e.Text})
 	case "notice", "error":
 		m.ctl.LogEvent(e.Kind, e.Text)
+	case "command_error":
+		m.ctl.LogEvent("error", e.Text)
+		m.records = append(m.records, core.Record{Kind: "error", Text: e.Text})
+	case "config_reloaded":
+		if e.Error != "" {
+			m.ctl.LogEvent("error", e.Error)
+			m.configStatus = "Error: " + e.Error
+		} else {
+			m.ctl.LogEvent("notice", e.Text)
+			m.configStatus = "Reloaded"
+		}
 		if m.menu != nil && m.menu.page == "config" {
-			if e.Kind == "error" {
-				m.configStatus = "Error: " + e.Text
-				m.menu.body = configText(m.ctl.Config(), m.configStatus)
-			} else if e.Kind == "notice" && e.Text == "config reloaded" {
-				m.configStatus = "Reloaded"
-				m.menu.body = configText(m.ctl.Config(), m.configStatus)
-			}
+			m.menu.body = configText(m.ctl.Config(), m.configStatus)
 		}
 	case "fatal":
 		m.failure = errors.New(e.Text)

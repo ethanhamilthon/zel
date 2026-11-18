@@ -54,11 +54,17 @@ func docsCommand(args []string, out io.Writer) error {
 	return err
 }
 
-// configPath resolves --config relative to the process working directory.
-func configPath(_, flag string) (string, error) {
-	p, err := config.ResolvePath(flag)
+// configPath resolves --config relative to the effective working directory.
+func configPath(cwd, value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("--config requires a nonempty path")
+	}
+	p, err := config.ResolvePath(value)
 	if err != nil {
 		return "", err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
 	}
 	return filepath.Abs(p)
 }
@@ -108,6 +114,9 @@ func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if len(cfg.Errors) > 0 {
+		return fmt.Errorf("config not loaded: %s", strings.Join(cfg.Errors, "; "))
+	}
 	models, failures := core.AllModels(ctx, cfg.Settings.Providers)
 	if *asJSON {
 		data, _ := json.Marshal(map[string]any{"models": models, "failures": failures})
@@ -144,6 +153,11 @@ func configCommand(_ context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprint(out, config.Describe(cfg))
-	return err
+	if _, err := fmt.Fprint(out, config.Describe(cfg)); err != nil {
+		return err
+	}
+	if len(cfg.Errors) > 0 {
+		return &ExitError{Code: 1, Err: fmt.Errorf("config not loaded: %s", strings.Join(cfg.Errors, "; ")), Reported: true}
+	}
+	return nil
 }

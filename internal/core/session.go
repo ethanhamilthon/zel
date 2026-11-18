@@ -156,8 +156,8 @@ func (s *session) baseEnv() map[string]string {
 		"ZEL_TOKEN":      s.token,
 	}
 	// Only the --config files are passed on: a child reads the default files itself.
-	configs, noDefaults := s.explicitConfigs()
-	if len(configs) > 0 {
+	_, noDefaults := s.explicitConfigs()
+	if configs := s.paths().Required; len(configs) > 0 {
 		env["ZEL_CONFIGS"] = strings.Join(configs, "\n")
 	}
 	if noDefaults {

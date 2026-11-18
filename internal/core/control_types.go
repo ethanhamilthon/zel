@@ -8,11 +8,11 @@ import (
 // Event is one ordered notification from the controller. Consumers receive
 // events in emission order and must not call the controller from the callback.
 type Event struct {
-	Kind    string // started, agent, notice, error, done or session
+	Kind    string // started, agent, notice, error, command_error, config_reloaded, done or session
 	Agent   *TurnEvent
 	Text    string   // started: the input text; notice and error: the text; done (ok): final assistant text
 	Status  string   // done: ok, error or cancelled
-	Error   string   // done: failure text
+	Error   string   // done or config_reloaded: failure text
 	Unsent  []Input  // done: queued inputs the model did not accept
 	Title   string   // started, done and rename notices: the session title
 	Context int64    // done: estimated context tokens

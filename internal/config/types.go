@@ -64,6 +64,7 @@ type Paths struct {
 type Config struct {
 	Paths            Paths
 	Settings         Settings
+	SettingSources   map[string]string // dotted keys relative to settings
 	Systems          []System
 	Prompts          map[string]string
 	PromptSources    map[string]string

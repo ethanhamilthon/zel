@@ -43,13 +43,6 @@ func Describe(c *Config) string {
 	if c.Paths.Connect != "" {
 		p("Connect: %s", DisplayPath(c.Paths.Connect))
 	}
-	p("Files:")
-	for _, f := range c.Files {
-		p("  %s", DisplayPath(f))
-	}
-	if len(c.Files) == 0 {
-		p("  (none)")
-	}
 	for _, list := range []struct {
 		title string
 		items []string

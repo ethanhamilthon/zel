@@ -635,20 +635,25 @@ func TestTracingFiltersTurnsAndEntries(t *testing.T) {
 func abs(n int) int { return max(n, -n) }
 
 func TestWorkingRowColorsAndSingleLine(t *testing.T) {
-	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Activity: "go test ./...\nsecond line " + strings.Repeat("x", 100)}
-	r := workingRow(status, "", 2, true, 40)
+	status := core.Status{Busy: true, Started: time.Now().Add(-3 * time.Second), Live: true,
+		LiveSince: time.Now().Add(-200 * time.Millisecond), Activity: "go test ./...\nsecond line",
+		Queued: []core.Input{{Text: "next"}}}
+	r := workingRow(status, "", 2, true, 60)
 	text := rowText(r)
-	if w := rowWidth(r); w > 40 || strings.Contains(text, "\n") || !strings.HasSuffix(text, "...") || !strings.Contains(text, "2 calls") {
-		t.Fatalf("%d wide: %q", w, text)
+	if !strings.Contains(text, " · go test ./... · 2 calls · queued") || strings.Contains(text, "second line") {
+		t.Fatalf("wrong working line order or fallback: %q", text)
+	}
+	if narrow := workingRow(status, "", 2, true, 15); rowWidth(narrow) > 15 || !strings.HasSuffix(rowText(narrow), "...") {
+		t.Fatalf("not truncated to width: %q", rowText(narrow))
 	}
 	fg := func(c span) tcell.Color { f, _, _ := c.style.Decompose(); return f }
-	if len(r) != 2 || fg(r[0]) != tcell.GetColor(string(accentColor)) || fg(r[1]) != tcell.GetColor(string(darkGray)) {
+	if len(r) != 4 || fg(r[0]) != tcell.GetColor(string(accentColor)) || fg(r[1]) != tcell.GetColor(string(darkGray)) {
 		t.Fatalf("the star and the time are accent, what runs is dark gray: %+v", r)
 	}
 	if hidden := rowText(workingRow(status, "", 2, false, 40)); strings.Contains(hidden, "go test") {
 		t.Fatalf("show_code = false must hide the command: %q", hidden)
 	}
-	if explicit := rowText(workingRow(status, "read main.go", 2, false, 40)); !strings.Contains(explicit, "read main.go") {
+	if explicit := rowText(workingRow(status, "read main.go\nsecond status line", 2, false, 60)); !strings.Contains(explicit, " · read main.go · 2 calls · queued") {
 		t.Fatalf("callStatus must show even when show_code = false: %q", explicit)
 	}
 	indRow := indicatorRow(core.Indicator{ID: "i1", Text: "make test", Started: time.Now().Add(-6 * time.Second)}, 40)
@@ -784,5 +789,56 @@ func TestCollapsePrompts(t *testing.T) {
 	in := "fix <prompt name=\"plan-1\">\nline 1\n\nline 2\n</prompt> and <prompt name=\"b\">\nx\n</prompt>."
 	if got, want := collapsePrompts(in), "fix #plan-1 and #b."; got != want {
 		t.Fatalf("collapsePrompts = %q, want %q", got, want)
+	}
+}
+func TestConfigReloadShortcutBeatsMenuKey(t *testing.T) {
+	m := testApp(t)
+	path := m.runtime.ConfigFile()
+	if err := os.WriteFile(path, []byte(`return {settings = {keys = {menu = "ctrl+r", sessions = "alt+r"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.ctl.Reload()
+	key := tcell.NewEventKey(tcell.KeyCtrlR, 0, 0)
+	m.key(key)
+	if m.menu == nil || m.menu.page != "main" {
+		t.Fatal("Ctrl+R did not open main menu")
+	}
+	m.openMenu("config")
+	if err := os.WriteFile(path, []byte(`return {broken = true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.key(key)
+	select {
+	case r := <-m.results:
+		m.accept(r)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ctrl+R did not reload Config")
+	}
+	if m.menu == nil || m.menu.page != "config" || !strings.Contains(m.menu.body, `unknown key "broken"`) {
+		t.Fatalf("Config after failed reload: %+v", m.menu)
+	}
+}
+
+func TestCommandErrorAppearsInChatWithoutChangingConfigStatus(t *testing.T) {
+	m := testApp(t)
+	m.control(core.Event{Kind: "command_error", Text: "command Fail: boom"})
+	m.openMenu("config")
+	m.configStatus = "Reloading..."
+	m.control(core.Event{Kind: "command_error", Text: "command Fail: again"})
+	if m.configStatus != "Reloading..." || strings.Contains(m.menu.body, "command Fail") {
+		t.Fatalf("command error affected Config: %q, %s", m.configStatus, m.menu.body)
+	}
+	m.menu = nil
+	m.pruneRecords()
+	m.historyRows(60)
+	for i, want := range []string{"command Fail: boom", "command Fail: again"} {
+		if len(m.cache) <= i || len(m.cache[i].rows) == 0 {
+			t.Fatalf("command error missing from chat: %+v", m.records)
+		}
+		r := m.cache[i].rows[0]
+		fg, _, _ := r[0].style.Decompose()
+		if rowText(r) != want || fg != tcell.GetColor(string(errorColor)) {
+			t.Fatalf("command error row: %q, color %v", rowText(r), fg)
+		}
 	}
 }

@@ -144,7 +144,7 @@ func (s *session) socketSteer(cwd, text string, files []string) ipc.Response {
 		return bad("ELIMIT", "at most %d new images per model request", MaxPendingImages)
 	}
 	if strings.TrimSpace(text) == "" {
-		text = "Image attachment"
+		text = "Image sent via zel steer"
 	}
 	input := notification(text)
 	for _, file := range files {
@@ -175,23 +175,4 @@ func (s *session) socketSteer(cwd, text string, files []string) ipc.Response {
 		return bad("ELIMIT", "input queue is full")
 	}
 	return ok("")
-}
-
-// view is the legacy Lua image attachment path.
-func (s *session) view(path string) error {
-	if s.ended.Load() {
-		return errors.New("session has ended")
-	}
-	image, err := shell.CaptureImage(path)
-	if err != nil {
-		return err
-	}
-	if !s.slots.reserve(1) {
-		return fmt.Errorf("at most %d new images per model request", MaxPendingImages)
-	}
-	if !s.queue.Push(withImages(notification("view: "+filepath.Base(path)+" attached"), image)) {
-		s.slots.release(1)
-		return fmt.Errorf("input queue is full")
-	}
-	return nil
 }

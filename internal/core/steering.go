@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"zel/internal/shell"
 )
 
 func (s *session) addInput(input Input, emit func(TurnEvent)) {
@@ -55,11 +53,6 @@ func inputEvent(input Input) TurnEvent {
 // text. The text stays short; the agent fetches details itself.
 func notification(text string) Input {
 	return Input{Text: "<notification>" + strings.TrimSpace(text) + "</notification>", Notice: true}
-}
-
-func withImages(input Input, images ...shell.Image) Input {
-	input.Images = append(input.Images, images...)
-	return input
 }
 
 type Steering struct {
