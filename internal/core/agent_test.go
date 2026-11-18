@@ -657,7 +657,7 @@ func TestResponsesHistoryAcrossModelSelection(t *testing.T) {
 		image            = "data:image/png;base64,aQ=="
 		foreignReasoning = `{"type":"reasoning","id":"rs_proxy","status":"completed","summary":[{"type":"summary_text","text":"foreign thinking"}],"encrypted_content":"foreign opaque data"}`
 		foreignCall      = `{"type":"function_call","id":"fc_proxy","status":"completed","call_id":"call_proxy","name":"lua","arguments":"{\"code\":\"return 42\"}"}`
-		foreignMessage   = `{"type":"message","id":"msg_proxy","status":"completed","role":"assistant","content":[{"type":"output_text","text":"proxy answer","annotations":[]}]}`
+		foreignMessage   = `{"type":"message","id":"msg_proxy","status":"completed","role":"assistant","content":[{"type":"output_text","text":"proxy answer","annotations":[]},{"type":"refusal","refusal":"I can't provide more."}]}`
 		nativeReasoning  = `{"type":"reasoning","id":"rs_native","summary":[{"type":"summary_text","text":"native summary"}],"encrypted_content":"native opaque data"}`
 		nativeCall       = `{"type":"function_call","id":"fc_native","status":"completed","call_id":"call_native","name":"lua","arguments":"{\"code\":\"return 43\"}"}`
 		nativeMessage    = `{"type":"message","id":"msg_native","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"native answer","annotations":[]}]}`
@@ -711,12 +711,22 @@ func TestResponsesHistoryAcrossModelSelection(t *testing.T) {
 						_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
 					}
 					var input strings.Builder
+					var portableAnswers []string
 					for i, item := range body.Input {
 						var fields map[string]json.RawMessage
 						_ = json.Unmarshal(item, &fields)
-						if fields["status"] != nil && (string(fields["type"]) == `"reasoning"` || (string(fields["role"]) == `"assistant"` && fields["id"] == nil)) {
+						if fields["status"] != nil && string(fields["type"]) == `"reasoning"` {
 							reject(fmt.Sprintf("Unknown parameter: input[%d].status", i))
 							return
+						}
+						if string(fields["role"]) == `"assistant"` && fields["id"] == nil {
+							// Portable replay uses the easy-input shape, not output parts.
+							var text *string
+							if len(fields) != 2 || json.Unmarshal(fields["content"], &text) != nil || text == nil {
+								reject(fmt.Sprintf("input[%d]: expected only assistant role and string content, got %s", i, item))
+								return
+							}
+							portableAnswers = append(portableAnswers, *text)
 						}
 						input.Write(item)
 						input.WriteByte('\n')
@@ -738,7 +748,11 @@ func TestResponsesHistoryAcrossModelSelection(t *testing.T) {
 								return
 							}
 						}
-						if !check(`"output":"42"`, `"text":"proxy answer","type":"output_text"`) {
+						if !slices.Equal(portableAnswers, []string{"proxy answer\nI can't provide more."}) {
+							reject(fmt.Sprintf("wrong portable answers: %q", portableAnswers))
+							return
+						}
+						if !check(`"output":"42"`) {
 							return
 						}
 						if freeform {
@@ -827,10 +841,23 @@ func TestResponsesHistoryAcrossModelSelection(t *testing.T) {
 				if a.FinalText() != "native answer" {
 					t.Fatalf("final answer = %q", a.FinalText())
 				}
-				if !native && !slices.ContainsFunc(a.session().History, func(item json.RawMessage) bool {
-					return string(item) == foreignReasoning
-				}) {
-					t.Fatal("sending the turn changed stored reasoning")
+				if !native {
+					if err := a.SelectSession(ctx, tc.provider, tc.model, "high"); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := turn(t, a, "back to source"); err != nil {
+						t.Fatal(err)
+					}
+					bodies := source.requests()
+					if len(bodies) != 3 {
+						t.Fatalf("source received %d requests, want 3", len(bodies))
+					}
+					back := bodies[2]
+					for _, want := range []string{foreignMessage, `"encrypted_content":"foreign opaque data"`, `{"content":"native answer","role":"assistant"}`} {
+						if !strings.Contains(back, want) {
+							t.Errorf("return to source: missing %s", want)
+						}
+					}
 				}
 			})
 		}
