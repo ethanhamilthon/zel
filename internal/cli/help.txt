@@ -7,36 +7,19 @@ USAGE
                           run without the TUI: "zel: session ID" goes to stderr,
                           the final answer to stdout (exit 0, nonzero on error,
                           130 when cancelled). PROMPT may come on stdin. Run from
-                          the agent's bash, zel -p is a subagent of that session.
-                          --mode NAME adds a custom mode to main or headless:
-                          config entries with modes = ["NAME"] apply too.
+                          the agent's lua sh(), zel -p is a subagent of that
+                          session. --mode NAME adds a custom mode to main or
+                          headless (available in lua as zel.session.modes).
   zel config [--config FILE]     the config and its problems
   zel models [--json]     the models of the configured providers
-  zel docs [TOPIC]        the reference (bash tool, commands, settings.yaml, hooks)
-  zel edit FILE [--all]   exact text edits read from stdin (see zel docs commands)
+  zel docs [TOPIC]        the reference (lua tool, api, config, connect, hooks)
   zel update              replace this binary with the latest release
   zel version | zel help
 
-INSIDE A SESSION (the agent's bash, tasks, hooks)
-  zel task run|list|get|tail|wait|stop   background tasks
-  zel choice "Question" "A" "B"          ask the user; the answer comes as a notification
-  zel view IMG...                        show images to the model (kept in memory only)
-  zel cd [DIR]                           the folder of the next bash calls (no DIR: the start folder)
-  zel session [--json] | zel session rename NAME
-
 CONFIG
-  ~/.config/zel/settings.yaml (or --config FILE instead of it), with snippets in
-  hooks/*.yaml, prompts/*.md and systems/*.md. Changes apply by themselves (hot
-  reload). Any string or .md body may contain ${{ bash }}.
-
-    model: openai/gpt-5
-
-    provider:
-      openai:
-        base_url: https://api.openai.com/v1
-        api_key: ${{ echo $OPENAI_API_KEY }}
-
-  Scripts use your normal PATH, or can be invoked by their paths.
+  ~/.config/zel/init.lua (or --config FILE instead of it), ./zel.lua in the
+  working directory, and ~/.config/zel/connect.json for providers and active
+  model selection. Changes apply by themselves (hot reload).
 
 KEYS
   Ctrl+K menu  Ctrl+M models  Ctrl+R resume  Ctrl+N new  Ctrl+I info
@@ -46,4 +29,4 @@ KEYS
 ENVIRONMENT
   ZEL_HOME   config directory (default ~/.config/zel); sessions live in ~/.zel/
 
-bash runs with your permissions and network access; there is no sandbox.
+lua and sh() run with your permissions and network access; there is no sandbox.

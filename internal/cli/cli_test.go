@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,11 +23,8 @@ import (
 	"sync"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
 	"zel/internal/config"
 	"zel/internal/core"
-	"zel/internal/ipc"
 	"zel/internal/store"
 )
 
@@ -65,191 +61,40 @@ func TestParseFlags(t *testing.T) {
 	}
 }
 
-func TestEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "f.txt")
-	if err := os.WriteFile(path, []byte("a\nb\na\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	block := func(old, new, end string) string {
-		return "<<<<<<< old\n" + old + "\n=======\n" + new + "\n>>>>>>> new" + end + "\n"
-	}
-	content := func() string {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(data)
-	}
-	out, err := zel(t, block("b", "B", "")+block("a", "A", " all"), "edit", path)
-	if err != nil || out != "3\n" || content() != "A\nB\nA\n" {
-		t.Fatalf("edit: out=%q err=%v file=%q", out, err, content())
-	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o640 {
-		t.Fatalf("mode = %v", info.Mode())
-	}
-	for _, tc := range []struct {
-		name, stdin string
-		args        []string
-		code        int
-		msg         string
-	}{
-		// A later block that fails leaves the file as it was.
-		{"no match", block("B", "b", "") + block("zzz", "y", ""), []string{path}, 4, "ENOMATCH"},
-		{"ambiguous", block("A", "a", ""), []string{path}, 5, "EAMBIG"},
-		{"missing file", block("A", "a", ""), []string{path + ".none"}, 3, "ENOENT"},
-		{"bad blocks", "just text\n", []string{path}, 2, "EINVAL"},
-		{"no file", block("A", "a", ""), nil, 2, "usage"},
-	} {
-		out, err := zel(t, tc.stdin, append([]string{"edit"}, tc.args...)...)
-		if ExitCode(err) != tc.code || !strings.Contains(fmt.Sprint(err), "zel edit: ") || !strings.Contains(fmt.Sprint(err), tc.msg) || out != "" {
-			t.Errorf("%s: exit=%d err=%v out=%q", tc.name, ExitCode(err), err, out)
-		}
-		if content() != "A\nB\nA\n" {
-			t.Fatalf("%s changed the file: %q", tc.name, content())
-		}
-	}
-	if out, err := zel(t, block("A", "a", ""), "edit", "--all", path); err != nil || out != "2\n" || content() != "a\nB\na\n" {
-		t.Fatalf("--all: out=%q err=%v file=%q", out, err, content())
-	}
-}
-
-func TestSessionCommandsNeedASession(t *testing.T) {
-	noSession(t)
-	for _, args := range [][]string{{"task", "list"}, {"task", "run", "--", "echo", "hi"}, {"task", "wait", "t1"},
-		{"choice", "Q", "A"}, {"view", "x.png"}, {"cd"}, {"cd", "sub"}, {"session"}, {"session", "--json"}, {"session", "rename", "new name"}} {
-		out, err := zel(t, "", args...)
-		if ExitCode(err) != 2 || !strings.Contains(fmt.Sprint(err), "not inside a zel session") || out != "" {
-			t.Errorf("%v: exit=%d err=%v out=%q", args, ExitCode(err), err, out)
-		}
-	}
-	// Bad usage is reported before the session is looked for.
-	for _, args := range [][]string{{"task"}, {"task", "frob"}, {"task", "get"}, {"task", "run"}, {"choice", "Q"}, {"view"}, {"cd", "a", "b"}, {"cd", ""}, {"session", "x"}} {
-		if _, err := zel(t, "", args...); ExitCode(err) != 2 || !strings.Contains(fmt.Sprint(err), "usage: zel ") {
-			t.Errorf("%v: exit=%d err=%v", args, ExitCode(err), err)
-		}
-	}
-}
-
-// The subcommands talk to the session over its socket: the request carries the
-// token, ZEL_TASK and the working directory, Out goes to stdout and the error
-// code of the answer becomes the exit code.
-func TestSessionCommandsOverSocket(t *testing.T) {
-	noSession(t)
-	path := ipc.Path(t.TempDir(), "session")
-	var mu sync.Mutex
-	var reqs []ipc.Request
-	server, err := ipc.Listen(path, "tok", func(ctx context.Context, req ipc.Request) ipc.Response {
-		mu.Lock()
-		reqs = append(reqs, req)
-		mu.Unlock()
-		switch req.Op {
-		case "task.list":
-			return ipc.Response{OK: true, Out: "t1 running build 1s\n"}
-		case "task.run":
-			return ipc.Response{OK: true, Out: "t2\n"}
-		case "task.wait":
-			return ipc.Response{Out: "t1 running\n", Code: 124, Error: "ETIMEOUT: 1 of 1 tasks still run"}
-		case "task.get":
-			return ipc.Response{Code: 3, Error: "ENOENT: no task t9"}
-		case "session.get":
-			return ipc.Response{OK: true, Out: "id: s1\n", Data: json.RawMessage(`{"id":"s1"}`)}
-		}
-		return ipc.Response{Error: "EFAIL: no code"}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	t.Setenv("ZEL_SOCKET", path)
-	t.Setenv("ZEL_TOKEN", "tok")
-	t.Setenv("ZEL_TASK", "t7")
-	cwd, _ := os.Getwd()
-	last := func() (ipc.Request, map[string]any) {
-		mu.Lock()
-		defer mu.Unlock()
-		r := reqs[len(reqs)-1]
-		var args map[string]any
-		if len(r.Args) > 0 && string(r.Args) != "null" {
-			if err := json.Unmarshal(r.Args, &args); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return r, args
-	}
-
-	out, err := zel(t, "", "task", "list")
-	if r, _ := last(); err != nil || out != "t1 running build 1s\n" || r.Op != "task.list" || r.Token != "tok" || r.Task != "t7" || r.Cwd != cwd {
-		t.Fatalf("task list: out=%q err=%v req=%+v", out, err, r)
-	}
-	out, err = zel(t, "", "task", "run", "--name", "build", "--", "go", "test", "it's")
-	if r, a := last(); err != nil || out != "t2\n" || r.Op != "task.run" || a["name"] != "build" || a["cmd"] != `go test 'it'\''s'` {
-		t.Fatalf("task run: out=%q err=%v args=%v", out, err, a)
-	}
-	if _, err = zel(t, "make test\n", "task", "run"); err != nil {
-		t.Fatal(err)
-	}
-	if _, a := last(); a["cmd"] != "make test\n" {
-		t.Fatalf("task run from stdin: %v", a)
-	}
-	out, err = zel(t, "", "task", "wait", "t1", "--timeout", "1.5")
-	if _, a := last(); ExitCode(err) != 124 || !strings.Contains(err.Error(), "zel task: ETIMEOUT") || out != "t1 running\n" ||
-		!reflect.DeepEqual(a["ids"], []any{"t1"}) || a["timeout"] != 1.5 {
-		t.Fatalf("task wait: exit=%d err=%v out=%q args=%v", ExitCode(err), err, out, a)
-	}
-	if _, err = zel(t, "", "task", "get", "t9"); ExitCode(err) != 3 || !strings.Contains(err.Error(), "ENOENT") {
-		t.Fatalf("task get: exit=%d err=%v", ExitCode(err), err)
-	}
-	if _, err = zel(t, "", "choice", "Q", "A"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "zel choice: EFAIL") {
-		t.Fatalf("an error without a code: exit=%d err=%v", ExitCode(err), err)
-	}
-	if out, err = zel(t, "", "session", "--json"); err != nil || out != "{\"id\":\"s1\"}\n" {
-		t.Fatalf("session --json: %q %v", out, err)
-	}
-	t.Setenv("ZEL_TOKEN", "wrong")
-	if _, err = zel(t, "", "task", "list"); ExitCode(err) != 6 || !strings.Contains(err.Error(), "EDENIED") {
-		t.Fatalf("wrong token: exit=%d err=%v", ExitCode(err), err)
-	}
-	t.Setenv("ZEL_SOCKET", path+".gone")
-	if _, err = zel(t, "", "task", "list"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "not running") {
-		t.Fatalf("no server: exit=%d err=%v", ExitCode(err), err)
-	}
-}
-
 func TestConfigShowsTheFile(t *testing.T) {
 	noSession(t)
 	home := t.TempDir()
 	t.Setenv("ZEL_HOME", home)
 	t.Chdir(t.TempDir())
-	extra := filepath.Join(t.TempDir(), "extra.yaml")
-	for file, text := range map[string]string{filepath.Join(home, "settings.yaml"): "model: \"m1\"\n", extra: "model: \"m2\"\n"} {
-		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	extra := filepath.Join(t.TempDir(), "extra.lua")
+	if err := os.WriteFile(filepath.Join(home, "connect.json"), []byte(`{"model":"m1"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	// model is the value of the model setting.
-	model := func(args ...string) string {
-		out, err := zel(t, "", append([]string{"config"}, args...)...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, line := range strings.Split(out, "\n") {
-			if f := strings.Fields(line); len(f) == 3 && f[0] == "model" {
-				return f[2]
-			}
-		}
-		t.Fatalf("no model line:\n%s", out)
-		return ""
+	if err := os.WriteFile(extra, []byte("return {}\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if got := model(); got != `"m1"` {
-		t.Fatalf("config: %s", got)
+	out, err := zel(t, "", "config")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := model("--config", extra); got != `"m2"` {
-		t.Fatalf("config --config: %s", got)
+	if !strings.Contains(out, "init.lua") || !strings.Contains(out, `"m1"`) {
+		t.Fatalf("unexpected config output:\n%s", out)
+	}
+	out, err = zel(t, "", "config", "--config", extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, extra) || strings.Contains(out, "Local:") {
+		t.Fatalf("config --config should use extra and omit Local:\n%s", out)
 	}
 	// Inside a session zel config sees the session's file.
 	t.Setenv("ZEL_CONFIG", extra)
-	if got := model(); got != `"m2"` {
-		t.Fatalf("config in a session: %s", got)
+	out, err = zel(t, "", "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, extra) {
+		t.Fatalf("config in a session:\n%s", out)
 	}
 }
 
@@ -331,33 +176,19 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 	}
 }
 
-// writeConfig writes the provider of a test into the config of home.
+// writeConfig writes the provider and selection of a test into connect.json.
 func writeConfig(home string, s core.Settings) error {
-	path := config.File(home)
-	for name, p := range s.Providers {
-		if err := setKey(path, "provider."+name+".base_url", p.BaseURL); err != nil {
-			return err
-		}
-	}
-	return setKey(path, "model", s.Provider+"/"+s.Model)
-}
-
-// writeLocalConfig makes a project directory, enters it and puts the top-level
-// keys of yml first in the config of ZEL_HOME.
-func writeLocalConfig(t *testing.T, yml string) string {
-	t.Helper()
-	project := t.TempDir()
-	t.Chdir(project)
-	path := config.File(os.Getenv("ZEL_HOME"))
-	existing, _ := os.ReadFile(path)
-	if err := os.WriteFile(path, []byte(yml+"\n"+string(existing)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	project, err := os.Getwd()
+	path := config.DefaultPaths(home, "", "").Connect
+	data, err := json.MarshalIndent(config.Connect{
+		Provider:  s.Provider,
+		Model:     s.Model,
+		Effort:    s.Effort,
+		Providers: s.Providers,
+	}, "", "  ")
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	return project
+	return os.WriteFile(path, data, 0o600)
 }
 
 // firstLine calls fn with the first line written, once.
@@ -417,7 +248,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body.Model != "override" || body.Reasoning.Effort != "high" || !strings.Contains(body.Instructions, "headless config") || strings.Contains(body.Instructions, "main only") {
+				if body.Model != "override" || body.Reasoning.Effort != "high" {
 					t.Errorf("request overrides: %+v", body)
 				}
 				switch scenario {
@@ -438,7 +269,9 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 			if err := writeConfig(home, settings); err != nil {
 				t.Fatal(err)
 			}
-			project := writeLocalConfig(t, `system: { main: "main only", sub: { text: "headless config", modes: ["headless"] } }`)
+			project := t.TempDir()
+			t.Chdir(project)
+			project, _ = os.Getwd()
 			stderr := &firstLine{fn: func(line string) {
 				id, ok := strings.CutPrefix(line, "zel: session ")
 				mu.Lock()
@@ -471,8 +304,8 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Fatalf("stdout=%q exit=%d", out.String(), ExitCode(err))
 				}
 			}
-			if saved := config.Load(context.Background(), config.File(home), nil).Settings; saved.Model != "default" || saved.Effort != "medium" {
-				t.Fatalf("the flags changed the defaults: %+v", saved)
+			if saved, err := config.LoadConnect(config.DefaultPaths(home, "", "").Connect); err != nil || saved.Model != "default" || saved.Effort != "medium" {
+				t.Fatalf("the flags changed the defaults: %+v err=%v", saved, err)
 			}
 		})
 	}
@@ -609,9 +442,6 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 		case lastOutput != "":
 			responseText(w, "parent final: "+lastOutput)
 		default:
-			if !strings.Contains(body.Instructions, "Project rule: be brief") {
-				t.Errorf("the project layer is missing from the prompt:\n%s", body.Instructions)
-			}
 			args, _ := json.Marshal(map[string]string{"command": "zel -p 'child task'\n./hello world"})
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c1", "name": "bash", "arguments": string(args)})
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -625,7 +455,9 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if err := writeConfig(home, settings); err != nil {
 		t.Fatal(err)
 	}
-	project := writeLocalConfig(t, "system:\n  rule: { text: \"Project rule: be brief\", modes: [\"main\", \"headless\"] }")
+	project := t.TempDir()
+	t.Chdir(project)
+	project, _ = os.Getwd()
 	if err := os.WriteFile(filepath.Join(project, "hello"), []byte("#!/bin/sh\necho \"hello $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -654,37 +486,4 @@ func TestHeadlessBashEndToEndWithSubagent(t *testing.T) {
 	if len(prompts) != 3 || prompts[1] != "child task" {
 		t.Fatalf("requests: %q", prompts)
 	}
-}
-
-// setKey sets a dotted key in a YAML file for the tests; unlike config.SetKey it
-// rewrites the whole file (comments are lost) and takes any value.
-func setKey(path, key string, value any) error {
-	data := map[string]any{}
-	raw, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if len(raw) > 0 {
-		if err := yaml.Unmarshal(raw, &data); err != nil {
-			return err
-		}
-	}
-	if data == nil {
-		data = map[string]any{}
-	}
-	table, segs := data, strings.Split(key, ".")
-	for _, seg := range segs[:len(segs)-1] {
-		next, ok := table[seg].(map[string]any)
-		if !ok {
-			next = map[string]any{}
-			table[seg] = next
-		}
-		table = next
-	}
-	table[segs[len(segs)-1]] = value
-	out, err := yaml.Marshal(data)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0600)
 }

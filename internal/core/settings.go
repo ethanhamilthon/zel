@@ -1,8 +1,6 @@
 package core
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 
 	"zel/internal/config"
 	"zel/internal/provider"
-	"zel/internal/shell"
 )
 
 // confHolder keeps the config snapshot of a session. It is shared by pointer
@@ -58,7 +55,7 @@ func (s *session) notify(msg string) {
 }
 
 // configFile is the config file of this session: --config, else the file of
-// the parent session (ZEL_CONFIG), else ~/.config/zel/settings.toml.
+// the parent session (ZEL_CONFIG), else ~/.config/zel/init.lua.
 func (s *session) configFile() string {
 	switch {
 	case s.opts.Config != "":
@@ -66,7 +63,27 @@ func (s *session) configFile() string {
 	case s.parent != nil && s.parent.config != "":
 		return s.parent.config
 	}
-	return config.File(s.home)
+	return config.DefaultPaths(s.home, s.dir, "").Init
+}
+
+func (s *session) paths() config.Paths {
+	flag := s.opts.Config
+	if flag == "" && s.parent != nil {
+		flag = s.parent.config
+	}
+	p := config.DefaultPaths(s.home, s.dir, flag)
+	if flag == "" && os.Getenv("ZEL_NO_LOCAL") == "1" {
+		p.Local = ""
+	}
+	return p
+}
+
+func (s *session) watchFiles() []string {
+	if cfg := s.conf.get(); cfg != nil && len(cfg.Files) > 0 {
+		return cfg.Files
+	}
+	p := s.paths()
+	return []string{p.Init, p.Local, p.Connect}
 }
 
 // ConfigFile is the config file of the session.
@@ -80,33 +97,37 @@ func (a *Runtime) ConfigErrors() []string {
 	return nil
 }
 
-// expander runs a ${{ }} expression: bash in the session folder with the
-// session environment and env on top.
-func (s *session) expander(env map[string]string) config.Expander {
-	return func(ctx context.Context, script string) (string, error) {
-		vars := s.baseEnv()
-		maps.Copy(vars, env)
-		cmd := shell.Command(ctx, s.dir, vars, script)
-		var out, errs bytes.Buffer
-		cmd.Stdin = strings.NewReader("")
-		cmd.Stdout, cmd.Stderr = &out, &errs
-		if err := cmd.Start(); err != nil {
-			return "", err
-		}
-		if err := shell.Reap(cmd); err != nil {
-			if ctx.Err() != nil {
-				return out.String(), fmt.Errorf("timed out")
-			}
-			return out.String(), fmt.Errorf("%v%s", err, cmp.Or(": "+FirstLine(errs.String()), ""))
-		}
-		return out.String(), nil
+// loadConfigStub builds a Config from connect.json and defaults (Lua execution
+// is wired during luart integration).
+func (s *session) loadConfigStub() *config.Config {
+	p := s.paths()
+	cfg := &config.Config{
+		Paths:    p,
+		Settings: config.DefaultSettings(),
+		Files:    []string{p.Init, p.Local, p.Connect},
 	}
+	conn, err := config.LoadConnect(p.Connect)
+	if err == nil {
+		cfg.Settings.Providers = conn.Providers
+		if conn.Provider != "" {
+			cfg.Settings.Provider = conn.Provider
+		}
+		if conn.Model != "" {
+			cfg.Settings.Model = conn.Model
+		}
+		if conn.Effort != "" {
+			cfg.Settings.Effort = conn.Effort
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		cfg.Errors = append(cfg.Errors, err.Error())
+	}
+	return cfg
 }
 
-// loadConfig reads the config file into a new snapshot and applies its settings.
+// loadConfig reads the config into a new snapshot and applies its settings.
 // A broken file is skipped with a notice.
 func (s *session) loadConfig() error {
-	cfg := config.Load(context.Background(), s.path, s.expander)
+	cfg := s.loadConfigStub()
 	for _, e := range cfg.Errors {
 		s.notify("config skipped: " + e)
 	}
@@ -139,7 +160,7 @@ func (s *session) applyConfig(cfg *config.Config) error {
 func (a *Runtime) Reload() error { return a.session().Reload() }
 
 func (s *session) Reload() error {
-	cfg := config.Load(context.Background(), s.path, s.expander)
+	cfg := s.loadConfigStub()
 	if len(cfg.Errors) > 0 && s.conf.get() != nil {
 		msg := "config has errors; the previous config stays: " + strings.Join(cfg.Errors, "; ")
 		s.fireHooks("config_changed", map[string]any{"ok": false, "error": msg, "file": s.path})
@@ -187,12 +208,7 @@ func (s *session) applyLocked(base Settings) error {
 	if sel := s.cfg.sel; sel.Model != "" {
 		st.Provider, st.Model, st.Effort = sel.Provider, sel.Model, sel.Effort
 	}
-	// A provider with modes exists only in the sessions of those modes.
-	maps.DeleteFunc(st.Providers, func(_ string, p Provider) bool { return !config.InModes(p.Modes, s.modes()) })
-	_, kept := st.Providers[st.Provider]
-	if _, known := base.Providers[st.Provider]; known && !kept {
-		return fmt.Errorf("provider %q is not available in mode %s", st.Provider, strings.Join(s.modes(), "+"))
-	}
+
 	if st.Effort == "" {
 		st.Effort = "medium"
 	}
@@ -241,23 +257,7 @@ func (s *session) Settings() Settings {
 // Project is the project directory of the session.
 func (a *Runtime) Project() string { return a.project }
 
-// saveDefault writes the selected provider, model and effort into the config
-// file, the only thing the app changes in it.
+// saveDefault writes the selected provider, model and effort into connect.json.
 func (s *session) saveDefault(sel selection) error {
-	s.cfg.mu.Lock()
-	base := s.cfg.base
-	s.cfg.mu.Unlock()
-	model, was := sel.Provider+"/"+sel.Model, base.Provider+"/"+base.Model
-	if sel.Model == "" {
-		model = ""
-	}
-	for _, kv := range [][3]string{{"model", model, was}, {"effort", sel.Effort, base.Effort}} {
-		if kv[1] == "" || kv[1] == kv[2] {
-			continue
-		}
-		if err := config.SetKey(s.path, kv[0], kv[1]); err != nil {
-			return err
-		}
-	}
-	return nil
+	return config.SaveSelection(s.paths().Connect, sel.Provider, sel.Model, sel.Effort)
 }

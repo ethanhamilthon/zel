@@ -2,12 +2,13 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
-	"strings"
+	"slices"
 )
 
-// ColorKeys are the keys of [colors] in documentation order; "trace.x" is x in
-// [colors.trace].
+// ColorKeys are the keys of colors in documentation order; "trace.x" is x in
+// colors.trace.
 var ColorKeys = [...]string{
 	"bg", "accent", "agent", "user", "user_highlight", "gray", "dark_gray", "error",
 	"trace.system", "trace.user", "trace.agent", "trace.lua", "trace.notice", "trace.output", "trace.error",
@@ -68,24 +69,21 @@ func CheckColor(key, value string) error {
 	return fmt.Errorf("colors.%s: must be a #rrggbb hex color, got %q", key, value)
 }
 
-// colors reads [colors] and its [colors.trace] table.
-func (p *parser) colors(v any) error {
-	m, err := asTable(v, "colors")
-	if err != nil {
-		return err
+// parseColors reads colors and its nested trace table on top of base.
+func parseColors(v any, base Colors) (Colors, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return base, fmt.Errorf("colors: must be a table")
 	}
+	c := base
 	var read func(m map[string]any, prefix string) error
 	read = func(m map[string]any, prefix string) error {
-		path := []string{"colors"}
-		if prefix != "" {
-			path = append(path, strings.TrimSuffix(prefix, "."))
-		}
-		for _, k := range p.keys(m, path...) {
+		for _, k := range slices.Sorted(maps.Keys(m)) {
 			key := prefix + k
 			if prefix == "" && k == "trace" {
-				sub, err := asTable(m[k], "colors.trace")
-				if err != nil {
-					return err
+				sub, ok := m[k].(map[string]any)
+				if !ok {
+					return fmt.Errorf("colors.trace: must be a table")
 				}
 				if err := read(sub, "trace."); err != nil {
 					return err
@@ -99,14 +97,15 @@ func (p *parser) colors(v any) error {
 			if !ok {
 				return fmt.Errorf("colors.%s: must be a string", key)
 			}
-			if !strings.Contains(s, "${{") {
-				if err := CheckColor(key, s); err != nil {
-					return err
-				}
+			if err := CheckColor(key, s); err != nil {
+				return err
 			}
-			p.cfg.Settings.Colors.Set(key, s)
+			c.Set(key, s)
 		}
 		return nil
 	}
-	return read(m, "")
+	if err := read(m, ""); err != nil {
+		return base, err
+	}
+	return c, nil
 }

@@ -49,9 +49,9 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 func (s *session) assemblePrompt() string {
 	var parts []string
 	if cfg := s.conf.get(); cfg != nil {
-		for _, in := range cfg.Instructions {
-			if config.InModes(in.Modes, s.modes()) {
-				parts = append(parts, strings.TrimSpace(in.Text))
+		for _, sys := range cfg.Systems {
+			if t := strings.TrimSpace(sys.Text); t != "" {
+				parts = append(parts, t)
 			}
 		}
 	}
@@ -63,12 +63,12 @@ func (s *session) assemblePrompt() string {
 // of the session mode. Lines marked [nest] are dropped at the deepest level of
 // zel -p children, which cannot start more of them.
 func (s *session) toolDescription() string {
-	text, timeout := bashMain, config.BashTimeout
+	text, timeout := bashMain, config.Timeout
 	if s.mode() == "headless" {
 		text = bashHeadless
 	}
 	if s.cfg != nil {
-		timeout = s.Settings().BashTimeout
+		timeout = s.Settings().Timeout
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
