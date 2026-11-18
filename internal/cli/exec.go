@@ -21,6 +21,65 @@ import (
 	"zel/internal/config"
 )
 
+// execProcess delegates to a worker outside the caller's process group. Lua
+// can SIGKILL the outer group (including this zel exec) while the worker is
+// starting the command. The worker owns both Start and cancellation, so there
+// is no gap where a running command has no supervisor.
+func execProcess(ctx context.Context, args []string) error {
+	const worker = "--_exec-worker"
+	if len(args) > 0 && args[0] == worker {
+		const fd = 3 // first ExtraFiles descriptor
+		life := os.NewFile(fd, "exec lifeline")
+		info, err := life.Stat()
+		if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+			return errors.New("zel exec: missing worker lifeline")
+		}
+		defer life.Close()
+		syscall.CloseOnExec(fd)
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			var b [1]byte
+			_, _ = life.Read(b[:]) // the launcher never writes; EOF means it is gone
+			cancel()
+		}()
+		return Run(ctx, append([]string{"exec"}, args[1:]...), os.Stdin, os.Stdout, Options{})
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	defer w.Close()
+	// The launcher alone holds w. A signal handled by main closes it too,
+	// allowing the worker to reap the command and return the usual JSON result.
+	stop := context.AfterFunc(ctx, func() { _ = w.Close() })
+	defer stop()
+	cmd := exec.Command(exe, append([]string{"exec", worker}, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.ExtraFiles = []*os.File{r}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	_ = r.Close()
+	err = cmd.Wait()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		code := exit.ExitCode()
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			code = 128 + int(status.Signal())
+		}
+		return &ExitError{Code: code, Reported: true}
+	}
+	return err
+}
+
 func execCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
 	const usage = "exec [--timeout S] [--cwd DIR] [--env K=V]... -- CMD ARGS..."
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)

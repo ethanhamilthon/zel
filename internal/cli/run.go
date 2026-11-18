@@ -99,6 +99,15 @@ type Options struct {
 	Stderr      io.Writer // default os.Stderr
 }
 
+// RunProcess runs the CLI on the process's standard streams. The real binary
+// supervises exec so an abrupt exit of the CLI cannot strand its command.
+func RunProcess(ctx context.Context, args []string, options Options) error {
+	if len(args) > 0 && args[0] == "exec" {
+		return execProcess(ctx, args[1:])
+	}
+	return Run(ctx, args, os.Stdin, os.Stdout, options)
+}
+
 func Run(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	w := &failedWriter{w: out}
 	if options.Stderr == nil {

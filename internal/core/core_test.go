@@ -460,6 +460,48 @@ func TestLuaTimeoutAndCancel(t *testing.T) {
 	}
 }
 
+func TestDefaultShProcessLifetime(t *testing.T) {
+	t.Run("VM timeout kills foreground group", func(t *testing.T) {
+		a := newTestAgentWith(t, &fakeProvider{}, Options{}, withSh("settings = {timeout = 1}"))
+		s := a.session()
+		start := time.Now()
+		got := runSh(s, `(sleep 2; touch descendant) & touch started; sleep 2; touch foreground; wait`)
+		if !strings.Contains(got, "[timeout after 1s; VM reset]") {
+			t.Fatalf("expected VM timeout and reset, got %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(s.dir, "started")); err != nil {
+			t.Fatalf("command never reached its foreground wait: %v", err)
+		}
+		// Give both shells time to write if cancellation missed their group.
+		time.Sleep(time.Until(start.Add(3 * time.Second)))
+		for _, name := range []string{"foreground", "descendant"} {
+			if _, err := os.Stat(filepath.Join(s.dir, name)); !os.IsNotExist(err) {
+				t.Errorf("%s marker should not exist after VM timeout: stat err=%v", name, err)
+			}
+		}
+	})
+
+	t.Run("background survives successful return", func(t *testing.T) {
+		a := newTestAgentWith(t, &fakeProvider{}, Options{}, withSh("settings = {timeout = 1}"))
+		s := a.session()
+		// Leave stdout/stderr inherited: sh must return without waiting for them.
+		if got := runSh(s, `(sleep 2; printf survived > background) & echo returned`); got != "returned\n" {
+			t.Fatalf("background job blocked or broke sh's return: %q", got)
+		}
+		a.Close()
+		marker := filepath.Join(s.dir, "background")
+		for deadline := time.Now().Add(4 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			data, err := os.ReadFile(marker)
+			if string(data) == "survived" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("background job did not survive sh and VM teardown: %q, %v", data, err)
+			}
+		}
+	})
+}
+
 func TestMessageHooksRewriteAndBlock(t *testing.T) {
 	fp := okProvider()
 	a := newTestAgentWith(t, fp, Options{}, withLocal(`return {hooks = {
