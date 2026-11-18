@@ -117,19 +117,3 @@ func TestMetadataFailureRemainsRetryable(t *testing.T) {
 		t.Fatalf("retry: %+v %v", m, err)
 	}
 }
-
-func TestTasks(t *testing.T) {
-	s, _ := Open(t.TempDir())
-	p := "/tmp/proj"
-	s.CreateTask(p, "s", "t1", "build", "make", time.Now())
-	s.CreateTask(p, "s", "t2", "", "sleep 9", time.Now())
-	code := 2
-	s.FinishTask(p, "s", "t1", "failed", &code)
-	if err := s.LoseTasks(p, "s"); err != nil {
-		t.Fatal(err)
-	}
-	list, err := s.Tasks(p, "s")
-	if err != nil || len(list) != 2 || list[0].Status != "failed" || *list[0].ExitCode != 2 || list[1].Status != "lost" || list[0].Name != "build" {
-		t.Fatalf("tasks = %+v, %v", list, err)
-	}
-}

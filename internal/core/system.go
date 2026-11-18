@@ -2,12 +2,20 @@ package core
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
+	"slices"
+	"strconv"
 	"strings"
 
 	"zel/internal/config"
-	"zel/internal/luart"
 )
+
+//go:embed prompt/zel.md
+var zelPrompt string
+
+//go:embed prompt/lua_tool.md
+var luaToolPrompt string
 
 // instructions returns the session's system prompt. It is assembled once and stored
 // in the history, so a resumed session keeps its prompt until the config changes.
@@ -34,33 +42,46 @@ func (s *session) instructions(ctx context.Context) (string, error) {
 	return prompt, nil
 }
 
-// assemblePrompt renders the system prompt: only the instructions the user wrote
-// in the config for this session mode. Zel adds nothing of its own here.
-// It is frozen in the history; the built-in text lives in toolDescription.
+// assemblePrompt renders the system prompt: the static text about Zel and its
+// CLI (prompt/zel.md), the functions of the config, one line each sorted by
+// name, then the systems of the configs in file order. It is frozen in the
+// history until the config changes.
 func (s *session) assemblePrompt() string {
-	var parts []string
-	if cfg := s.conf.get(); cfg != nil {
-		for _, sys := range cfg.Systems {
-			if t := strings.TrimSpace(sys.Text); t != "" {
-				parts = append(parts, t)
+	parts := []string{strings.TrimSpace(zelPrompt)}
+	cfg := s.conf.get()
+	if cfg == nil {
+		return parts[0]
+	}
+	if len(cfg.Functions) > 0 {
+		funcs := slices.Clone(cfg.Functions)
+		slices.SortFunc(funcs, func(a, b config.Function) int { return strings.Compare(a.Name, b.Name) })
+		var b strings.Builder
+		b.WriteString("## Functions")
+		for _, f := range funcs {
+			desc := strings.TrimSpace(f.Description)
+			if !strings.HasPrefix(desc, "`") {
+				desc = "`" + f.Name + "` - " + desc
 			}
+			b.WriteString("\n" + desc)
+		}
+		parts = append(parts, b.String())
+	}
+	for _, sys := range cfg.Systems {
+		if t := strings.TrimSpace(sys.Text); t != "" {
+			parts = append(parts, t)
 		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-// toolDescription is everything Zel itself tells the model: how the lua tool
-// and its API work, and the functions of the config. It is built live for
-// every request; zel -p children at the deepest level cannot start more.
+// toolDescription is the description of the lua tool: prompt/lua_tool.md with
+// the call timeout.
 func (s *session) toolDescription() string {
-	t := luart.ToolText{Headless: s.mode() == "headless", Nest: s.depth < MaxDepth, Timeout: config.Timeout}
+	timeout := config.Timeout
 	if s.cfg != nil {
-		t.Timeout = s.Settings().Timeout
+		timeout = s.Settings().Timeout
 	}
-	if cfg := s.conf.get(); cfg != nil {
-		t.Functions = cfg.Functions
-	}
-	return luart.ToolDescription(t)
+	return strings.ReplaceAll(strings.TrimSpace(luaToolPrompt), "{timeout}", strconv.Itoa(timeout))
 }
 
 func instructionSnapshot(item json.RawMessage) (string, bool) {

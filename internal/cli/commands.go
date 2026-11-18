@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -64,7 +63,15 @@ func configPath(_, flag string) (string, error) {
 	return filepath.Abs(p)
 }
 
-func loadConfig(flag string) (*config.Config, error) {
+// listFlag is a repeatable string flag.
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+// loadConfig reads the config of the current folder: the default files unless
+// noDefaults, the configs of a parent session (ZEL_CONFIGS) and the --config files.
+func loadConfig(flags []string, noDefaults bool) (*config.Config, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -73,17 +80,31 @@ func loadConfig(flag string) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.LoadConfig(home, cwd, cmp.Or(flag, os.Getenv("ZEL_CONFIG"))), nil
+	var configs []string
+	if env := os.Getenv("ZEL_CONFIGS"); env != "" {
+		configs = strings.Split(env, "\n")
+	}
+	noDefaults = noDefaults || os.Getenv("ZEL_NO_DEFAULT_CONFIGS") == "1"
+	for _, f := range flags {
+		path, err := configPath(cwd, f)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, path)
+	}
+	return core.LoadConfig(home, cwd, configs, noDefaults), nil
 }
 
 func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("models", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
-	file := fs.String("config", "", "")
+	var files listFlag
+	fs.Var(&files, "config", "")
+	noDefaults := fs.Bool("no-default-configs", false, "")
 	if rest, err := parseFlags(fs, args); err != nil || len(rest) > 0 {
-		return usageError("models", "models [--json] [--config FILE]")
+		return usageError("models", "models [--json] [--config FILE]... [--no-default-configs]")
 	}
-	cfg, err := loadConfig(*file)
+	cfg, err := loadConfig(files, *noDefaults)
 	if err != nil {
 		return err
 	}
@@ -113,11 +134,13 @@ func modelsCommand(ctx context.Context, args []string, out io.Writer) error {
 
 func configCommand(_ context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
-	file := fs.String("config", "", "")
+	var files listFlag
+	fs.Var(&files, "config", "")
+	noDefaults := fs.Bool("no-default-configs", false, "")
 	if rest, err := parseFlags(fs, args); err != nil || len(rest) > 0 {
-		return usageError("config", "config [--config FILE]")
+		return usageError("config", "config [--config FILE]... [--no-default-configs]")
 	}
-	cfg, err := loadConfig(*file)
+	cfg, err := loadConfig(files, *noDefaults)
 	if err != nil {
 		return err
 	}

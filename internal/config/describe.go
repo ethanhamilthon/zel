@@ -33,13 +33,12 @@ func Describe(c *Config) string {
 	}
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	files := c.Files
-	if len(files) == 0 {
-		files = c.Paths.Files
-	}
 	p("Files:")
-	for _, f := range files {
+	for _, f := range c.Files {
 		p("  %s", DisplayPath(f))
+	}
+	if len(c.Files) == 0 {
+		p("  (none)")
 	}
 	if c.Paths.Connect != "" {
 		p("Connect: %s", DisplayPath(c.Paths.Connect))

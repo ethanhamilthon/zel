@@ -77,23 +77,37 @@ func TestConfigShowsTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "init.lua") || !strings.Contains(out, `"m1"`) {
-		t.Fatalf("unexpected config output:\n%s", out)
+	if strings.Contains(out, "init.lua") || !strings.Contains(out, `"m1"`) {
+		t.Fatalf("unexpected config output (a missing default file is not listed):\n%s", out)
+	}
+	if err := os.WriteFile(filepath.Join(home, "init.lua"), []byte("return {}\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	out, err = zel(t, "", "config", "--config", extra)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, extra) || strings.Contains(out, "Local:") {
-		t.Fatalf("config --config should use extra and omit Local:\n%s", out)
+	if !strings.Contains(out, "init.lua") || !strings.Contains(out, extra) {
+		t.Fatalf("config --config adds to the default files:\n%s", out)
 	}
-	// Inside a session zel config sees the session's file.
-	t.Setenv("ZEL_CONFIG", extra)
+	out, err = zel(t, "", "config", "--no-default-configs", "--config", extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "init.lua") || !strings.Contains(out, extra) {
+		t.Fatalf("--no-default-configs should leave only extra:\n%s", out)
+	}
+	if _, err := zel(t, "", "config", "--config", filepath.Join(home, "missing.lua")); err != nil {
+		t.Fatal(err)
+	}
+	// Inside a session zel config sees the files of the session.
+	t.Setenv("ZEL_CONFIGS", extra)
+	t.Setenv("ZEL_NO_DEFAULT_CONFIGS", "1")
 	out, err = zel(t, "", "config")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, extra) {
+	if strings.Contains(out, "init.lua") || !strings.Contains(out, extra) {
 		t.Fatalf("config in a session:\n%s", out)
 	}
 }
@@ -117,7 +131,7 @@ func TestHeadlessArguments(t *testing.T) {
 		{args: []string{"-p", "--resume", "ID", "text"}, want: call{cwd, core.Options{Prompt: "text", Resume: "ID"}}},
 		{args: []string{"-p", "hello", "--model", "m", "--effort", "high"}, want: call{cwd, core.Options{Prompt: "hello", Model: "m", Effort: "high"}}},
 		{args: []string{"--provider", "p", "-p", "two words"}, want: call{cwd, core.Options{Prompt: "two words", Provider: "p"}}},
-		{args: []string{"-p", "--config", "a.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Config: filepath.Join(cwd, "a.toml")}}},
+		{args: []string{"-p", "--config", "a.toml", "--cwd", dir, "x"}, want: call{dir, core.Options{Prompt: "x", Configs: []string{filepath.Join(cwd, "a.toml")}}}},
 		{args: []string{"-p"}, stdin: "from stdin", want: call{cwd, core.Options{Prompt: "from stdin"}}},
 		{args: []string{"-p", "-", "--timeout", "5"}, stdin: "dash", want: call{cwd, core.Options{Prompt: "dash"}}},
 		{args: []string{"-p", "--json"}, stdin: " \n", err: "nonempty prompt"},
@@ -178,7 +192,7 @@ func TestHeadlessWithoutProviders(t *testing.T) {
 
 // writeConfig writes the provider and selection of a test into connect.json.
 func writeConfig(home string, s core.Settings) error {
-	path := config.DefaultPaths(home, "", "").Connect
+	path := config.DefaultPaths(home, "", nil, false).Connect
 	data, err := json.MarshalIndent(config.Connect{
 		Provider:  s.Provider,
 		Model:     s.Model,
@@ -304,7 +318,7 @@ func TestHeadlessSessionOutputAndOverrides(t *testing.T) {
 					t.Fatalf("stdout=%q exit=%d", out.String(), ExitCode(err))
 				}
 			}
-			if saved, err := config.LoadConnect(config.DefaultPaths(home, "", "").Connect); err != nil || saved.Model != "default" || saved.Effort != "medium" {
+			if saved, err := config.LoadConnect(config.DefaultPaths(home, "", nil, false).Connect); err != nil || saved.Model != "default" || saved.Effort != "medium" {
 				t.Fatalf("the flags changed the defaults: %+v err=%v", saved, err)
 			}
 		})

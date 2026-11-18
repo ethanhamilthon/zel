@@ -24,14 +24,15 @@ type Options struct {
 	Custom                  string               // --mode: a custom mode the session runs in besides Mode
 	Resume                  string               // open this stored session of the project instead of creating one
 	Provider, Model, Effort string               // Optional initial-session overrides; defaults are not changed.
-	Config                  string               // absolute path of --config, used instead of ~/.config/zel/settings.yaml
+	Configs                 []string             // absolute paths of --config, loaded after the default files
+	NoDefaultConfigs        bool                 // --no-default-configs: no init.lua and no ./zel.lua
 	Prompt                  string               // headless: the prompt, shown in the parent's row of a child
 	SessionReady            func(*Runtime) error // May persist and announce the session.
 }
 
 // Runtime is the stable application handle held by callers and the controller
 // across NewSession/Resume. Each opened session owns an independent *session so
-// surviving background work (hooks, tasks, abandoned lua calls) keeps its own
+// surviving background work (hooks, abandoned lua calls) keeps its own
 // session identity and environment without racing with session replacement.
 type Runtime struct {
 	opts      Options
@@ -40,8 +41,7 @@ type Runtime struct {
 	store     *store.Store
 	project   string
 	ask       *chooser
-	changes   *notifier // running tasks or children changed
-	reloads   *notifier // a config file changed
+	changes   *notifier // children changed
 	parent    *parentLink
 	depth     int
 	closeOnce sync.Once
@@ -53,30 +53,26 @@ type Runtime struct {
 // session is the owned state of one Zel session. It is never overwritten in
 // place when switching sessions.
 type session struct {
-	opts        Options
-	home        string
-	dir         string
-	store       *store.Store // shared handle of the sessions folder
-	project     string
-	id          string
-	created     time.Time
-	cfg         *settingsState
-	conf        *confHolder
-	path        string      // the config file
-	token       string      // key of the session socket
-	sock        *ipc.Server // nil until the session is acquired
-	stopWatch   func()
-	changes     *notifier
-	reloads     *notifier
-	parent      *parentLink // set when this is a zel -p started from another session
-	childMu     sync.Mutex
-	children    map[string]SubagentRun // zel -p children that run now, by session ID
-	childPIDs   map[string]int
-	hookCtx     context.Context
-	stopHooks   context.CancelFunc
-	outputMu    sync.Mutex // numbers the files of cut call outputs
-	dirMu       sync.Mutex
-	workDirPath string // cd(): where the next Lua calls work; empty = dir
+	opts      Options
+	home      string
+	dir       string
+	store     *store.Store // shared handle of the sessions folder
+	project   string
+	id        string
+	created   time.Time
+	cfg       *settingsState
+	conf      *confHolder
+	path      string      // the config file
+	token     string      // key of the session socket
+	sock      *ipc.Server // nil until the session is acquired
+	changes   *notifier
+	parent    *parentLink // set when this is a zel -p started from another session
+	childMu   sync.Mutex
+	children  map[string]SubagentRun // zel -p children that run now, by session ID
+	childPIDs map[string]int
+	hookCtx   context.Context
+	stopHooks context.CancelFunc
+	outputMu  sync.Mutex // numbers the files of cut call outputs
 
 	luaMu        sync.Mutex
 	luaConf      *luart.Config // the config VM of the snapshot in conf
@@ -111,7 +107,7 @@ type session struct {
 	acts         *activities    // foreground host operations in progress
 	queue        *Steering
 	slots        *imageSlots
-	tasks        *tasks
+	life         *lifecycle
 	liveSteps    map[string]bool // steps streamed by the response in flight, by item ID; see closeTurn
 	ended        atomic.Bool
 }
@@ -138,12 +134,12 @@ func New(dir string, opts Options) (*Runtime, error) {
 	if opts.Mode == "" {
 		opts.Mode = "main"
 	}
-	if opts.Config == "" {
+	if !opts.NoDefaultConfigs {
 		if err := config.EnsureHome(home); err != nil {
 			return nil, err
 		}
 	}
-	a := &Runtime{opts: opts, home: home, state: state, ask: &chooser{}, changes: &notifier{}, reloads: &notifier{}}
+	a := &Runtime{opts: opts, home: home, state: state, ask: &chooser{}, changes: &notifier{}}
 	if opts.Mode == "headless" {
 		// A zel -p started by sh() of another session is its child.
 		if a.parent, err = parentFromEnv(); err != nil {
@@ -204,7 +200,6 @@ func (a *Runtime) newSessionState(dir string, wake func(), notice func(string)) 
 		project: a.project,
 		ask:     a.ask,
 		changes: a.changes,
-		reloads: a.reloads,
 		parent:  a.parent,
 		depth:   a.depth,
 		token:   ipc.Token(),

@@ -144,7 +144,7 @@ func (s *session) Subagents() []SubagentRun {
 	return list
 }
 
-// OnSubagentsChanged registers fn to run whenever the running tasks or
+// OnSubagentsChanged registers fn to run whenever the
 // children change. fn must not block.
 func (a *Runtime) OnSubagentsChanged(fn func()) { a.changes.set(fn) }
 
@@ -155,7 +155,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 type parentLink struct {
 	session, socket, token  string
 	depth                   int
-	config                  string
+	configs                 []string // the --config files of the parent
+	noDefaults              bool
 	provider, model, effort string
 }
 
@@ -167,7 +168,10 @@ func parentFromEnv() (*parentLink, error) {
 	depth, _ := strconv.Atoi(os.Getenv("ZEL_DEPTH"))
 	p := &parentLink{session: id, socket: socket, token: token, depth: depth,
 		provider: os.Getenv("ZEL_PROVIDER"), model: os.Getenv("ZEL_MODEL"), effort: os.Getenv("ZEL_EFFORT")}
-	p.config = os.Getenv("ZEL_CONFIG")
+	if v := os.Getenv("ZEL_CONFIGS"); v != "" {
+		p.configs = strings.Split(v, "\n")
+	}
+	p.noDefaults = os.Getenv("ZEL_NO_DEFAULT_CONFIGS") == "1"
 	return p, nil
 }
 

@@ -52,13 +52,13 @@ func fail(code, format string, args ...any) error {
 
 // Info describes the current session for the TUI information page.
 type Info struct {
-	Session, Title, Project   string
-	Provider, Model, Effort   string
-	Config                    string
-	Messages, Requests, Tasks int   // user messages, model requests with usage, running tasks
-	Context                   int64 // estimated context tokens
-	Usage                     Usage
-	Subagents                 []SubagentRun // the zel -p children of the session (running and finished), oldest first
+	Session, Title, Project string
+	Provider, Model, Effort string
+	Config                  string
+	Messages, Requests      int   // user messages, model requests with usage
+	Context                 int64 // estimated context tokens
+	Usage                   Usage
+	Subagents               []SubagentRun // the zel -p children of the session (running and finished), oldest first
 }
 
 type Status struct {
@@ -66,7 +66,6 @@ type Status struct {
 	Cancelling bool
 	Started    time.Time
 	Queued     []Input
-	Tasks      int
 	Session    string
 	Activity   string    // foreground host operation of the turn, one row per line; "" before the first
 	Live       bool      // Activity is still running, not only the last one of the turn

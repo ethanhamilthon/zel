@@ -1,9 +1,7 @@
 package core
 
 import (
-	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,63 +88,6 @@ func cutText(text string, total, limit int, path string) string {
 		fmt.Sprintf("======== [output cut: %d of %d bytes omitted]\n", omitted, total) +
 		"======== full output: " + path + "\n" +
 		"======== read it with slice(read(path), from, count) or grep()\n\n" + tail
-}
-
-// workDir is the folder Lua calls work in: the one set by cd(), else the
-// folder the session started in.
-func (s *session) workDir() string {
-	s.dirMu.Lock()
-	defer s.dirMu.Unlock()
-	return cmp.Or(s.workDirPath, s.dir)
-}
-
-// workDirSet is the folder set by cd(), empty when none.
-func (s *session) workDirSet() string {
-	s.dirMu.Lock()
-	defer s.dirMu.Unlock()
-	return s.workDirPath
-}
-
-// changeDir is cd(): dir (relative to base, ~ allowed) becomes the folder of
-// the next Lua calls; empty goes back to the start folder. It returns the new
-// absolute path. Nothing changes when dir is missing or not a folder.
-func (s *session) changeDir(dir, base string) (string, error) {
-	path := s.dir
-	if dir != "" {
-		if dir == "~" || strings.HasPrefix(dir, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", fail(CodeInvalid, "EINVAL: %v", err)
-			}
-			dir = filepath.Join(home, dir[1:])
-		}
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(cmp.Or(base, s.workDir()), dir)
-		}
-		path = filepath.Clean(dir)
-	}
-	info, err := os.Stat(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return "", fail(CodeNotFound, "ENOENT: %s: no such folder", path)
-	case err != nil:
-		return "", fail(CodeInvalid, "EINVAL: %v", err)
-	case !info.IsDir():
-		return "", fail(CodeInvalid, "EINVAL: %s: not a folder", path)
-	}
-	s.dirMu.Lock()
-	if path == s.dir {
-		s.workDirPath = ""
-	} else {
-		s.workDirPath = path
-	}
-	s.dirMu.Unlock()
-	if s.HasSavedSession() {
-		if err := s.Save(); err != nil {
-			return path, nil
-		}
-	}
-	return path, nil
 }
 
 // runLua runs one call of the agent: the lua_before hooks may block or
@@ -267,7 +208,7 @@ func (e luaEnv) Info() luart.SessionInfo {
 		name = firstUserLine(s.History)
 	}
 	s.histMu.RUnlock()
-	return luart.SessionInfo{ID: s.id, Name: name, Cwd: s.workDir(), Root: s.dir, Mode: s.mode(), Modes: s.modes(),
+	return luart.SessionInfo{ID: s.id, Name: name, Cwd: s.dir, Root: s.dir, Mode: s.mode(), Modes: s.modes(),
 		Depth: s.depth, Model: st.Model, Effort: st.Effort, Provider: st.Provider, TmpDir: filepath.Join(s.sessionDir(), "tmp")}
 }
 
@@ -279,117 +220,13 @@ func (e luaEnv) ShellEnv() []string {
 	return out
 }
 
-func (e luaEnv) Cd(dir string) error {
-	_, err := e.s.changeDir(dir, e.s.workDir())
-	return err
-}
-
-func (e luaEnv) Attach(path string) error { return e.s.view(path) }
-
-func (e luaEnv) Choice(question string, options []string) (string, error) {
-	if e.s.mode() != "main" {
-		return "", errors.New("EDENIED: choice needs the user: not available in zel -p")
-	}
-	id, err := e.s.ask.ask(e.s, question, options)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("c%d", id), nil
-}
-
-func (e luaEnv) Rename(name string) error { return e.s.Rename(name) }
-
-func (e luaEnv) Models(ctx context.Context) ([]luart.ModelInfo, map[string]string) {
-	list, failed := AllModels(ctx, e.s.Settings().Providers)
-	out := make([]luart.ModelInfo, 0, len(list))
-	for _, m := range list {
-		out = append(out, luart.ModelInfo{Provider: m.Provider, Model: m.Model, ContextWindow: m.ContextWindow})
-	}
-	failures := map[string]string{}
-	for name, err := range failed {
-		failures[name] = err.Error()
-	}
-	return out, failures
-}
-
-func (e luaEnv) Tasks() luart.Tasks { return luaTasks{e.s.tasks} }
-
 func (e luaEnv) Log(kind, msg string) { e.s.LogEvent(kind, msg) }
 
-// luaTasks is the task registry as the Lua runtime sees it.
-type luaTasks struct{ t *tasks }
-
-func (l luaTasks) Spawn(name string, timeout time.Duration, run luart.TaskFunc) (string, error) {
-	if l.t == nil {
-		return "", errors.New("EDENIED: no tasks in this session")
-	}
-	j, err := l.t.spawnLua(name, timeout, run)
-	if err != nil {
-		return "", err
-	}
-	return j.id, nil
-}
-
-func (l luaTasks) List() []luart.TaskInfo {
-	var out []luart.TaskInfo
-	for _, j := range l.t.list() {
-		out = append(out, j.info())
-	}
-	return out
-}
-
-func (l luaTasks) Get(id string) (luart.TaskInfo, bool) {
-	j, err := l.t.find(id)
-	if err != nil {
-		return luart.TaskInfo{}, false
-	}
-	return j.info(), true
-}
-
-func (l luaTasks) Wait(ctx context.Context, ids []string, timeout time.Duration) []luart.TaskInfo {
-	deadline := time.Now().Add(timeout)
-	out := make([]luart.TaskInfo, 0, len(ids))
-	for _, id := range ids {
-		j, err := l.t.find(id)
-		if err != nil {
-			out = append(out, luart.TaskInfo{ID: id, State: "unknown"})
-			continue
-		}
-		left := time.Duration(0)
-		if timeout > 0 {
-			left = max(time.Nanosecond, time.Until(deadline))
-		}
-		j.Wait(ctx, left)
-		out = append(out, j.info())
-	}
-	return out
-}
-
-func (l luaTasks) Tail(id string, n int) (string, error) {
-	j, err := l.t.find(id)
-	if err != nil {
-		return "", err
-	}
-	return tailLines(j.log, cmp.Or(n, 20)), nil
-}
-
-func (l luaTasks) Stop(id string) error {
-	j, err := l.t.find(id)
-	if err != nil {
-		return err
-	}
-	j.Stop()
-	return nil
-}
-
 // LoadConfig reads the config of a folder without a session, for zel config
-// and zel models: connect.json, init.lua and zel.lua (unless flag names
-// another init.lua). Errors are in the Errors of the result.
-func LoadConfig(home, cwd, flag string) *config.Config {
-	p := config.DefaultPaths(home, cwd, flag)
-	if flag == "" && os.Getenv("ZEL_NO_LOCAL") == "1" {
-		p.Local = ""
-	}
+// and zel models: connect.json and the config files (the defaults unless
+// noDefaults, then configs). Errors are in the Errors of the result.
+func LoadConfig(home, cwd string, configs []string, noDefaults bool) *config.Config {
+	p := config.DefaultPaths(home, cwd, configs, noDefaults)
 	base, err := baseSettings(p.Connect)
 	if err == nil {
 		var lc *luart.Config
@@ -399,22 +236,25 @@ func LoadConfig(home, cwd, flag string) *config.Config {
 			return &cfg
 		}
 	}
-	return &config.Config{Paths: p, Settings: base, Prompts: map[string]string{}, Errors: []string{err.Error()}}
+	return &config.Config{Paths: p, Settings: base, Prompts: map[string]string{}, Files: existing(p.Files), Errors: []string{err.Error()}}
+}
+
+// existing keeps the files that exist.
+func existing(files []string) []string {
+	var out []string
+	for _, f := range files {
+		if _, err := os.Stat(f); err == nil {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // bareEnv is the host of a config VM outside a session.
 type bareEnv struct{ cwd string }
 
-var errNoSession = errors.New("EDENIED: not available outside a session")
-
 func (e bareEnv) Info() luart.SessionInfo {
 	return luart.SessionInfo{Cwd: e.cwd, Root: e.cwd, Mode: config.ModeMain, Modes: []string{config.ModeMain}}
 }
-func (bareEnv) ShellEnv() []string                                            { return nil }
-func (bareEnv) Cd(string) error                                               { return errNoSession }
-func (bareEnv) Attach(string) error                                           { return errNoSession }
-func (bareEnv) Choice(string, []string) (string, error)                       { return "", errNoSession }
-func (bareEnv) Rename(string) error                                           { return errNoSession }
-func (bareEnv) Models(context.Context) ([]luart.ModelInfo, map[string]string) { return nil, nil }
-func (bareEnv) Tasks() luart.Tasks                                            { return nil }
-func (bareEnv) Log(string, string)                                            {}
+func (bareEnv) ShellEnv() []string { return nil }
+func (bareEnv) Log(string, string) {}

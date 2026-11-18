@@ -43,7 +43,6 @@ func NewController(a *Runtime, emit func(Event)) *Controller {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a.Queue().OnPush(func() { go c.view(func() { c.deliverLocked() }) })
-	a.OnConfigChanged(func() { go c.Reload() })
 	c.deliverLocked()
 	return c
 }
@@ -58,7 +57,7 @@ func (c *Controller) Closed() <-chan struct{} { return c.closed }
 
 func (c *Controller) Status() (s Status) {
 	c.view(func() {
-		s = Status{Tasks: c.a.RunningTasks(), Session: c.a.SessionID()}
+		s = Status{Session: c.a.SessionID()}
 		if c.active != nil {
 			s.Busy, s.Cancelling = true, c.active.cancelled
 			s.Started = c.active.started

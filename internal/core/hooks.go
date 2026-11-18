@@ -170,20 +170,16 @@ func (s *session) turnEnd(ctx context.Context) string {
 	if !s.hasHooks("turn_end") {
 		return ""
 	}
-	running := []map[string]any{}
-	for _, t := range s.ActiveTasks() {
-		running = append(running, map[string]any{"id": t.ID, "name": t.Name, "ms": time.Since(t.Started).Milliseconds()})
-	}
-	return strings.Join(s.runHooks(ctx, "turn_end", map[string]any{"answer": s.FinalText(), "running": running}).outs, "\n")
+	return strings.Join(s.runHooks(ctx, "turn_end", map[string]any{"answer": s.FinalText()}).outs, "\n")
 }
 
 // sessionCreated runs the session_created hooks once per new session.
 func (s *session) sessionCreated() { s.fireHooks("session_created", map[string]any{}) }
 
-// sessionClosed leaves the session: its tasks are stopped and then the session_closed
-// hooks run with what is left of the 5 s shutdown budget.
+// sessionClosed leaves the session: the session_closed hooks run within the
+// 5 s shutdown budget.
 func (s *session) sessionClosed(reason string) {
-	t := s.tasks
+	t := s.life
 	if t == nil {
 		return
 	}
@@ -197,7 +193,7 @@ func (s *session) sessionClosed(reason string) {
 // checkIdle fires the idle hooks once when no turn runs and nothing runs in
 // the background any more.
 func (s *session) checkIdle() {
-	if s.ended.Load() || s.turning.Load() || s.RunningTasks() > 0 || len(s.ActiveSubagents()) > 0 || s.queue.noticeCount() > 0 {
+	if s.ended.Load() || s.turning.Load() || len(s.ActiveSubagents()) > 0 || s.queue.noticeCount() > 0 {
 		return
 	}
 	if s.idleSent.CompareAndSwap(false, true) {

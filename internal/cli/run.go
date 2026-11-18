@@ -140,8 +140,8 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer, option
 
 func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Writer, options Options) error {
 	var prompt, provider, model, effort, resume, dir, mode string
-	var configFile string
-	var asJSON bool
+	var configFiles listFlag
+	var noDefaultConfigs, asJSON bool
 	var timeout float64
 	fs := flag.NewFlagSet("zel", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -154,7 +154,8 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	fs.StringVar(&dir, "cwd", "", "working directory")
 	fs.Float64Var(&timeout, "timeout", 0, "seconds before the run is cancelled")
 	fs.BoolVar(&asJSON, "json", false, "print {ok, answer, session, error}")
-	fs.StringVar(&configFile, "config", "", "config file used instead of ~/.config/zel/init.lua")
+	fs.Var(&configFiles, "config", "config file loaded after the default ones (repeatable)")
+	fs.BoolVar(&noDefaultConfigs, "no-default-configs", false, "do not load ~/.config/zel/init.lua and ./zel.lua")
 	// -p may come without its value when flags follow: zel -p --resume ID "text".
 	args = slices.Clone(args)
 	for i, a := range args {
@@ -207,10 +208,13 @@ func sessionCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		}
 	}
 	opts := core.Options{Mode: "main", Custom: mode, Provider: provider, Model: model, Effort: effort, Resume: resume}
-	if configFile != "" {
-		if opts.Config, err = configPath(cwd, configFile); err != nil {
+	opts.NoDefaultConfigs = noDefaultConfigs
+	for _, f := range configFiles {
+		path, err := configPath(cwd, f)
+		if err != nil {
 			return err
 		}
+		opts.Configs = append(opts.Configs, path)
 	}
 	var session string
 	if headless {
