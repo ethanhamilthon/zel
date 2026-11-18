@@ -8,11 +8,11 @@ import (
 )
 
 type turnHost struct {
-	s        *session
-	emit     func(TurnEvent)
-	accept   func() bool
-	turnSeq  int
-	injected int
+	s         *session
+	emit      func(TurnEvent)
+	accept    func() bool
+	turnSeq   int
+	injected  int
 	skipCalls bool // discard the rest of this response after typed steering
 }
 
