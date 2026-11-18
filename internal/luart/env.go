@@ -1,6 +1,8 @@
 // Package luart owns Zel's config VM, the agent (session) VM and the VMs of
-// async hooks and commands. The VMs have the Lua standard library only; every
-// other function comes from the config.
+// async hooks and commands. Config, hook and command VMs have the hardened Lua
+// standard library; agent tool chunks run in a separate allowlisted REPL
+// environment with pure Lua base/text/table/math/coroutine plus config.functions,
+// while copied config functions retain their private library environment.
 package luart
 
 type SessionInfo struct {

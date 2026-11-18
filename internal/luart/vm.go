@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,13 +19,16 @@ import (
 const maxOutput = 1 << 20
 
 // vm is one Lua state: the standard library (hardened, see stdlib.go) and
-// whatever the caller puts in it. It has no host API.
+// whatever the caller puts in it. When repl is non-nil (the agent session VM),
+// tool chunks run in repl while copied config functions keep L.G.Global as
+// their private library environment.
 type vm struct {
 	L           *lua.LState
 	ctx         context.Context
 	env         Env
 	procs       *procs
 	settingsEnv func() map[string]string // settings.env, added to the children's environment
+	repl        *lua.LTable
 }
 
 // newVM makes a VM with the standard library. path is the package.path.
@@ -180,19 +184,94 @@ func (a *Agent) drop() {
 	}
 }
 
-// newVM builds the session VM: the standard library and the functions of the
-// config as globals, copied in one pass so shared upvalues stay shared.
+// newVM builds the session VM with an isolated allowlisted REPL environment
+// and copies config.functions into it in one pass so shared upvalues stay
+// shared, while copied functions retain L.G.Global as their private stdlib.
 func (a *Agent) newVM(ctx context.Context) (*vm, error) {
 	if a.cfg == nil {
-		return newVM(a.env, ""), nil
+		v := newVM(a.env, "")
+		v.initREPL()
+		return v, nil
 	}
 	v := newVM(a.env, a.cfg.pkgPath)
 	v.settingsEnv = a.cfg.settingsEnv
+	v.initREPL()
 	if err := a.cfg.copyFunctions(ctx, v); err != nil {
 		v.close()
 		return nil, err
 	}
 	return v, nil
+}
+
+// initREPL builds the separate persistent allowlisted environment for agent
+// tool chunks: pure Lua base/string/table/math/coroutine (without os, io,
+// debug, require, package, getfenv/setfenv, or filesystem loaders).
+func (v *vm) initREPL() {
+	L := v.L
+	repl := L.NewTable()
+	repl.RawSetString("_G", repl)
+	repl.RawSetString("_VERSION", L.GetGlobal("_VERSION"))
+
+	for _, name := range []string{
+		"assert", "collectgarbage", "error", "getmetatable", "ipairs",
+		"next", "pairs", "pcall", "rawequal", "rawget", "rawset",
+		"select", "tonumber", "tostring", "type", "unpack", "xpcall",
+	} {
+		repl.RawSetString(name, L.GetGlobal(name))
+	}
+
+	// Only tables may have metatables set from the REPL, blocking writes to
+	// L.G.builtinMts for strings, numbers, booleans, functions, or threads.
+	origSetMetatable := L.GetGlobal("setmetatable")
+	repl.RawSetString("setmetatable", L.NewFunction(func(L *lua.LState) int {
+		L.CheckTable(1)
+		n := L.GetTop()
+		L.Insert(origSetMetatable, 1)
+		L.Call(n, lua.MultRet)
+		return L.GetTop()
+	}))
+
+	// Bind compiled chunks from load/loadstring directly to repl regardless of L.Env.
+	wrapLoader := func(orig lua.LValue) *lua.LFunction {
+		return L.NewFunction(func(L *lua.LState) int {
+			n := L.GetTop()
+			L.Insert(orig, 1)
+			L.Call(n, lua.MultRet)
+			if fn, ok := L.Get(1).(*lua.LFunction); ok {
+				fn.Env = repl
+			}
+			return L.GetTop()
+		})
+	}
+	repl.RawSetString("load", wrapLoader(L.GetGlobal("load")))
+	repl.RawSetString("loadstring", wrapLoader(L.GetGlobal("loadstring")))
+
+	copyTable := func(src *lua.LTable, skip ...string) *lua.LTable {
+		dst := L.NewTable()
+		src.ForEach(func(k, val lua.LValue) {
+			if ks, ok := k.(lua.LString); ok && slices.Contains(skip, string(ks)) {
+				return
+			}
+			dst.RawSet(k, val)
+		})
+		return dst
+	}
+
+	if strLib, ok := L.GetGlobal(lua.StringLibName).(*lua.LTable); ok {
+		repl.RawSetString(lua.StringLibName, copyTable(strLib, "__index"))
+		// Keep string methods working while hiding/protecting the shared metatable.
+		strMt := L.NewTable()
+		strMt.RawSetString("__index", strLib)
+		strMt.RawSetString("__metatable", lua.LString("protected"))
+		L.SetMetatable(lua.LString(""), strMt)
+	}
+	for _, name := range []string{lua.TabLibName, lua.MathLibName, lua.CoroutineLibName} {
+		if lib, ok := L.GetGlobal(name).(*lua.LTable); ok {
+			repl.RawSetString(name, copyTable(lib))
+		}
+	}
+
+	v.repl = repl
 }
 
 // A native Lua library call may not observe cancellation. Detach its state
@@ -266,7 +345,11 @@ func (v *vm) exec(ctx context.Context, code string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	v.L.Push(v.L.NewFunctionFromProto(proto))
+	fn := v.L.NewFunctionFromProto(proto)
+	if v.repl != nil {
+		fn.Env = v.repl
+	}
+	v.L.Push(fn)
 	if err := v.L.PCall(0, lua.MultRet, nil); err != nil {
 		return err
 	}

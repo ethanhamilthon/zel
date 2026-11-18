@@ -16,7 +16,7 @@ or `zel config`.
 | `shell` | `bash -c` in a process group, cancellation, bounded output and image capture | `entities` |
 | `ipc` | The session socket of `zel -p` children: one JSON request and response per connection, token check, cancellation when the client hangs up | None |
 | `defaults` | The embedded Lua defaults (`defaults/*.lua`: `sh`, `read`, `write`, `edit`, `grep`, ...) and the default `init.lua` | None |
-| `luart` | The Lua runtime (gopher-lua): the config VM that runs the config files and their loads, the session VM (Lua standard library plus the config `functions`, copied in one pass so shared upvalues stay shared), hook and command calls, the result rule of a lua call | `config`, `shell` |
+| `luart` | The Lua runtime (gopher-lua): the config VM that runs the config files and their loads, the session VM (allowlisted pure-Lua REPL environment plus the config `functions` copied in one pass with shared upvalues and private library environment), hook and command calls, the result rule of a lua call | `config`, `shell` |
 | `core` | Runtime assembly, sessions, controller, queues, the model/tool loop, the lua tool host, hooks, commands, the prompt, the session socket, indicators, print lines, choice queue, zel -p children, reload, persistence and application events | Backend packages |
 | `cli` | Argument parsing, headless runs, `update`, `docs`, `models`, `config` | `core`, `config`, `defaults` |
 | `tui` | Display state, composer, menus, input events and rendering | `core`, `config` |

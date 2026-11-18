@@ -4,10 +4,15 @@
 
 Breaking release. Defaults move from Go host functions to plain Lua.
 
-- The session VM has only the Lua 5.1 standard library plus `functions` from
-  your config: no built-in host API, no `print`, no `require("zel")`, and no
-  `task.*`. Child processes of `io.popen`/`os.execute` get no TTY and are
-  killed with their process group when the call ends.
+- Agent tool chunks run in a separate persistent allowlisted REPL environment
+  (pure Lua base/`string`/`table`/`math`/`coroutine` plus `functions` from
+  your config; `_G` points only to the REPL environment; no `os`, `io`,
+  `debug`, `require`, `package`, `getfenv`/`setfenv`, `dofile`, `loadfile`,
+  `print`, `require("zel")`, or `task.*`). Copied `functions`, config loading,
+  hooks, and commands keep their private hardened Lua 5.1 library environment
+  (with `io.popen`/`os.execute` children getting no TTY and killed with their
+  process group when the call ends). This is an API boundary, not a sandbox
+  for hostile config functions or explicitly enabled `sh`.
 - `~/.config/zel/defaults/` (`require("defaults")`) provides `sh`, `read`,
   `write`, `edit`, `slice`, `list`, `glob`, `grep`, `exists`, `cd`, `choice`,
   `docs`, `models`, `session`, and `rename` in plain Lua backed by the `zel`

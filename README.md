@@ -4,10 +4,13 @@ Zel is built around one idea: making it simple and efficient to guide your
 agent's work. No complicated architecture, overengineered plugins, or entire
 system to learn before you can get started.
 
-Zel is an agent that runs Lua 5.1. The VM itself has only the Lua standard
-library; shell commands, file helpers, search, subagents, images and user
+Zel is an agent that runs Lua 5.1. The agent REPL exposes only pure Lua
+(base, `string`, `table`, `math`, `coroutine`) plus the `functions` wired into
+your config — no `io`, `os`, `debug`, `require`, `package`, `getfenv`/`setfenv`,
+or `print`; shell commands, file helpers, search, subagents, images and user
 prompts come from plain Lua functions in `~/.config/zel/defaults/` (`require("defaults")`)
-wired into your config and backed by the `zel` CLI.
+that keep their private standard library environment and talk to Zel via the
+`zel` CLI.
 
 Your config is Lua: `~/.config/zel/init.lua`, an optional `zel.lua` in a
 project, any extra `--config` files, and `connect.json` for providers. They set
@@ -50,8 +53,10 @@ text, and open links, the way your terminal does. PgUp/PgDn scroll the chat.
 Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Some shortcuts need an
 enhanced keyboard protocol; the Ctrl+K menu works in legacy terminals too.
 
-**No sandbox:** commands run with your user permissions and network access.
-Only use configuration files and tools you trust.
+**API boundary, not a sandbox:** restricting the agent REPL keeps unconfigured
+`io`/`os` out of tool chunks, while enabled tools (like `sh`) and config/hook/command
+functions run with your user permissions and network access. Only use configuration
+files and tools you trust.
 
 ## Make it yours
 

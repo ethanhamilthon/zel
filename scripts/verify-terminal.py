@@ -12,7 +12,7 @@ from verify_support import inputs, lua, message, outputs, suite, user_texts
 MENU, ALT_MENU, TRACE, RELOAD, ESC, DOWN, PGDN = (
     '\x0b', '\x1bk', '\x14', '\x12', '\x1b', '\x1b[B', '\x1b[6~')
 STARS = '✶✸✹✺'
-GATE = 'os.execute("while [ ! -f release-turn ]; do sleep .05; done")'
+GATE = 'sh("while [ ! -f release-turn ]; do sleep .05; done")'
 
 
 def respond(body):
@@ -31,7 +31,7 @@ def respond(body):
     if latest == 'plain-working':
         return [lua('return (function() ' + GATE + '; return "' + 'x' * 150 + '" end)()', 'plain')]
     if latest == 'active-status':
-        return [lua('os.execute("zel status fixture-call-status"); ' + GATE + '; return "released"', 'held')]
+        return [lua('sh("zel status fixture-call-status"); ' + GATE + '; return "released"', 'held')]
     if latest == 'trace-check':
         return [lua('return "traced"', 'trace1'), lua('error("trace failure", 0)', 'trace2')]
     return [message('Hello from the fake provider.')]
@@ -286,7 +286,7 @@ def status_and_steer(f):
     w = next(y for y, row in enumerate(rows) if 'fixture-call-status' in row)
     f.check(rows[i].startswith(tuple('◐◓◑◒')) and rows[w].startswith(tuple(STARS)) and
             w == i + 2 and rows[i + 1] == '', 'indicator and call status are separate lines with a blank separator', rows)
-    f.check('os.execute' not in rows[w], 'call status replaces Lua code', rows[w])
+    f.check('sh(' not in rows[w], 'call status replaces Lua code', rows[w])
     t.shot('01-status')
     Image.new('RGB', (24, 16), (20, 80, 200)).save(f.cwd / 'fixture.png')
     cmd('steer', '--file', 'fixture.png', '-', stdin='steer-marker-active\n')

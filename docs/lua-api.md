@@ -1,29 +1,39 @@
 # zel 0.12 reference
 
-Zel gives the model one tool, `lua`: its input is Lua 5.1 code. The session VM
-has the Lua 5.1 standard library plus the `functions` from your config — no
-built-in host functions. Default functions live as plain Lua in
-`~/.config/zel/defaults/` (`require("defaults")`) and talk to Zel through the
-`zel` CLI (`exec`, `steer`, `status`, `choice`, `print`, `session`, `rename`).
+Zel gives the model one tool, `lua`: its input is Lua 5.1 code. Agent tool
+chunks run in a persistent allowlisted REPL environment (pure Lua
+base/`string`/`table`/`math`/`coroutine` plus the `functions` from your config
+— no `io`, `os`, `debug`, `package`, `require`, `dofile`, `loadfile`,
+`getfenv`/`setfenv`, or `print`), while copied `functions`, config loading,
+hooks, and commands retain the full hardened Lua 5.1 standard library. Default
+functions live as plain Lua in `~/.config/zel/defaults/` (`require("defaults")`)
+and talk to Zel through the `zel` CLI (`exec`, `steer`, `status`, `choice`,
+`print`, `session`, `rename`).
 
 ## The lua tool
 
-- One Lua VM per session: globals survive between calls. The VM is reset
-  (fresh state) when a call times out, when the config reloads, and when the
-  session changes. The next output then starts with `[lua: fresh VM]`.
-- There is no host API in the VM (`no print`, no `require("zel")`, no
-  `task.*`): only Lua 5.1 stdlib (`io`, `os`, `string`, `table`, `math`, ...)
-  and whatever your config puts in `functions`.
+- One Lua VM per session: REPL globals (`_G`) survive between calls. The VM is
+  reset (fresh state) when a call times out, when the config reloads, and when
+  the session changes. The next output then starts with `[lua: fresh VM]`.
+- Allowlisted REPL boundary: agent chunks have no host API (`no print`, no
+  `require("zel")`, no `task.*`) and no `io`, `os`, `debug`, `package`,
+  `require`, `dofile`, `loadfile`, or `getfenv`/`setfenv`. Only pure Lua
+  (`string`, `table`, `math`, `coroutine`, safe base functions including
+  `load`/`loadstring` bound to the REPL environment) and whatever your config
+  puts in `functions` are exposed; `_G` points only to the REPL environment.
+  This is an API boundary, not a sandbox for hostile config functions or
+  explicitly enabled `sh` (when `sh` or other OS-touching functions are
+  configured, they run with the user's permissions and network access).
 - Output of a call is the values of `return ...`, or the values returned by the
   last statement when it is a function call, or the value of an expression.
   Strings come back as they are, tables as JSON, several values one per line,
   `nil` results give no line. A raised error appends `error: <msg>`.
-- Terminal isolation: `io.write`, `io.stdout` and `io.stderr` go to a
-  discarded sink; children of `io.popen` and `os.execute` get no TTY (stdin
-  `/dev/null` for `popen "r"`, stderr `/dev/null`, `os.execute` stdout
-  `/dev/null`), start in their own process group in the session start folder
-  with the session environment, and are killed when the call times out, is
-  cancelled, or the VM resets.
+- Terminal isolation (for `functions`, hooks, and commands using `io`/`os`):
+  `io.write`, `io.stdout` and `io.stderr` go to a discarded sink; children of
+  `io.popen` and `os.execute` get no TTY (stdin `/dev/null` for `popen "r"`,
+  stderr `/dev/null`, `os.execute` stdout `/dev/null`), start in their own
+  process group in the session start folder with the session environment, and
+  are killed when the call times out, is cancelled, or the VM resets.
 - A call has `settings.timeout` seconds (default 30). At the timeout the output
   ends with `[timeout after 30s; VM reset]`.
 - Background work: start a shell command with `&` and redirect its output, track
@@ -93,10 +103,11 @@ session() -> table            -- `zel session --json`
 rename(name)                  -- `zel rename`
 ```
 
-Custom functions in `functions` are installed directly as globals in the session
-VM. When the session VM starts, all `fn` values from `functions` are copied from
-the config VM in one pass, so shared upvalues (such as `defaults`' `cwd`) stay
-shared.
+Custom functions in `functions` are installed as globals in the session VM's
+REPL environment while keeping their private standard library environment (`io`,
+`os`, etc.). When the session VM starts, all `fn` values from `functions` are
+copied from the config VM in one pass, so shared upvalues (such as `defaults`'
+`cwd`) stay shared.
 
 ### The `zel` CLI
 

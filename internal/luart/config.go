@@ -570,21 +570,26 @@ func (c *Config) checkCopies() error {
 	return nil
 }
 
-// copyFunctions puts the functions of the config into the globals of v, copied
-// in one pass: upvalues shared between functions stay shared in the copy.
+// copyFunctions puts the functions of the config into v's REPL environment
+// (or globals if v has no separate REPL environment), copied in one pass so
+// upvalues shared between functions stay shared in the copy.
 func (c *Config) copyFunctions(ctx context.Context, v *vm) error {
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	dst := v.L.G.Global
+	if v.repl != nil {
+		dst = v.repl
+	}
 	cp := newCopier(c.v.L, v.L)
 	for _, f := range c.data.Functions {
 		fn, err := cp.copyFunction(c.funcs[f.Name])
 		if err != nil {
 			return fmt.Errorf("functions.%s: %w", f.Name, err)
 		}
-		v.L.SetGlobal(f.Name, fn)
+		dst.RawSetString(f.Name, fn)
 	}
 	return nil
 }

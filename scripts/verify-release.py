@@ -17,11 +17,11 @@ def respond(body):
         return [message("Fixture finished.")]
     if latest == "runtime":
         return [
-            lua('x = 41; return type(print), type(task), type(sh), pcall(require, "zel")', 'bare'),
-            lua('io.write("sink-marker"); os.execute("echo child-marker"); return x', 'sink'),
+            lua('x = 41; return type(print), type(task), type(sh), type(os), type(io), type(debug), type(require), type(getfenv)', 'bare'),
+            lua('zz_sink(); return x', 'sink'),
             lua('return configured(), bump()', 'shared'),
             lua('return string.rep("x", 2048)', 'cut'),
-            lua('os.execute("sleep 10")', 'timeout'),
+            lua('zz_sleep()', 'timeout'),
             lua('return type(x)', 'reset'),
         ]
     if latest == "defaults":
@@ -100,6 +100,8 @@ def runtime(f):
 return { settings = {timeout = 1, output = 1000}, functions = {
   configured = {description = "Fixture increment", fn = function() n = n + 1; return n end},
   bump = {description = "Fixture read shared state", fn = function() return n end},
+  zz_sink = {description = "Fixture stdio sink", fn = function() io.write("sink-marker"); os.execute("echo child-marker") end},
+  zz_sleep = {description = "Fixture sleep", fn = function() os.execute("sleep 10") end},
 } }
 ''')
     r = f.run('-p', 'runtime', '--no-default-configs', '--config', 'custom.lua')
@@ -115,7 +117,7 @@ return { settings = {timeout = 1, output = 1000}, functions = {
             and 'Fixture read shared state' in prompt, 'configured functions are sorted in system prompt', prompt)
     f.check(body.get('reasoning', {}).get('summary') == 'auto', 'reasoning summary requested', body.get('reasoning'))
     result = outputs(body)
-    f.check(result.get('bare', '').startswith('nil\nnil\nnil\nfalse'), 'no injected print, task, sh or zel module', result)
+    f.check(result.get('bare') == 'nil\nnil\nnil\nnil\nnil\nnil\nnil\nnil', 'allowlisted REPL hides privileged stdlib and unconfigured tools', result)
     f.check(result.get('sink') == '41' and not any(s in r.stdout + r.stderr for s in ('sink-marker', 'child-marker')),
             'Lua globals persist and stdio does not leak', (result, r.stdout, r.stderr))
     f.check(result.get('shared') == '1\n1', 'copied functions share a closure upvalue', result)
