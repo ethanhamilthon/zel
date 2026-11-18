@@ -1,0 +1,1 @@
+- `choice(question, {options...})` is unavailable in headless mode.
