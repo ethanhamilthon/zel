@@ -119,7 +119,7 @@ Editing a queued message withdraws it
 Tab completes and enters directories
 PgUp/PgDn: scroll the chat; Up/Down scroll it when the input is one line
 Esc: go back or dismiss
-Tracing: Tab: all, bash, agent or errors · Ctrl+H: show the hooks
+Tracing: Tab: all, Lua, agent or errors · Ctrl+H: show the hooks
   Left/Right in an entry: the previous or next of the view
 
 Ctrl shortcuts that overlap Tab/Enter need an enhanced keyboard protocol.

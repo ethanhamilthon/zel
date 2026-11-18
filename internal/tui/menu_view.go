@@ -122,7 +122,7 @@ func (m *app) bodyRows(w int) []row {
 		rows := plainRows(traceHeader(t), w, darkGray)
 		rows = append(rows, row{})
 		rows = append(rows, entryRows(t, w)...)
-		if t.Kind == "bash" {
+		if t.Kind == "lua" {
 			rows = append(rows, row{})
 			rows = append(rows, plainRows("── output", w, darkGray)...)
 			out, color := t.Output, traceColors["output"]
@@ -142,12 +142,12 @@ func (m *app) bodyRows(w int) []row {
 	return plainRows(mu.body, w, grayColor)
 }
 
-// entryRows is the text of a trace entry: a bash command highlighted, an agent
+// entryRows is the text of a trace entry: Lua code highlighted, an agent
 // answer as Markdown, the rest plain in the color of its kind.
 func entryRows(t core.TraceEntry, w int) []row {
-	if t.Kind == "bash" && len(t.Text) <= 64<<10 {
-		if highlighted, ok := highlightBash(t.Text, w); ok {
-			return styledRows(strings.Join(highlighted, "\n"), w, style(traceColors["bash"]))
+	if t.Kind == "lua" && len(t.Text) <= 64<<10 {
+		if highlighted, ok := highlightLua(t.Text, w); ok {
+			return styledRows(strings.Join(highlighted, "\n"), w, style(traceColors["lua"]))
 		}
 	}
 	if t.Kind == "agent" && len(t.Text) <= 64<<10 {

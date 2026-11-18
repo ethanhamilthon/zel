@@ -23,9 +23,9 @@ func formatTokens(n int64) string {
 }
 func formatSteps(n int) string {
 	if n == 1 {
-		return "1 bash"
+		return "1 call"
 	}
-	return fmt.Sprintf("%d bashs", n)
+	return fmt.Sprintf("%d calls", n)
 }
 func formatContext(n int64) string {
 	return fmt.Sprintf("%dK", (n+500)/1000)

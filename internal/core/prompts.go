@@ -11,9 +11,9 @@ import (
 	"zel/internal/config"
 )
 
-// Prompt completions: [completions] name = "text" registers #name; the tokens
+// Prompt completions: a prompt registers #name; the tokens
 // of a message are replaced by the text, ${{ }} expanded and wrapped in
-// <completion name="name">, when it is sent. They exist only in the main session.
+// <prompt name="name">, when it is sent. They exist only in the main session.
 
 // promptTimeout bounds one expansion.
 const promptTimeout = 10 * time.Second
@@ -160,7 +160,7 @@ func (s *session) expandPrompt(parent context.Context, text string) (string, err
 			case strings.TrimSpace(out) == "":
 				return "", fail(CodeFailed, "#%s: the completion is empty", tok.Name)
 			}
-			value = "<completion name=\"" + tok.Name + "\">\n" + strings.TrimSuffix(out, "\n") + "\n</completion>"
+			value = "<prompt name=\"" + tok.Name + "\">\n" + strings.TrimSuffix(out, "\n") + "\n</prompt>"
 			values[tok.Name] = value
 		}
 		b.WriteString(string(runes[pos:tok.Start]) + value)

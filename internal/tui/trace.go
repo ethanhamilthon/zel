@@ -12,15 +12,15 @@ import (
 )
 
 // traceFilters are the views Tab cycles in Tracing.
-var traceFilters = []string{"All", "Bash", "Agent", "Errors"}
+var traceFilters = []string{"All", "Lua", "Agent", "Errors"}
 
 func traceShown(t core.TraceEntry, filter int, hooks bool) bool {
 	if t.Kind == "hook" && !hooks {
 		return false
 	}
 	switch traceFilters[filter] {
-	case "Bash":
-		return t.Kind == "bash"
+	case "Lua":
+		return t.Kind == "lua"
 	case "Agent":
 		return t.Kind == "agent"
 	case "Errors":
@@ -60,13 +60,13 @@ func traceItems(trace []core.TraceEntry, filter int, hooks bool) []item {
 		case t.Kind == "notice" && titles[t.Turn] == "":
 			titles[t.Turn] = firstLine(t.Text)
 		}
-		// A turn lasts from its first entry to its last model response or bash
+		// A turn lasts from its first entry to its last model response or Lua
 		// call; later events (an idle hook, a resume) do not stretch it.
 		if !t.At.IsZero() {
 			if first[t.Turn].IsZero() {
 				first[t.Turn] = t.At
 			}
-			if t.Request != nil || t.Kind == "bash" {
+			if t.Request != nil || t.Kind == "lua" {
 				last[t.Turn] = t.At
 			}
 		}
@@ -116,10 +116,10 @@ func traceDuration(d time.Duration) string {
 	return formatDuration(d)
 }
 
-// traceDuration of an entry: its own run for bash and hooks, the model request
+// traceDuration of an entry: its own run for Lua and hooks, the model request
 // on the first entry of a response.
 func entryDuration(t core.TraceEntry) time.Duration {
-	if t.Kind == "bash" || t.Kind == "hook" {
+	if t.Kind == "lua" || t.Kind == "hook" {
 		return t.Duration
 	}
 	if t.First && t.Request != nil {
@@ -158,10 +158,10 @@ func traceHeader(t core.TraceEntry) string {
 	case t.Status != "":
 		parts = append(parts, t.Status)
 	case strings.HasPrefix(t.Output, "[skipped: "), strings.HasPrefix(t.Output, "[moved to task "):
-	case t.Kind == "bash" && t.Duration > 0:
+	case t.Kind == "lua" && t.Duration > 0:
 		parts = append(parts, "exit 0")
 	}
-	if t.Kind == "bash" || t.Kind == "hook" {
+	if t.Kind == "lua" || t.Kind == "hook" {
 		if d := traceDuration(t.Duration); d != "" {
 			parts = append(parts, d)
 		}
