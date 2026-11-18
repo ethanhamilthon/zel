@@ -1,11 +1,8 @@
-# settings.yaml example
+# Config examples
 
-- `settings.yaml`: providers, settings and colors.
-- `systems/*.md`: system prompt snippets, including one only for `--mode plan`.
-- `hooks/*.yaml`: notifications, terminal progress and a guard for force pushes.
-- `prompts/*.md`: prompt completions.
+- `init.lua`: the global config: settings, systems, prompts, a function and hooks (a force-push guard, a commit reminder, terminal progress, a notification).
+- `zel.lua`: the local config of a project, merged over `init.lua`.
+- `connect.json`: providers and the selected model.
+- `lua/web.lua`: a module loaded with `loads`: a `web_search` function (Tavily).
 
-Use this layout in `~/.config/zel/`; the reference lists `keys` bindings too.
-- `web-search` - a standalone script: web search via the Tavily API. Invoke it by its path or install it on your normal `PATH`.
-
-The tests in `internal/config` load the yaml file, so it stays valid.
+Use them in `~/.config/zel/`; `zel.lua` goes into the project folder. The reference lists `keys` bindings too.

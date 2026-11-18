@@ -8,29 +8,30 @@ import (
 	"strings"
 )
 
-//go:embed bash-api.md examples/*.yaml examples/hooks/*.yaml examples/prompts/*.md examples/systems/*.md examples/web-search examples/README.md
+//go:embed lua-api.md examples/*.lua examples/*.json examples/lua/*.lua examples/README.md
 var files embed.FS
 
 // Topic is one piece of the reference.
 type Topic struct{ Name, Summary string }
 
-// sections maps a heading of bash-api.md to its topic. A heading without a topic
-// is a bug, so the tests fail when bash-api.md gets a section that is not listed.
+// sections maps a heading of lua-api.md to its topic. A heading without a topic
+// is a bug, so the tests fail when lua-api.md gets a section that is not listed.
 var sections = map[string]Topic{
-	"The bash tool":      {"bash", "how a bash call runs: limits, output, environment"},
-	"Commands":           {"commands", "zel task, choice, view, cd, session, edit, -p (subagents), exit codes"},
-	"settings.yaml":      {"config", "settings.yaml keys, ${{ }}, hot reload"},
-	"Hooks":              {"hooks", "hook entries, events, stdin/stdout, exit 2"},
-	"Prompt completions": {"completions", "#name expansion in the user's composer"},
-	"Colors":             {"colors", "colors: the TUI theme, key by key"},
+	"The lua tool": {"tool", "how a lua call runs: limits, output, Tracing"},
+	"API":          {"api", "the Lua functions: sh, read, edit, task, choice, ..."},
+	"Config":       {"config", "init.lua, zel.lua, settings, systems, functions, loads"},
+	"connect.json": {"connect", "providers and the selected model"},
+	"Hooks":        {"hooks", "hook functions, events, return values"},
+	"Prompts":      {"prompts", "#name expansion in the user's composer, show_prompt"},
+	"Colors":       {"colors", "colors: the TUI theme, key by key"},
 }
 
-var examples = Topic{"examples", "a complete settings.yaml and a script tool"}
+var examples = Topic{"examples", "init.lua, zel.lua, connect.json and a loaded module"}
 
 // order is the order of the topics in the index.
-var order = []string{"The bash tool", "Commands", "settings.yaml", "Hooks", "Prompt completions", "Colors"}
+var order = []string{"The lua tool", "API", "Config", "connect.json", "Hooks", "Prompts", "Colors"}
 
-// parse splits bash-api.md into its "## " sections; the text before the first one
+// parse splits lua-api.md into its "## " sections; the text before the first one
 // is the intro and has no topic.
 func parse(src string) map[string]string {
 	out := map[string]string{}
@@ -80,7 +81,7 @@ func Get(name string) (string, bool) {
 	if name == examples.Name {
 		return exampleText(), true
 	}
-	src, err := files.ReadFile("bash-api.md")
+	src, err := files.ReadFile("lua-api.md")
 	if err != nil {
 		return "", false
 	}
@@ -97,15 +98,7 @@ func exampleText() string {
 	var b strings.Builder
 	readme, _ := files.ReadFile("examples/README.md")
 	b.WriteString(strings.TrimSpace(string(readme)))
-	names := []string{"settings.yaml", "web-search"}
-	for _, dir := range []string{"hooks", "prompts", "systems"} {
-		entries, _ := files.ReadDir("examples/" + dir)
-		for _, e := range entries {
-			if !e.IsDir() {
-				names = append(names, dir+"/"+e.Name())
-			}
-		}
-	}
+	names := []string{"init.lua", "zel.lua", "connect.json", "lua/web.lua"}
 	for _, name := range names {
 		data, _ := files.ReadFile("examples/" + name)
 		fmt.Fprintf(&b, "\n\n# --- %s\n%s", name, strings.TrimSpace(string(data)))

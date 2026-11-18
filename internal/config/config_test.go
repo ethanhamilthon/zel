@@ -419,14 +419,6 @@ func TestPortableHomePaths(t *testing.T) {
 	}
 }
 
-// The documented examples must load without errors.
-func TestDocExamplesLoad(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "examples", "settings.yaml")
-	if cfg := Load(context.Background(), path, nil); len(cfg.Errors) > 0 {
-		t.Errorf("%s: %v", path, cfg.Errors)
-	}
-}
-
 // A bad color makes the file invalid.
 func TestColors(t *testing.T) {
 	dir := t.TempDir()

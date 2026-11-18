@@ -1,0 +1,9 @@
+{
+  "provider": "openai",
+  "model": "gpt-5",
+  "effort": "medium",
+  "providers": {
+    "openai": {"base_url": "https://api.openai.com/v1", "api": "responses", "api_key": "$OPENAI_API_KEY"},
+    "local": {"base_url": "http://localhost:11434/v1", "api": "chat", "api_key": ""}
+  }
+}

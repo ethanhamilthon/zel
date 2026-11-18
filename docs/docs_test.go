@@ -51,11 +51,11 @@ func TestProductionPackageBoundaries(t *testing.T) {
 	}
 }
 
-// Every section of bash-api.md has a topic and every topic returns text, so the
+// Every section of lua-api.md has a topic and every topic returns text, so the
 // agent can reach the whole reference through zel docs.
-func TestExamplesIncludeSnippets(t *testing.T) {
+func TestExamplesIncludeFiles(t *testing.T) {
 	text := exampleText()
-	for _, want := range []string{"hooks/notify.yaml", "prompts/", "systems/", "events:"} {
+	for _, want := range []string{"# --- init.lua", "# --- zel.lua", "# --- connect.json", "# --- lua/web.lua", "loads"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("examples missing %s", want)
 		}
@@ -63,7 +63,7 @@ func TestExamplesIncludeSnippets(t *testing.T) {
 }
 
 func TestEverySectionIsReachable(t *testing.T) {
-	src, err := files.ReadFile("bash-api.md")
+	src, err := files.ReadFile("lua-api.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestEverySectionIsReachable(t *testing.T) {
 			continue // examples has its own topic
 		}
 		if _, ok := sections[h]; !ok {
-			t.Errorf("section %q of bash-api.md has no topic", h)
+			t.Errorf("section %q of lua-api.md has no topic", h)
 		}
 	}
 	for _, topic := range Topics() {
@@ -87,7 +87,7 @@ func TestEverySectionIsReachable(t *testing.T) {
 	if _, ok := Get("nope"); ok {
 		t.Error("unknown topic resolved")
 	}
-	if text, _ := Get("hooks"); !strings.Contains(text, "turn_end") || strings.Contains(text, "Prompt completions") {
+	if text, _ := Get("hooks"); !strings.Contains(text, "turn_end") || strings.Contains(text, "#name") {
 		t.Errorf("hooks topic is wrong: %q", text)
 	}
 }
